@@ -1,0 +1,94 @@
+# Render Blueprint — Luvstor (always-on production)
+# https://render.com/docs/blueprint-spec
+#
+# • Web Service uses plan: starter → NEVER sleeps (no free-tier spin-down)
+# • Cron Job pings /ping every 60s → extra keep-alive + uptime monitoring
+# • Redis for Socket.IO scale + BullMQ push queue
+
+services:
+  # ── Main API + WebSockets ─────────────────────────────────────────────
+  - type: web
+    name: luvstor-api
+    runtime: node
+    region: singapore
+    plan: starter
+    rootDir: backend
+    buildCommand: npm ci --omit=dev || npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    numInstances: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: HEARTBEAT_SECRET
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: luvstor-redis
+          property: connectionString
+      - key: MONGO_POOL_SIZE
+        value: "50"
+      - key: FIREBASE_SERVICE_ACCOUNT_BASE64
+        sync: false
+      - key: GOOGLE_WEB_CLIENT_ID
+        sync: false
+      - key: GOOGLE_ANDROID_CLIENT_ID
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM_NAME
+        value: Luvstor
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_DEV_MODE
+        value: "false"
+      - key: DISCOVERY_ROTATION_TZ_OFFSET_MINUTES
+        value: "330"
+      - key: DAILY_SUGGESTION_TZ_OFFSET_MINUTES
+        value: "330"
+
+  # ── Keep-alive: external ping every 60s (does not run inside API) ───────
+  - type: cron
+    name: luvstor-heartbeat
+    region: singapore
+    schedule: "* * * * *"
+    rootDir: backend
+    buildCommand: npm ci --omit=dev || npm install --omit=dev
+    startCommand: node scripts/renderHeartbeat.js
+    envVars:
+      - key: HEARTBEAT_TARGET_HOST
+        fromService:
+          type: web
+          name: luvstor-api
+          property: host
+      - key: HEARTBEAT_SECRET
+        fromService:
+          type: web
+          name: luvstor-api
+          envVarKey: HEARTBEAT_SECRET
+      - key: HEARTBEAT_TIMEOUT_MS
+        value: "10000"
+      - key: HEARTBEAT_MAX_RETRIES
+        value: "2"
+
+  # ── Redis (shared presence, Socket.IO adapter, push queue) ─────────────
+  - type: redis
+    name: luvstor-redis
+    region: singapore
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []

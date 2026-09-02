@@ -1,86 +1,88 @@
-import React, { useState, useRef } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
+import React, { useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Animated,
-  Dimensions,
-  ActivityIndicator,
-  StatusBar,
-  Keyboard,
-  TouchableWithoutFeedback,
-} from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AUTH_TOKEN_KEY } from '../utils/api';
+    ActivityIndicator,
+    Keyboard,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    TouchableWithoutFeedback,
+    View,
+} from "react-native";
 import {
-  getAuthToken,
-  getCurrentAuthUser,
-  getLocalProfile,
-  isLocalProfileComplete,
-  normalizeEmail,
-  saveLocalProfile,
-  syncProfileToServer,
-  userToLocalProfile,
-} from '../utils/auth';
+    SafeAreaView,
+    useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import { apiRequest, AUTH_TOKEN_KEY } from "../utils/api";
+import {
+    getAuthToken,
+    getCurrentAuthUser,
+    getLocalProfile,
+    isLocalProfileComplete,
+    normalizeEmail,
+    saveLocalProfile,
+    syncProfileToServer,
+    userToLocalProfile,
+} from "../utils/auth";
+import {
+    followGenderChange,
+    oppositeShowMe,
+    SHOW_ME_OPTIONS,
+    type ShowMeValue,
+} from "../utils/showMe";
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
-// ── Google Material 3 Design Colors ─────────────────────────
-const MD3 = {
-  primary: '#6750A4',          // MD3 Purple
-  onPrimary: '#FFFFFF',
-  primaryContainer: '#EADDFF',
-  onPrimaryContainer: '#21005D',
-  surface: '#FEF7FF',          // MD3 light background
-  onSurface: '#1D1B20',
-  surfaceVariant: '#E7E0EC',
-  onSurfaceVariant: '#49454F',
-  outline: '#79747E',
-  outlineVariant: '#CAC4D0',
-  error: '#B3261E',
-  success: '#386A20',
-  successContainer: '#C3E7A2',
+// ── Luvstor brand (WhatsApp-style, clean) ───────────────────
+const C = {
+  bg: "#F0F2F5",
+  white: "#FFFFFF",
+  text: "#1A1A2E",
+  secondary: "#6B6B6B",
+  border: "#E9E9EB",
+  primary: "#7C3AED",
+  primaryLight: "#EDE9FE",
+  primaryDark: "#6D28D9",
+  yellow: "#F5D547",
+  disabled: "#D1D5DB",
+  placeholder: "#9CA3AF",
 };
 
 const INTERESTS = [
-  { label: 'Travel', emoji: '✈️' },
-  { label: 'Music', emoji: '🎵' },
-  { label: 'Fitness', emoji: '🏋️' },
-  { label: 'Cooking', emoji: '🍳' },
-  { label: 'Art', emoji: '🎨' },
-  { label: 'Gaming', emoji: '🎮' },
-  { label: 'Movies', emoji: '🎬' },
-  { label: 'Photography', emoji: '📷' },
-  { label: 'Reading', emoji: '📖' },
-  { label: 'Dancing', emoji: '💃' },
-  { label: 'Nature', emoji: '🍃' },
-  { label: 'Coffee', emoji: '☕' },
-  { label: 'Yoga', emoji: '🧘' },
-  { label: 'Sports', emoji: '⚽' },
-  { label: 'Pets', emoji: '🐾' },
-  { label: 'Food', emoji: '🍕' },
+  { label: "Travel", emoji: "✈️" },
+  { label: "Music", emoji: "🎵" },
+  { label: "Fitness", emoji: "🏋️" },
+  { label: "Cooking", emoji: "🍳" },
+  { label: "Art", emoji: "🎨" },
+  { label: "Gaming", emoji: "🎮" },
+  { label: "Movies", emoji: "🎬" },
+  { label: "Photography", emoji: "📷" },
+  { label: "Reading", emoji: "📖" },
+  { label: "Dancing", emoji: "💃" },
+  { label: "Nature", emoji: "🍃" },
+  { label: "Coffee", emoji: "☕" },
+  { label: "Yoga", emoji: "🧘" },
+  { label: "Sports", emoji: "⚽" },
+  { label: "Pets", emoji: "🐾" },
+  { label: "Food", emoji: "🍕" },
 ];
 
 const STEPS = [
-  { title: 'Add profile picture', subtitle: 'A photo helps people get to know you', icon: 'camera-outline' },
-  { title: 'Basic information', subtitle: 'Enter your name, age, and gender', icon: 'person-outline' },
-  { title: 'About you & Interests', subtitle: 'Tell others what makes you unique', icon: 'heart-outline' },
+  { title: "Add profile picture" },
+  { title: "Basic information" },
+  { title: "About you & Interests" },
 ];
 
-// ── Google Material 3 Outlined Input Field ──────────────────
-function MD3InputField({
+// ── WhatsApp-style input row ────────────────────────────────
+function WAInputField({
   label,
-  icon,
   value,
   onChangeText,
   placeholder,
@@ -90,97 +92,67 @@ function MD3InputField({
   numberOfLines,
 }: any) {
   const [focused, setFocused] = useState(false);
-  const labelAnim = useRef(new Animated.Value(value ? 1 : 0)).current;
-
-  React.useEffect(() => {
-    Animated.timing(labelAnim, {
-      toValue: focused || value ? 1 : 0,
-      duration: 150,
-      useNativeDriver: false,
-    }).start();
-  }, [focused, value]);
-
-  const labelStyle = {
-    top: labelAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [16, -10],
-    }),
-    fontSize: labelAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [16, 12],
-    }),
-    color: labelAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [MD3.onSurfaceVariant, MD3.primary],
-    }),
-    backgroundColor: focused || value ? MD3.surface : 'transparent',
-  };
 
   return (
     <View style={fieldStyles.container}>
-      <View style={[
-        fieldStyles.inputBox,
-        focused && fieldStyles.inputBoxFocused,
-        multiline && { alignItems: 'flex-start', minHeight: 120, height: 'auto', paddingVertical: 12 }
-      ]}>
-        <Ionicons
-          name={icon}
-          size={20}
-          color={focused ? MD3.primary : MD3.onSurfaceVariant}
-          style={multiline ? { marginTop: 4 } : null}
-        />
+      <Text style={fieldStyles.label}>{label}</Text>
+      <View
+        style={[fieldStyles.inputBox, focused && fieldStyles.inputBoxFocused]}
+      >
         <TextInput
-          style={[fieldStyles.textInput, multiline && { textAlignVertical: 'top', minHeight: 90 }]}
+          style={[
+            fieldStyles.textInput,
+            multiline && fieldStyles.textInputMultiline,
+          ]}
           value={value}
           onChangeText={onChangeText}
           keyboardType={keyboardType}
           maxLength={maxLength}
           multiline={multiline}
           numberOfLines={numberOfLines}
-          placeholder={focused ? placeholder : ''}
-          placeholderTextColor={MD3.outlineVariant}
+          placeholder={placeholder}
+          placeholderTextColor={C.placeholder}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
         />
       </View>
-      <Animated.Text style={[fieldStyles.floatingLabel, labelStyle]}>
-        {label}
-      </Animated.Text>
     </View>
   );
 }
 
 const fieldStyles = StyleSheet.create({
   container: {
-    position: 'relative',
-    marginBottom: 24,
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: C.secondary,
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
   inputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: MD3.outline,
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    height: 56,
-    gap: 12,
-    backgroundColor: MD3.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 48,
+    justifyContent: "center",
+    backgroundColor: C.white,
   },
   inputBoxFocused: {
-    borderColor: MD3.primary,
-    borderWidth: 2,
+    borderColor: C.primary,
   },
   textInput: {
-    flex: 1,
     fontSize: 16,
-    color: MD3.onSurface,
-    paddingVertical: 10,
+    color: C.text,
+    paddingVertical: 12,
   },
-  floatingLabel: {
-    position: 'absolute',
-    left: 44,
-    paddingHorizontal: 4,
-    fontWeight: '500',
+  textInputMultiline: {
+    minHeight: 100,
+    textAlignVertical: "top",
+    paddingTop: 12,
   },
 });
 
@@ -195,24 +167,24 @@ export default function CreateProfileScreen() {
       try {
         const authUser = await getCurrentAuthUser();
         if (!authUser?.email) {
-          router.replace('/login');
+          router.replace("/login");
           return;
         }
 
         const accountEmail = normalizeEmail(authUser.email);
         const local = await getLocalProfile(accountEmail);
         if (isLocalProfileComplete(local)) {
-          router.replace('/(tabs)');
+          router.replace("/(tabs)");
           return;
         }
 
         const token = await getAuthToken();
         if (token) {
-          const { apiRequest } = await import('../utils/api');
-          const user = await apiRequest('/api/users/me', token);
+          const { apiRequest } = await import("../utils/api");
+          const user = await apiRequest("/api/users/me", token);
           if (user?.name && String(user.name).trim()) {
             await saveLocalProfile(accountEmail, userToLocalProfile(user));
-            router.replace('/(tabs)');
+            router.replace("/(tabs)");
           }
         }
       } catch {
@@ -225,14 +197,15 @@ export default function CreateProfileScreen() {
 
   // Form States
   const [photo, setPhoto] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [age, setAge] = useState('');
-  const [gender, setGender] = useState('');
-  const [height, setHeight] = useState('');
-  const [tagline, setTagline] = useState('');
-  const [bio, setBio] = useState('');
+  const [name, setName] = useState("");
+  const [age, setAge] = useState("");
+  const [gender, setGender] = useState("");
+  const [showMe, setShowMe] = useState<ShowMeValue>("All");
+  const [height, setHeight] = useState("");
+  const [tagline, setTagline] = useState("");
+  const [bio, setBio] = useState("");
   const [interests, setInterests] = useState<string[]>([]);
-  const [relationshipGoal, setRelationshipGoal] = useState('');
+  const [relationshipGoal, setRelationshipGoal] = useState("");
 
   const handleNext = () => {
     if (step < STEPS.length - 1) {
@@ -250,9 +223,11 @@ export default function CreateProfileScreen() {
 
   const handleComplete = async () => {
     const authUser = await getCurrentAuthUser();
-    const accountEmail = authUser?.email ? normalizeEmail(authUser.email) : null;
+    const accountEmail = authUser?.email
+      ? normalizeEmail(authUser.email)
+      : null;
     if (!accountEmail || !authUser?.id) {
-      router.replace('/login');
+      router.replace("/login");
       return;
     }
 
@@ -261,9 +236,10 @@ export default function CreateProfileScreen() {
       name,
       age,
       gender,
+      showMe: showMe || "All",
       height,
-      city: 'San Francisco, CA',
-      distance: '10',
+      city: "San Francisco, CA",
+      distance: "10",
       tagline,
       bio,
       interests,
@@ -275,28 +251,46 @@ export default function CreateProfileScreen() {
       const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
       if (token) {
         const serverUser = await syncProfileToServer(token, profileData);
-        // Save the server response (which has real photo URL) back to local
-        if (serverUser?.photo) {
-          await saveLocalProfile(accountEmail, { ...profileData, photo: String(serverUser.photo) });
+        // Also fetch /me so we get the unique publicId (ABCD1234)
+        let publicId = "";
+        try {
+          const me: any = await apiRequest("/api/users/me", token);
+          publicId = String(me?.publicId || "");
+        } catch {
+          /* ignore */
         }
+        await saveLocalProfile(accountEmail, {
+          ...profileData,
+          photo: serverUser?.photo
+            ? String(serverUser.photo)
+            : profileData.photo,
+          publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : "",
+        });
       }
     } catch (e) {
-      console.error('Failed to save profile', e);
+      console.error("Failed to save profile", e);
     }
-    router.replace('/(tabs)');
+    router.replace("/(tabs)");
   };
 
   if (checkingSession) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: MD3.surface }}>
-        <ActivityIndicator size="large" color={MD3.primary} />
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: C.bg,
+        }}
+      >
+        <ActivityIndicator size="large" color={C.primary} />
       </View>
     );
   }
 
   const pickPhoto = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
+      mediaTypes: "images",
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.9,
@@ -307,239 +301,281 @@ export default function CreateProfileScreen() {
   };
 
   const toggleInterest = (interest: string) => {
-    setInterests(prev =>
-      prev.includes(interest) ? prev.filter(i => i !== interest) : [...prev, interest]
+    setInterests((prev) =>
+      prev.includes(interest)
+        ? prev.filter((i) => i !== interest)
+        : [...prev, interest],
     );
   };
 
   const canNext = () => {
     if (step === 0) return !!photo;
-    if (step === 1) return name.trim() !== '' && age.trim() !== '' && !!gender;
-    if (step === 2) return bio.trim() !== '' && interests.length > 0 && !!relationshipGoal;
+    if (step === 1) return name.trim() !== "" && age.trim() !== "" && !!gender;
+    if (step === 2)
+      return bio.trim() !== "" && interests.length > 0 && !!relationshipGoal;
     return true;
   };
 
   // ── Step Content Renders ───────────────────────────────────
   const renderStepPhoto = () => (
     <View style={s.stepContent}>
-      <TouchableOpacity onPress={pickPhoto} activeOpacity={0.8} style={s.photoFrame}>
-        {photo ? (
-          <>
-            <Image source={{ uri: photo }} style={s.photoImage} contentFit="cover" />
-            <View style={s.photoEditBadge}>
-              <Ionicons name="camera" size={20} color="#fff" />
+      <View style={s.photoSection}>
+        <TouchableOpacity
+          onPress={pickPhoto}
+          activeOpacity={0.85}
+          style={s.avatarPicker}
+        >
+          {photo ? (
+            <Image
+              source={{ uri: photo }}
+              style={s.avatarImage}
+              contentFit="cover"
+            />
+          ) : (
+            <View style={s.avatarPlaceholder}>
+              <Ionicons name="person" size={72} color="#D1D5DB" />
             </View>
-          </>
-        ) : (
-          <View style={s.photoPlaceholder}>
-            <View style={s.photoPlaceholderIconRing}>
-              <Ionicons name="add" size={32} color={MD3.primary} />
-            </View>
-            <Text style={s.photoPlaceholderText}>Add photo</Text>
+          )}
+          <View style={s.cameraBadge}>
+            <Ionicons name="camera" size={18} color="#fff" />
           </View>
-        )}
-      </TouchableOpacity>
-
-      <View style={s.tipCard}>
-        <Ionicons name="bulb-outline" size={20} color={MD3.primary} />
-        <View style={{ flex: 1 }}>
-          <Text style={s.tipTitle}>Choose a photo of yourself</Text>
-          <Text style={s.tipBody}>Make sure your face is centered, well-lit, and easy to see. Avoid sunglasses or busy backgrounds.</Text>
-        </View>
+        </TouchableOpacity>
+        <Text style={s.photoActionText}>
+          {photo ? "Change profile photo" : "Add profile photo"}
+        </Text>
+        <Text style={s.photoHint}>
+          Use a clear photo where your face is easy to see.
+        </Text>
       </View>
     </View>
   );
 
   const renderStepDetails = () => (
     <View style={s.stepContent}>
-      <MD3InputField
-        label="Name"
-        icon="person-outline"
-        value={name}
-        onChangeText={setName}
-        placeholder="First and last name"
-      />
-      <MD3InputField
-        label="Age"
-        icon="calendar-outline"
-        value={age}
-        onChangeText={setAge}
-        placeholder="Enter your age"
-        keyboardType="number-pad"
-        maxLength={2}
-      />
-      <MD3InputField
-        label="Height (cm) - optional"
-        icon="resize-outline"
-        value={height}
-        onChangeText={setHeight}
-        placeholder="e.g. 175"
-        keyboardType="number-pad"
-        maxLength={3}
-      />
+      <View style={s.formCard}>
+        <WAInputField
+          label="Name"
+          value={name}
+          onChangeText={setName}
+          placeholder="Your name"
+        />
+        <WAInputField
+          label="Age"
+          value={age}
+          onChangeText={setAge}
+          placeholder="Your age"
+          keyboardType="number-pad"
+          maxLength={2}
+        />
+        <WAInputField
+          label="Height (cm)"
+          value={height}
+          onChangeText={setHeight}
+          placeholder="Optional"
+          keyboardType="number-pad"
+          maxLength={3}
+        />
+      </View>
 
       <Text style={s.sectionHeader}>Gender</Text>
-      <View style={s.genderRow}>
-        {[
-          { label: 'Man', icon: 'male-outline' },
-          { label: 'Woman', icon: 'female-outline' },
-          { label: 'Other', icon: 'transgender-outline' },
-        ].map(g => {
-          const selected = gender === g.label;
-          return (
-            <TouchableOpacity
-              key={g.label}
-              style={[s.choiceChip, selected && s.choiceChipSelected]}
-              onPress={() => setGender(g.label)}
-              activeOpacity={0.8}
-            >
-              <Ionicons 
-                name={g.icon as any} 
-                size={18} 
-                color={selected ? MD3.primary : MD3.onSurfaceVariant} 
-              />
-              <Text style={[s.choiceChipText, selected && s.choiceChipTextSelected]}>
-                {g.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+      <View style={s.formCard}>
+        <View style={s.genderRow}>
+          {[
+            { label: "Man", icon: "male-outline" },
+            { label: "Woman", icon: "female-outline" },
+            { label: "Other", icon: "transgender-outline" },
+          ].map((g) => {
+            const selected = gender === g.label;
+            return (
+              <TouchableOpacity
+                key={g.label}
+                style={[s.choiceChip, selected && s.choiceChipSelected]}
+                onPress={() => {
+                  setShowMe((prev) =>
+                    followGenderChange(gender, prev, g.label),
+                  );
+                  setGender(g.label);
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={g.icon as any}
+                  size={18}
+                  color={selected ? C.primary : C.secondary}
+                />
+                <Text
+                  style={[
+                    s.choiceChipText,
+                    selected && s.choiceChipTextSelected,
+                  ]}
+                >
+                  {g.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      <Text style={s.sectionHeader}>Show me</Text>
+      <Text style={s.sectionHeaderSub}>
+        Nearby will only show people who match this
+      </Text>
+      <View style={s.formCard}>
+        <View style={s.showMeRow}>
+          {SHOW_ME_OPTIONS.map((option) => {
+            const selected =
+              (showMe || oppositeShowMe(gender)) === option.value;
+            return (
+              <TouchableOpacity
+                key={option.value}
+                style={[s.filterChip, selected && s.filterChipSelected]}
+                onPress={() => setShowMe(option.value)}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    s.filterChipText,
+                    selected && s.filterChipTextSelected,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
     </View>
   );
 
   const renderStepAbout = () => (
     <View style={s.stepContent}>
-      <MD3InputField
-        label="Tagline (optional)"
-        icon="sparkles-outline"
-        value={tagline}
-        onChangeText={setTagline}
-        placeholder="A short catchy line about you"
-        maxLength={60}
-      />
-      <MD3InputField
-        label="Bio"
-        icon="create-outline"
-        value={bio}
-        onChangeText={setBio}
-        placeholder="Tell potential matches about yourself"
-        maxLength={300}
-        multiline
-        numberOfLines={4}
-      />
-      <Text style={s.charCount}>{bio.length}/300</Text>
-
-      <Text style={s.sectionHeader}>Why I am here</Text>
-      <View style={s.goalsGrid}>
-        {[
-          { label: 'Long-term relationship', emoji: '👩‍❤️‍👨' },
-          { label: 'Casual dating', emoji: '🥂' },
-          { label: 'Friendship', emoji: '🤝' },
-          { label: 'Just vibes', emoji: '🤙' },
-          { label: 'See where it goes', emoji: '🧭' },
-          { label: 'Meaningful connection', emoji: '💖' },
-          { label: 'Chat & chill', emoji: '💬' },
-          { label: 'Friends first', emoji: '👫' },
-          { label: 'Exploring', emoji: '🎒' },
-          { label: 'Open to possibilities', emoji: '🌟' }
-        ].map(({ label, emoji }) => {
-          const selected = relationshipGoal === label;
-          return (
-            <TouchableOpacity
-              key={label}
-              style={[s.goalChip, selected && s.goalChipSelected]}
-              onPress={() => setRelationshipGoal(label)}
-              activeOpacity={0.8}
-            >
-              {selected ? (
-                <Ionicons name="checkmark" size={14} color={MD3.primary} />
-              ) : (
-                <Text style={s.chipEmoji}>{emoji}</Text>
-              )}
-              <Text style={[s.goalChipText, selected && s.goalChipTextSelected]}>
-                {label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+      <View style={s.formCard}>
+        <WAInputField
+          label="Tagline"
+          value={tagline}
+          onChangeText={setTagline}
+          placeholder="Optional short line"
+          maxLength={60}
+        />
+        <WAInputField
+          label="Bio"
+          value={bio}
+          onChangeText={setBio}
+          placeholder="Tell people about yourself"
+          maxLength={300}
+          multiline
+          numberOfLines={4}
+        />
+        <Text style={s.charCount}>{bio.length}/300</Text>
       </View>
 
-      <Text style={s.sectionHeader}>Interests <Text style={s.sectionHeaderSub}>(select at least 1)</Text></Text>
-      <View style={s.interestsGrid}>
-        {INTERESTS.map(({ label, emoji }) => {
-          const selected = interests.includes(label);
-          return (
-            <TouchableOpacity
-              key={label}
-              style={[s.filterChip, selected && s.filterChipSelected]}
-              onPress={() => toggleInterest(label)}
-              activeOpacity={0.8}
-            >
-              {selected ? (
-                <Ionicons name="checkmark" size={14} color={MD3.primary} />
-              ) : (
-                <Text style={s.chipEmoji}>{emoji}</Text>
-              )}
-              <Text style={[s.filterChipText, selected && s.filterChipTextSelected]}>
-                {label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+      <Text style={s.sectionHeader}>Why I am here</Text>
+      <View style={s.formCard}>
+        <View style={s.goalsGrid}>
+          {[
+            { label: "Long-term relationship", emoji: "👩‍❤️‍👨" },
+            { label: "Casual dating", emoji: "🥂" },
+            { label: "Friendship", emoji: "🤝" },
+            { label: "Just vibes", emoji: "🤙" },
+            { label: "See where it goes", emoji: "🧭" },
+            { label: "Meaningful connection", emoji: "💖" },
+            { label: "Chat & chill", emoji: "💬" },
+            { label: "Friends first", emoji: "👫" },
+            { label: "Exploring", emoji: "🎒" },
+            { label: "Open to possibilities", emoji: "🌟" },
+          ].map(({ label, emoji }) => {
+            const selected = relationshipGoal === label;
+            return (
+              <TouchableOpacity
+                key={label}
+                style={[s.goalChip, selected && s.goalChipSelected]}
+                onPress={() => setRelationshipGoal(label)}
+                activeOpacity={0.8}
+              >
+                {selected ? (
+                  <Ionicons name="checkmark" size={14} color={C.primary} />
+                ) : (
+                  <Text style={s.chipEmoji}>{emoji}</Text>
+                )}
+                <Text
+                  style={[s.goalChipText, selected && s.goalChipTextSelected]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      <Text style={s.sectionHeader}>Interests</Text>
+      <Text style={s.sectionHeaderSub}>Select at least one</Text>
+      <View style={s.formCard}>
+        <View style={s.interestsGrid}>
+          {INTERESTS.map(({ label, emoji }) => {
+            const selected = interests.includes(label);
+            return (
+              <TouchableOpacity
+                key={label}
+                style={[s.filterChip, selected && s.filterChipSelected]}
+                onPress={() => toggleInterest(label)}
+                activeOpacity={0.8}
+              >
+                {selected ? (
+                  <Ionicons name="checkmark" size={14} color={C.primary} />
+                ) : (
+                  <Text style={s.chipEmoji}>{emoji}</Text>
+                )}
+                <Text
+                  style={[
+                    s.filterChipText,
+                    selected && s.filterChipTextSelected,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
     </View>
   );
 
   const renderCurrentStep = () => {
     switch (step) {
-      case 0: return renderStepPhoto();
-      case 1: return renderStepDetails();
-      case 2: return renderStepAbout();
-      default: return null;
+      case 0:
+        return renderStepPhoto();
+      case 1:
+        return renderStepDetails();
+      case 2:
+        return renderStepAbout();
+      default:
+        return null;
     }
   };
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={s.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={MD3.surface} />
-        
-        {/* ── Google MD3 Clean Header ── */}
-        <SafeAreaView edges={['top']} style={s.header}>
+        <StatusBar barStyle="dark-content" backgroundColor={C.white} />
+
+        <SafeAreaView edges={["top"]} style={s.header}>
           <View style={s.headerRow}>
             <TouchableOpacity onPress={handleBack} style={s.backButton}>
-              <Ionicons name="arrow-back" size={24} color={MD3.onSurface} />
+              <Ionicons name="arrow-back" size={24} color={C.text} />
             </TouchableOpacity>
-            <Image
-              source={require('../assets/images/luvstoer logo.png')}
-              style={[s.logo, { tintColor: MD3.primary }]}
-              contentFit="contain"
-            />
-            <View style={{ width: 48 }} />
-          </View>
-
-          {/* Thin Segmented Progress Indicator */}
-          <View style={s.progressBarTrack}>
-            {STEPS.map((_, i) => (
-              <View key={i} style={s.progressBarSegment}>
-                <View style={[
-                  s.progressBarFill, 
-                  i <= step && { backgroundColor: MD3.primary }
-                ]} />
-              </View>
-            ))}
-          </View>
-
-          <View style={s.titleContainer}>
-            <Text style={s.stepTitle}>{STEPS[step].title}</Text>
-            <Text style={s.stepSubtitle}>{STEPS[step].subtitle}</Text>
+            <Text style={s.headerTitle}>Profile setup</Text>
+            <Text style={s.headerStep}>
+              {step + 1} of {STEPS.length}
+            </Text>
           </View>
         </SafeAreaView>
 
-        {/* ── Content Area ── */}
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}
         >
           <ScrollView
@@ -548,38 +584,27 @@ export default function CreateProfileScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
+            <Text style={s.stepTitle}>{STEPS[step].title}</Text>
             {renderCurrentStep()}
           </ScrollView>
         </KeyboardAvoidingView>
 
-        {/* ── Google MD3 Bottom Actions ── */}
-        <SafeAreaView edges={['bottom']} style={[s.bottomBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-          <View style={s.bottomRow}>
-            {step > 0 ? (
-              <TouchableOpacity onPress={handleBack} style={s.textButton}>
-                <Text style={s.textButtonText}>Back</Text>
-              </TouchableOpacity>
-            ) : (
-              <View />
-            )}
-
-            <TouchableOpacity
-              onPress={step === STEPS.length - 1 ? handleComplete : handleNext}
-              disabled={!canNext()}
-              activeOpacity={0.8}
-              style={[
-                s.filledButton,
-                !canNext() && s.filledButtonDisabled
-              ]}
+        <SafeAreaView
+          edges={["bottom"]}
+          style={[s.bottomBar, { paddingBottom: Math.max(insets.bottom, 12) }]}
+        >
+          <TouchableOpacity
+            onPress={step === STEPS.length - 1 ? handleComplete : handleNext}
+            disabled={!canNext()}
+            activeOpacity={0.88}
+            style={[s.primaryBtn, !canNext() && s.primaryBtnDisabled]}
+          >
+            <Text
+              style={[s.primaryBtnText, !canNext() && s.primaryBtnTextDisabled]}
             >
-              <Text style={[
-                s.filledButtonText,
-                !canNext() && s.filledButtonTextDisabled
-              ]}>
-                {step === STEPS.length - 1 ? 'Finish' : 'Next'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+              {step === STEPS.length - 1 ? "Finish" : "Next"}
+            </Text>
+          </TouchableOpacity>
         </SafeAreaView>
       </View>
     </TouchableWithoutFeedback>
@@ -589,309 +614,260 @@ export default function CreateProfileScreen() {
 const s = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: MD3.surface,
+    backgroundColor: C.bg,
   },
   header: {
-    backgroundColor: MD3.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: MD3.surfaceVariant,
-    paddingBottom: 16,
+    backgroundColor: C.white,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.border,
   },
   headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    height: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 8,
+    height: 52,
   },
   backButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  logo: {
-    width: 100,
-    height: 32,
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: C.text,
   },
-  progressBarTrack: {
-    flexDirection: 'row',
-    gap: 4,
-    paddingHorizontal: 24,
-    marginTop: 8,
-  },
-  progressBarSegment: {
-    flex: 1,
-    height: 4,
-    backgroundColor: MD3.surfaceVariant,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    flex: 1,
-    height: '100%',
-  },
-  titleContainer: {
-    paddingHorizontal: 24,
-    marginTop: 20,
-  },
-  stepTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: MD3.onSurface,
-    letterSpacing: -0.5,
-  },
-  stepSubtitle: {
+  headerStep: {
     fontSize: 14,
-    color: MD3.onSurfaceVariant,
-    marginTop: 6,
-    lineHeight: 20,
+    fontWeight: "600",
+    color: C.secondary,
+    minWidth: 44,
+    textAlign: "right",
+    paddingRight: 8,
   },
   scroll: {
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 120, // Add generous bottom spacing so scroll view content doesn't get covered by fixed bottom button
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 100,
+  },
+  stepTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: C.text,
+    letterSpacing: -0.3,
+    marginBottom: 16,
   },
   stepContent: {
     flex: 1,
   },
-  
-  // Step 1: Photo
-  photoFrame: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    borderWidth: 2,
-    borderColor: MD3.outlineVariant,
-    borderStyle: 'dashed',
-    alignSelf: 'center',
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-    backgroundColor: MD3.surface,
-    marginTop: 10,
-    marginBottom: 30,
+  formCard: {
+    backgroundColor: C.white,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
   },
-  photoImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 80,
+
+  photoSection: {
+    alignItems: "center",
+    paddingTop: 8,
+    paddingBottom: 24,
   },
-  photoEditBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
+  avatarPicker: {
+    width: 148,
+    height: 148,
+    borderRadius: 74,
+    position: "relative",
+    marginBottom: 16,
+  },
+  avatarImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 74,
+  },
+  avatarPlaceholder: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 74,
+    backgroundColor: "#E5E7EB",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cameraBadge: {
+    position: "absolute",
+    bottom: 4,
+    right: 4,
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: MD3.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    backgroundColor: C.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 3,
+    borderColor: C.white,
   },
-  photoPlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+  photoActionText: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: C.primary,
+    marginBottom: 6,
   },
-  photoPlaceholderIconRing: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: MD3.primaryContainer,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  photoPlaceholderText: {
+  photoHint: {
     fontSize: 14,
-    fontWeight: '600',
-    color: MD3.primary,
-  },
-  tipCard: {
-    flexDirection: 'row',
-    gap: 16,
-    backgroundColor: MD3.primaryContainer,
-    borderRadius: 12,
-    padding: 16,
-  },
-  tipTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: MD3.onPrimaryContainer,
-  },
-  tipBody: {
-    fontSize: 12,
-    color: MD3.onPrimaryContainer,
-    lineHeight: 18,
-    marginTop: 4,
+    color: C.secondary,
+    textAlign: "center",
+    lineHeight: 20,
+    paddingHorizontal: 24,
   },
 
-  // Step 2: Details
   sectionHeader: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: MD3.onSurfaceVariant,
-    textTransform: 'uppercase',
+    fontSize: 12,
+    fontWeight: "600",
+    color: C.secondary,
+    textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginTop: 8,
-    marginBottom: 12,
+    marginTop: 4,
+    marginBottom: 8,
+    paddingHorizontal: 4,
   },
   sectionHeaderSub: {
-    fontSize: 12,
-    fontWeight: '400',
-    color: MD3.outline,
-    textTransform: 'none',
+    fontSize: 13,
+    fontWeight: "400",
+    color: C.secondary,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+    marginTop: -4,
   },
   genderRow: {
-    flexDirection: 'row',
-    gap: 10,
+    flexDirection: "row",
+    gap: 8,
+  },
+  showMeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
   },
   choiceChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1.5,
-    borderColor: MD3.outlineVariant,
-    borderRadius: 100, // Capsule shape
-    paddingHorizontal: 12,
-    height: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    height: 44,
     flex: 1,
-    backgroundColor: MD3.surface,
+    backgroundColor: C.bg,
   },
   choiceChipSelected: {
-    borderColor: MD3.primary,
-    backgroundColor: MD3.primaryContainer,
+    borderColor: "transparent",
+    backgroundColor: C.primaryLight,
   },
   choiceChipText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: MD3.onSurfaceVariant,
+    fontWeight: "500",
+    color: C.secondary,
   },
   choiceChipTextSelected: {
-    color: MD3.primary,
-    fontWeight: '700',
+    color: C.primary,
+    fontWeight: "600",
   },
 
-  // Step 3: About & Interests
   charCount: {
     fontSize: 12,
-    color: MD3.outline,
-    textAlign: 'right',
-    marginTop: -16,
-    marginBottom: 20,
+    color: C.secondary,
+    textAlign: "right",
+    marginTop: -8,
+    marginBottom: 4,
   },
   interestsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
   },
   filterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
-    borderWidth: 1.5,
-    borderColor: MD3.outlineVariant,
-    borderRadius: 100, // Capsule shape
-    paddingHorizontal: 14,
-    height: 38,
-    backgroundColor: MD3.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 100,
+    paddingHorizontal: 12,
+    height: 36,
+    backgroundColor: C.bg,
   },
   filterChipSelected: {
-    borderColor: MD3.primary,
-    backgroundColor: MD3.primaryContainer,
+    borderColor: "transparent",
+    backgroundColor: C.primaryLight,
   },
   filterChipText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: MD3.onSurfaceVariant,
+    fontWeight: "500",
+    color: C.secondary,
   },
   filterChipTextSelected: {
-    color: MD3.primary,
-    fontWeight: '700',
+    color: C.primary,
+    fontWeight: "600",
   },
   chipEmoji: {
     fontSize: 14,
   },
   goalsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
-    marginBottom: 20,
   },
   goalChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
-    borderWidth: 1.5,
-    borderColor: MD3.outlineVariant,
+    borderWidth: 1,
+    borderColor: C.border,
     borderRadius: 100,
     paddingHorizontal: 12,
-    height: 38,
-    backgroundColor: MD3.surface,
+    height: 36,
+    backgroundColor: C.bg,
   },
   goalChipSelected: {
-    borderColor: MD3.primary,
-    backgroundColor: MD3.primaryContainer,
+    borderColor: "transparent",
+    backgroundColor: C.primaryLight,
   },
   goalChipText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: MD3.onSurfaceVariant,
+    fontWeight: "500",
+    color: C.secondary,
   },
   goalChipTextSelected: {
-    color: MD3.primary,
-    fontWeight: '700',
+    color: C.primary,
+    fontWeight: "600",
   },
 
-  // Bottom action bar
   bottomBar: {
-    backgroundColor: MD3.surface,
-    borderTopWidth: 1,
-    borderTopColor: MD3.surfaceVariant,
-    paddingHorizontal: 24,
+    backgroundColor: C.white,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.border,
+    paddingHorizontal: 16,
     paddingTop: 12,
   },
-  bottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    height: 48,
+  primaryBtn: {
+    backgroundColor: C.yellow,
+    borderRadius: 12,
+    height: 50,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  textButton: {
-    paddingHorizontal: 16,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
+  primaryBtnDisabled: {
+    backgroundColor: C.disabled,
   },
-  textButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: MD3.primary,
+  primaryBtnText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: C.text,
   },
-  filledButton: {
-    backgroundColor: MD3.primary,
-    borderRadius: 100,
-    paddingHorizontal: 24,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    minWidth: 90,
-  },
-  filledButtonDisabled: {
-    backgroundColor: MD3.surfaceVariant,
-  },
-  filledButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: MD3.onPrimary,
-  },
-  filledButtonTextDisabled: {
-    color: MD3.outlineVariant,
+  primaryBtnTextDisabled: {
+    color: "#9CA3AF",
   },
 });

@@ -6,6 +6,7 @@ function isProfileComplete(user) {
 function serializeUser(user) {
   return {
     id: user._id,
+    publicId: user.publicId || '',
     email: user.email,
     name: user.name || '',
     age: user.age,

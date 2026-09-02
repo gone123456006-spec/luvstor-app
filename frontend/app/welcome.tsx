@@ -12,7 +12,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
-import { Ionicons } from "@expo/vector-icons";
 
 const { width, height } = Dimensions.get("window");
 
@@ -152,19 +151,15 @@ export default function WelcomeScreen() {
               Your ideal match,{"\n"}Your ideal relationship.
             </Text>
             <Text style={s.subtitle}>
-              Create a unique emotional story that{"\n"}describes you better than words.
+              Sign in with Google or email OTP and start meeting people nearby.
             </Text>
 
-            {/* Google MD3 Premium Capsule Action Button */}
             <TouchableOpacity
               style={s.getStartedBtn}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
               onPress={() => router.push("/login")}
             >
               <Text style={s.getStartedText}>Get Started</Text>
-              <View style={s.arrowCircle}>
-                <Ionicons name="arrow-forward" size={18} color="#1A1A2E" />
-              </View>
             </TouchableOpacity>
           </Animated.View>
           
@@ -334,33 +329,16 @@ const s = StyleSheet.create({
     marginBottom: 32,
   },
 
-  // Google MD3 Premium Capsule Buttons
   getStartedBtn: {
     backgroundColor: "#F5D547",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 100, // Capsule shape
-    shadowColor: "#F5D547",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  getStartedText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#1A1A2E",
-    letterSpacing: 0.2,
-  },
-  arrowCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(0,0,0,0.08)",
+    height: 52,
+    borderRadius: 100,
     alignItems: "center",
     justifyContent: "center",
+  },
+  getStartedText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1A1A2E",
   },
 });

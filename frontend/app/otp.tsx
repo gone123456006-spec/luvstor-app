@@ -1,58 +1,117 @@
-import React, { useEffect, useRef, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StatusBar,
-  Keyboard,
-  TouchableWithoutFeedback,
-  ActivityIndicator,
-} from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { apiSendOTP, apiVerifyOTP } from "../utils/api";
-import { resolvePostLoginRoute } from "../utils/auth";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  Keyboard,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View,
+} from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import DeviceTransferModal from "../components/DeviceTransferModal";
 import { useAuth } from "../contexts/AuthContext";
+import { ApiError, apiSendOTP, apiVerifyOTP } from "../utils/api";
+import { resolvePostLoginRoute } from "../utils/auth";
 
 const OTP_LENGTH = 6;
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 
-// ── Google Material 3 Design Colors ─────────────────────────
-const MD3 = {
-  primary: "#6750A4",          // MD3 Purple
-  onPrimary: "#FFFFFF",
-  primaryContainer: "#EADDFF",
-  onPrimaryContainer: "#21005D",
-  surface: "#FEF7FF",          // MD3 light background
-  onSurface: "#1D1B20",
-  surfaceVariant: "#E7E0EC",
-  onSurfaceVariant: "#49454F",
-  outline: "#79747E",
-  outlineVariant: "#CAC4D0",
-  error: "#B3261E",
-  success: "#386A20",
+/** Same palette as Sign In */
+const C = {
+  primary: "#7C3AED",
+  white: "#FFFFFF",
+  ink: "#1A1A2E",
+  muted: "#6B6B6B",
+  inputBg: "#F2F2F2",
+  error: "#E53935",
+  yellow: "#F5D547",
 };
+
+const HERO_SLIDES = [
+  {
+    title: "Check your inbox",
+    subtitle: "Your code is on the way",
+    image: require("../assets/images/login-hero.png"),
+    color: "#7C3AED",
+  },
+  {
+    title: "Almost there!",
+    subtitle: "Enter the 6-digit code",
+    image: require("../assets/images/login-hero-2.png"),
+    color: "#E85D75",
+  },
+  {
+    title: "Stay secure",
+    subtitle: "Codes expire in a few minutes",
+    image: require("../assets/images/login-hero-3.png"),
+    color: "#2BB3C0",
+  },
+  {
+    title: "Welcome back",
+    subtitle: "Verify to continue chatting",
+    image: require("../assets/images/login-hero-4.png"),
+    color: "#F59E0B",
+  },
+];
 
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { loginWithToken } = useAuth();
-  const { email, cooldown } = useLocalSearchParams<{ email: string; cooldown?: string }>();
+  const { email, cooldown } = useLocalSearchParams<{
+    email: string;
+    cooldown?: string;
+  }>();
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(""));
   const [error, setError] = useState("");
+  const [deviceConflict, setDeviceConflict] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [transferring, setTransferring] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [slide, setSlide] = useState(0);
 
   const inputs = useRef<(TextInput | null)[]>([]);
+  const heroColorAnim = useRef(new Animated.Value(0)).current;
+  const slideRef = useRef(0);
+
+  const busy = verifying || transferring;
+  const hero = HERO_SLIDES[slide];
+  const fromColor = HERO_SLIDES[slideRef.current]?.color ?? C.primary;
+  const toColor = hero.color;
+  const heroBg = heroColorAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [fromColor, toColor],
+  });
+
+  useEffect(() => {
+    heroColorAnim.setValue(0);
+    Animated.timing(heroColorAnim, {
+      toValue: 1,
+      duration: 450,
+      useNativeDriver: false,
+    }).start(() => {
+      slideRef.current = slide;
+    });
+  }, [slide, heroColorAnim]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSlide((n) => (n + 1) % HERO_SLIDES.length);
+    }, 3200);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const initial = parseInt(cooldown || "0", 10);
@@ -69,13 +128,25 @@ export default function OtpScreen() {
 
   const handleChange = (text: string, index: number) => {
     if (error) setError("");
-    const digit = text.replace(/[^0-9]/g, "");
-    const newOtp = [...otp];
-    newOtp[index] = digit;
-    setOtp(newOtp);
+    if (deviceConflict) setDeviceConflict(false);
 
-    // Auto focus next box
-    if (digit && index < OTP_LENGTH - 1) {
+    // Paste full code
+    const digits = text.replace(/[^0-9]/g, "");
+    if (digits.length > 1) {
+      const next = Array(OTP_LENGTH).fill("");
+      for (let i = 0; i < Math.min(digits.length, OTP_LENGTH); i++) {
+        next[i] = digits[i];
+      }
+      setOtp(next);
+      const focusAt = Math.min(digits.length, OTP_LENGTH) - 1;
+      inputs.current[focusAt]?.focus();
+      return;
+    }
+
+    const newOtp = [...otp];
+    newOtp[index] = digits;
+    setOtp(newOtp);
+    if (digits && index < OTP_LENGTH - 1) {
       inputs.current[index + 1]?.focus();
     }
   };
@@ -87,6 +158,20 @@ export default function OtpScreen() {
       newOtp[index - 1] = "";
       setOtp(newOtp);
     }
+  };
+
+  const finishLogin = async (token: string, user: any) => {
+    const accountEmail = String(user.email || email)
+      .trim()
+      .toLowerCase();
+    const hydratedUser = await loginWithToken(token, {
+      id: user.id,
+      email: accountEmail,
+      name: user.name,
+      profileComplete: user.profileComplete,
+    });
+    const nextRoute = await resolvePostLoginRoute(hydratedUser);
+    router.replace(nextRoute as any);
   };
 
   const handleVerify = async () => {
@@ -101,26 +186,45 @@ export default function OtpScreen() {
     }
 
     setError("");
+    setDeviceConflict(false);
     setVerifying(true);
     Keyboard.dismiss();
 
     try {
       const result = await apiVerifyOTP(email, code);
-      const accountEmail = String(result.user.email || email).trim().toLowerCase();
-
-      const hydratedUser = await loginWithToken(result.token, {
-        id: result.user.id,
-        email: accountEmail,
-        name: result.user.name,
-        profileComplete: result.user.profileComplete,
-      });
-
-      const nextRoute = await resolvePostLoginRoute(hydratedUser);
-      router.replace(nextRoute as any);
+      await finishLogin(result.token, result.user);
     } catch (err: any) {
-      setError(err.message || "Verification failed");
+      if (err instanceof ApiError && err.code === "DEVICE_IN_USE") {
+        setDeviceConflict(true);
+        setError(err.message);
+      } else {
+        setError(err.message || "Verification failed");
+      }
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const handleTransferDevice = async () => {
+    const code = otp.join("");
+    if (code.length < OTP_LENGTH || !email) return;
+
+    setTransferring(true);
+    setError("");
+    Keyboard.dismiss();
+
+    try {
+      const result = await apiVerifyOTP(email, code, { forceTransfer: true });
+      setDeviceConflict(false);
+      await finishLogin(result.token, result.user);
+    } catch (err: any) {
+      setDeviceConflict(false);
+      setError(
+        err.message ||
+          "Could not transfer device. Request a new code and try again.",
+      );
+    } finally {
+      setTransferring(false);
     }
   };
 
@@ -129,6 +233,7 @@ export default function OtpScreen() {
 
     setResending(true);
     setError("");
+    setDeviceConflict(false);
 
     try {
       const result = await apiSendOTP(email);
@@ -145,306 +250,380 @@ export default function OtpScreen() {
   const filledCount = otp.filter((d) => d !== "").length;
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <View style={s.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={MD3.surface} />
-        
-        <SafeAreaView style={s.safeArea} edges={["top", "bottom"]}>
-          <KeyboardAvoidingView
-            style={s.keyboardView}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
+    <>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <Animated.View style={[s.root, { backgroundColor: heroBg }]}>
+          <StatusBar barStyle="light-content" backgroundColor={hero.color} />
+
+          <KeyboardAwareScrollView
+            style={s.flex}
+            contentContainerStyle={s.scroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            overScrollMode="never"
+            bottomOffset={24}
           >
-            <ScrollView
-              contentContainerStyle={s.scroll}
-              bounces={false}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
+            {/* ── Coloured hero (same style as Sign In) ── */}
+            <Animated.View
+              style={[
+                s.hero,
+                {
+                  paddingTop: Math.max(insets.top, 8) + 4,
+                  backgroundColor: heroBg,
+                },
+              ]}
             >
-              <View style={s.card}>
-                
-                {/* Brand Logo & Header */}
-                <View style={s.headerContainer}>
-                  <Image
-                    source={require("../assets/images/luvstoer logo.png")}
-                    style={s.logo}
-                    contentFit="contain"
-                  />
-                  <Text style={s.title}>2-Step Verification</Text>
-                  <Text style={s.subtitle}>
-                    A 6-digit verification code has been sent to
-                  </Text>
-                  <Text style={s.emailBadge}>{email || "your email"}</Text>
-                </View>
-
-                {/* 6 Digit Input Row */}
-                <View style={s.otpRow}>
-                  {otp.map((digit, index) => {
-                    const isFocused = focusedIndex === index;
-                    return (
-                      <TextInput
-                        key={index}
-                        ref={(ref) => {
-                          inputs.current[index] = ref;
-                        }}
-                        style={[
-                          s.otpBox,
-                          isFocused && s.otpBoxFocused,
-                          digit ? s.otpBoxFilled : null,
-                          error ? s.otpBoxError : null,
-                        ]}
-                        value={digit}
-                        onChangeText={(text) => handleChange(text, index)}
-                        onKeyPress={(e) => handleKeyPress(e, index)}
-                        keyboardType="number-pad"
-                        maxLength={1}
-                        selectTextOnFocus
-                        onFocus={() => setFocusedIndex(index)}
-                        onBlur={() => setFocusedIndex(null)}
-                      />
-                    );
-                  })}
-                </View>
-
-                {/* Status / Error Labels */}
-                {error ? (
-                  <View style={s.errorRow}>
-                    <Ionicons name="error-outline" size={16} color={MD3.error} />
-                    <Text style={s.errorText}>{error}</Text>
-                  </View>
-                ) : (
-                  <Text style={s.hintText}>Enter the security code to proceed</Text>
-                )}
-
-                {/* Action Button */}
+              <View style={s.heroTopRow}>
                 <TouchableOpacity
-                  onPress={handleVerify}
-                  activeOpacity={0.8}
-                  disabled={verifying || filledCount < OTP_LENGTH}
-                  style={[
-                    s.filledButton,
-                    (filledCount < OTP_LENGTH || verifying) && s.filledButtonDisabled
-                  ]}
+                  onPress={() => router.back()}
+                  style={s.backBtn}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 >
-                  {verifying ? (
-                    <ActivityIndicator color={MD3.onPrimary} size="small" />
-                  ) : (
-                    <Text style={s.filledButtonText}>Verify</Text>
-                  )}
+                  <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
                 </TouchableOpacity>
-
-                {/* Resend Action */}
-                <View style={s.resendRow}>
-                  <Text style={s.resendText}>Didn't receive the code?</Text>
-                  <TouchableOpacity
-                    onPress={handleResend}
-                    style={s.textButton}
-                    disabled={resending || resendCooldown > 0}
-                  >
-                    {resending ? (
-                      <ActivityIndicator color={MD3.primary} size="small" />
-                    ) : (
-                      <Text style={[s.textButtonText, resendCooldown > 0 && s.textButtonDisabled]}>
-                        {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend code"}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
+                <View style={s.shieldWrap}>
+                  <Ionicons name="shield-checkmark" size={22} color="#FFFFFF" />
                 </View>
+              </View>
 
-              </View>
-            </ScrollView>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => setSlide((n) => (n + 1) % HERO_SLIDES.length)}
+                style={s.heroCopy}
+              >
+                <Text style={s.heroTitle}>{hero.title}</Text>
+                <Text style={s.heroSubtitle}>{hero.subtitle}</Text>
+              </TouchableOpacity>
 
-            {/* Google MD3 Footer */}
-            <View style={[s.footer, { marginBottom: Math.max(insets.bottom, 12) }]}>
-              <View style={s.footerLinks}>
-                <TouchableOpacity><Text style={s.footerLinkText}>English (United States)</Text></TouchableOpacity>
-                <Ionicons name="chevron-down" size={14} color={MD3.onSurfaceVariant} />
+              <View style={s.illustration}>
+                <Image
+                  key={slide}
+                  source={hero.image}
+                  style={s.heroImage}
+                  contentFit="contain"
+                  transition={400}
+                />
               </View>
-              <View style={s.footerLinks}>
-                <TouchableOpacity><Text style={s.footerLinkText}>Help</Text></TouchableOpacity>
-                <TouchableOpacity><Text style={s.footerLinkText}>Privacy</Text></TouchableOpacity>
-                <TouchableOpacity><Text style={s.footerLinkText}>Terms</Text></TouchableOpacity>
+
+              <View style={s.dots}>
+                {HERO_SLIDES.map((_, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => setSlide(i)}
+                    hitSlop={8}
+                    style={[s.dot, i === slide ? s.dotActive : null]}
+                  />
+                ))}
               </View>
+            </Animated.View>
+
+            {/* ── White sheet ── */}
+            <View
+              style={[
+                s.sheet,
+                { paddingBottom: Math.max(insets.bottom, 20) + 12 },
+              ]}
+            >
+              <Text style={s.sheetTitle}>Email verification</Text>
+              <View style={s.emailRow}>
+                <Text style={s.emailText} numberOfLines={1}>
+                  {email || "your email"}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => router.back()}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  disabled={busy}
+                >
+                  <Text style={s.changeLink}>Change</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={s.otpRow}>
+                {otp.map((digit, index) => {
+                  const isFocused = focusedIndex === index;
+                  return (
+                    <TextInput
+                      key={index}
+                      ref={(ref) => {
+                        inputs.current[index] = ref;
+                      }}
+                      style={[
+                        s.otpBox,
+                        isFocused && s.otpBoxFocused,
+                        digit ? s.otpBoxFilled : null,
+                        error && !deviceConflict ? s.otpBoxError : null,
+                      ]}
+                      value={digit}
+                      onChangeText={(text) => handleChange(text, index)}
+                      onKeyPress={(e) => handleKeyPress(e, index)}
+                      keyboardType="number-pad"
+                      maxLength={index === 0 ? OTP_LENGTH : 1}
+                      selectTextOnFocus
+                      editable={!busy}
+                      onFocus={() => setFocusedIndex(index)}
+                      onBlur={() => setFocusedIndex(null)}
+                    />
+                  );
+                })}
+              </View>
+
+              {error && !deviceConflict ? (
+                <View style={s.errorRow}>
+                  <Ionicons name="alert-circle" size={14} color={C.error} />
+                  <Text style={s.errorText}>{error}</Text>
+                </View>
+              ) : null}
+
+              <TouchableOpacity
+                onPress={handleVerify}
+                activeOpacity={0.88}
+                disabled={busy || filledCount < OTP_LENGTH || deviceConflict}
+                style={[
+                  s.primaryBtn,
+                  (busy || filledCount < OTP_LENGTH || deviceConflict) &&
+                    s.primaryBtnDisabled,
+                ]}
+              >
+                {verifying ? (
+                  <ActivityIndicator color={C.ink} size="small" />
+                ) : (
+                  <Text style={s.primaryBtnText}>Verify & Continue</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleResend}
+                disabled={resendCooldown > 0 || resending || busy}
+                style={s.resendRow}
+              >
+                {resending ? (
+                  <ActivityIndicator color={C.primary} size="small" />
+                ) : (
+                  <Text
+                    style={[
+                      s.resendText,
+                      (resendCooldown > 0 || busy) && s.resendTextDisabled,
+                    ]}
+                  >
+                    {resendCooldown > 0
+                      ? `Resend code in ${resendCooldown}s`
+                      : "Resend verification code"}
+                  </Text>
+                )}
+              </TouchableOpacity>
             </View>
+          </KeyboardAwareScrollView>
+        </Animated.View>
+      </TouchableWithoutFeedback>
 
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </View>
-    </TouchableWithoutFeedback>
+      <DeviceTransferModal
+        visible={deviceConflict}
+        alertText={error || "Already logged in on another device"}
+        message="Reinstalled the app or switched phones? Transfer this account to this device after verifying your identity."
+        buttonText="Transfer Device"
+        loading={transferring}
+        disabled={filledCount < OTP_LENGTH}
+        onTransfer={handleTransferDevice}
+        onDismiss={() => {
+          setDeviceConflict(false);
+          setError("");
+        }}
+      />
+    </>
   );
 }
 
 const s = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: MD3.surface,
-  },
-  safeArea: {
-    flex: 1,
-  },
-  keyboardView: {
-    flex: 1,
-  },
+  root: { flex: 1, backgroundColor: C.primary },
+  flex: { flex: 1 },
   scroll: {
     flexGrow: 1,
-    justifyContent: "center",
-    paddingHorizontal: 24,
-  },
-  card: {
-    backgroundColor: MD3.surface,
-    borderRadius: 28,
-    borderWidth: Platform.OS === "web" ? 1 : 0,
-    borderColor: MD3.outlineVariant,
-    paddingVertical: 36,
-    paddingHorizontal: 20,
-    width: "100%",
-    maxWidth: 450,
-    alignSelf: "center",
-  },
-  headerContainer: {
-    alignItems: "center",
-    marginBottom: 32,
-  },
-  logo: {
-    width: 110,
-    height: 36,
-    tintColor: MD3.primary,
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: "600",
-    color: MD3.onSurface,
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: MD3.onSurfaceVariant,
-    marginTop: 8,
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  emailBadge: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: MD3.onSurface,
-    marginTop: 4,
+    minHeight: SCREEN_H,
   },
 
-  // 6 Digit OTP Layout
+  hero: {
+    paddingHorizontal: 22,
+    paddingBottom: 0,
+    minHeight: SCREEN_W * 0.72,
+  },
+  heroTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  shieldWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroCopy: { marginTop: -4 },
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 28,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  heroSubtitle: {
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 15,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  illustration: {
+    alignItems: "center",
+    justifyContent: "flex-end",
+    marginTop: 8,
+    marginBottom: 0,
+    height: SCREEN_W * 0.5,
+    overflow: "visible",
+  },
+  heroImage: {
+    width: SCREEN_W * 0.74,
+    height: SCREEN_W * 0.64,
+    transform: [{ translateY: 140 }],
+  },
+  dots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 0,
+    transform: [{ translateY: 120 }],
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,255,255,0.45)",
+  },
+  dotActive: {
+    width: 22,
+    borderRadius: 4,
+    backgroundColor: "#FFFFFF",
+  },
+
+  sheet: {
+    flexGrow: 1,
+    backgroundColor: C.white,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    marginTop: 130,
+    paddingHorizontal: 24,
+    paddingTop: 40,
+    overflow: "hidden",
+    zIndex: 2,
+  },
+  sheetTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: C.ink,
+    letterSpacing: -0.3,
+  },
+  sheetSub: {
+    marginTop: 6,
+    fontSize: 14,
+    color: C.muted,
+  },
+  emailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginTop: 4,
+    marginBottom: 18,
+  },
+  emailText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "400",
+    color: C.muted,
+  },
+  changeLink: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: C.muted,
+  },
+
   otpRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 8,
-    marginVertical: 12,
   },
   otpBox: {
     flex: 1,
-    height: 52,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: MD3.outline,
-    backgroundColor: MD3.surface,
+    height: 56,
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
+    borderRadius: 14,
     textAlign: "center",
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: "700",
-    color: MD3.onSurface,
+    color: C.ink,
+    backgroundColor: C.inputBg,
   },
   otpBoxFocused: {
-    borderColor: MD3.primary,
-    borderWidth: 2,
+    borderColor: "#D4D4D8",
+    backgroundColor: "#F7F7F8",
   },
   otpBoxFilled: {
-    borderColor: MD3.primary,
+    borderColor: "#D4D4D8",
+    backgroundColor: "#F7F7F8",
   },
   otpBoxError: {
-    borderColor: MD3.error,
+    borderColor: C.error,
   },
 
-  // Labels
   errorRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 6,
-    marginTop: 8,
-    justifyContent: "center",
+    marginTop: 12,
   },
   errorText: {
-    color: MD3.error,
+    flex: 1,
+    color: C.error,
     fontSize: 13,
     fontWeight: "500",
   },
-  hintText: {
-    color: MD3.onSurfaceVariant,
-    fontSize: 13,
-    marginTop: 8,
-    textAlign: "center",
-  },
 
-  // MD3 Button
-  filledButton: {
-    backgroundColor: MD3.primary,
+  primaryBtn: {
+    marginTop: 22,
+    backgroundColor: C.yellow,
     borderRadius: 100,
-    height: 44,
-    justifyContent: "center",
+    height: 54,
     alignItems: "center",
-    marginTop: 32,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    justifyContent: "center",
   },
-  filledButtonDisabled: {
-    backgroundColor: MD3.surfaceVariant,
-    opacity: 0.8,
+  primaryBtnDisabled: {
+    opacity: 0.45,
   },
-  filledButtonText: {
-    color: MD3.onPrimary,
-    fontSize: 14,
+  primaryBtnText: {
+    color: C.ink,
+    fontSize: 17,
     fontWeight: "700",
+    letterSpacing: 0.2,
   },
 
   resendRow: {
-    flexDirection: "row",
-    justifyContent: "center",
+    marginTop: 20,
     alignItems: "center",
-    gap: 4,
-    marginTop: 24,
   },
   resendText: {
-    fontSize: 13,
-    color: MD3.onSurfaceVariant,
-  },
-  textButton: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-  },
-  textButtonText: {
-    fontSize: 13,
+    color: C.ink,
+    fontSize: 14,
     fontWeight: "700",
-    color: MD3.primary,
   },
-  textButtonDisabled: {
-    color: MD3.onSurfaceVariant,
-    fontWeight: "500",
-  },
-
-  // Footer Styling
-  footer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: "auto",
-    paddingHorizontal: 12,
-    paddingTop: 16,
-  },
-  footerLinks: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-  },
-  footerLinkText: {
-    fontSize: 12,
-    color: MD3.onSurfaceVariant,
+  resendTextDisabled: {
+    color: C.muted,
   },
 });

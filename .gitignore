@@ -1,1 +1,16 @@
 node_modules
+
+# Secrets — never commit
+.env
+.env.local
+backend/config/firebase-service-account.json
+backend/config/*.serviceaccount.json
+backend/config/*-firebase-adminsdk-*.json
+
+# Local uploads / downloads — too large for git
+backend/config/Downloads/
+backend/uploads/
+
+# Firebase client config (environment specific)
+frontend/google-services.json
+frontend/GoogleService-Info.plist

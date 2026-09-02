@@ -15,13 +15,17 @@
           "NSAllowsLocalNetworking": true
         },
         "NSPhotoLibraryUsageDescription": "Luvstor accesses your photo library so you can share images in chat.",
-        "NSMicrophoneUsageDescription": "Luvstor uses the microphone so you can record and send voice messages.",
-        "NSCameraUsageDescription": "Luvstor uses the camera so you can take and share photos.",
+        "NSMicrophoneUsageDescription": "Luvstor uses the microphone for voice messages and voice/video calls.",
+        "NSCameraUsageDescription": "Luvstor uses the camera for photos and video calls.",
+        "UIBackgroundModes": ["audio", "voip", "remote-notification"],
         "NSLocationWhenInUseUsageDescription": "Luvstor uses your location to show you nearby matches."
       }
     },
     "android": {
+      "package": "com.luvstor.app",
+      "googleServicesFile": "./google-services.json",
       "usesCleartextTraffic": true,
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#8E2DE2",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -30,9 +34,21 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.FOREGROUND_SERVICE_CAMERA"
       ]
     },
     "web": {
@@ -41,6 +57,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withRazorpay",
       [
         "expo-location",
         {
@@ -48,16 +65,26 @@
         }
       ],
       [
-        "expo-image-picker",
+        "expo-av",
         {
-          "photosPermission": "Luvstor accesses your photo library so you can share images in chat.",
-          "cameraPermission": "Luvstor uses the camera so you can take and share photos."
+          "microphonePermission": "Luvstor uses the microphone for voice messages and voice/video calls."
         }
       ],
       [
-        "expo-av",
+        "expo-image-picker",
         {
-          "microphonePermission": "Luvstor uses the microphone so you can record and send voice messages."
+          "photosPermission": "Luvstor accesses your photo library so you can share images in chat.",
+          "cameraPermission": "Luvstor uses the camera for photos and video calls."
+        }
+      ],
+      "./plugins/withWebRTC",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/android-icon-monochrome.png",
+          "color": "#8E2DE2",
+          "defaultChannel": "system",
+          "enableBackgroundRemoteNotifications": true
         }
       ],
       [
@@ -70,6 +97,12 @@
           "dark": {
             "backgroundColor": "#4A00E0"
           }
+        }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.944271155469-crp7cmrsa5fuqqk1moaut0pnj2p462dm"
         }
       ]
     ],

@@ -1,68 +1,163 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Dimensions,
   Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
-  View
+  View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { apiSendOTP } from "../utils/api";
+import Svg, { Path } from "react-native-svg";
+import DeviceTransferModal from "../components/DeviceTransferModal";
+import {
+  getGoogleAuthConfigHint,
+  isGoogleAuthConfigured,
+} from "../config/googleAuth";
+import { useAuth } from "../contexts/AuthContext";
+import { mapGoogleSignInError, useGoogleAuth } from "../hooks/useGoogleAuth";
+import { ApiError, apiGoogleLogin, apiSendOTP } from "../utils/api";
+import { resolvePostLoginRoute } from "../utils/auth";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 
+/** Official multicolor Google "G" mark */
+function GoogleLogo({ size = 20 }: { size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 48 48">
+      <Path
+        fill="#EA4335"
+        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+      />
+      <Path
+        fill="#4285F4"
+        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+      />
+      <Path
+        fill="#FBBC05"
+        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+      />
+      <Path
+        fill="#34A853"
+        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+      />
+    </Svg>
+  );
+}
+
+/** Luvstor brand palette (matches welcome) */
 const C = {
   primary: "#7C3AED",
-  primaryContainer: "#F5F0FF",
-  surface: "#FFFFFF",
-  onSurface: "#1A1A2E",
-  onSurfaceVariant: "#7A7A8E",
-  outline: "#CAC4D0",
-  error: "#EF4444",
+  white: "#FFFFFF",
+  ink: "#1A1A2E",
+  muted: "#6B6B6B",
+  inputBg: "#F2F2F2",
+  error: "#E53935",
+  googleBorder: "#DADCE0",
+  yellow: "#F5D547",
 };
+
+const HERO_SLIDES = [
+  {
+    title: "Meet someone new!",
+    subtitle: "Chat, match & find your spark",
+    image: require("../assets/images/login-hero.png"),
+    color: "#7C3AED", // Luvstor purple
+  },
+  {
+    title: "Real people nearby",
+    subtitle: "Discover matches around you",
+    image: require("../assets/images/login-hero-2.png"),
+    color: "#E85D75", // rose
+  },
+  {
+    title: "Safe & private",
+    subtitle: "Your email stays with you",
+    image: require("../assets/images/login-hero-3.png"),
+    color: "#2BB3C0", // teal
+  },
+  {
+    title: "Say hi today",
+    subtitle: "Start a chat that feels easy",
+    image: require("../assets/images/login-hero-4.png"),
+    color: "#F59E0B", // amber (pairs with yellow shirt)
+  },
+];
 
 export default function LoginScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { loginWithToken } = useAuth();
+  const { signIn, ready, requiresDevBuild } = useGoogleAuth();
 
   const [email, setEmail] = useState("");
-  const [error, setError] = useState("");
   const [focused, setFocused] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [transferring, setTransferring] = useState(false);
+  const [error, setError] = useState("");
+  const [deviceConflict, setDeviceConflict] = useState(false);
+  const [pendingIdToken, setPendingIdToken] = useState<string | null>(null);
+  const [slide, setSlide] = useState(0);
+  const heroColorAnim = React.useRef(new Animated.Value(0)).current;
+  const slideRef = React.useRef(0);
 
-  const labelAnim = useRef(new Animated.Value(email ? 1 : 0)).current;
+  const busy = otpLoading || googleLoading || transferring;
+  const hero = HERO_SLIDES[slide];
+  const prevSlide = slideRef.current;
+  const fromColor = HERO_SLIDES[prevSlide]?.color ?? C.primary;
+  const toColor = hero.color;
+
+  // Smoothly blend hero background between slide colours
+  const heroBg = heroColorAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [fromColor, toColor],
+  });
 
   React.useEffect(() => {
-    Animated.timing(labelAnim, {
-      toValue: focused || email ? 1 : 0,
-      duration: 150,
+    heroColorAnim.setValue(0);
+    Animated.timing(heroColorAnim, {
+      toValue: 1,
+      duration: 450,
       useNativeDriver: false,
-    }).start();
-  }, [focused, email]);
+    }).start(() => {
+      slideRef.current = slide;
+    });
+  }, [slide, heroColorAnim]);
 
-  const labelStyle = {
-    top: labelAnim.interpolate({ inputRange: [0, 1], outputRange: [16, -10] }),
-    fontSize: labelAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 12] }),
-    color: labelAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [C.onSurfaceVariant, error ? C.error : C.primary],
-    }),
-    backgroundColor: focused || email ? C.surface : "transparent",
+  // Cycle hero poses + colours one by one in the same position
+  React.useEffect(() => {
+    const id = setInterval(() => {
+      setSlide((n) => (n + 1) % HERO_SLIDES.length);
+    }, 3200);
+    return () => clearInterval(id);
+  }, []);
+
+  const finishLogin = async (token: string, user: any) => {
+    const accountEmail = String(user.email || "")
+      .trim()
+      .toLowerCase();
+    const hydratedUser = await loginWithToken(token, {
+      id: user.id,
+      email: accountEmail,
+      name: user.name,
+      profileComplete: user.profileComplete,
+    });
+    const nextRoute = await resolvePostLoginRoute(hydratedUser);
+    router.replace(nextRoute as any);
   };
 
-  const handleSubmit = async () => {
+  const handleSendOtp = async () => {
     const trimmed = email.trim();
     if (!trimmed) {
       setError("Please enter your email address");
@@ -74,235 +169,437 @@ export default function LoginScreen() {
     }
 
     setError("");
-    setLoading(true);
+    setDeviceConflict(false);
+    setOtpLoading(true);
     Keyboard.dismiss();
 
     try {
       const result = await apiSendOTP(trimmed);
       const cooldown = result.resendCooldownSeconds ?? 60;
       router.push(
-        `/otp?email=${encodeURIComponent(trimmed)}&cooldown=${cooldown}` as any
+        `/otp?email=${encodeURIComponent(trimmed)}&cooldown=${cooldown}` as any,
       );
     } catch (err: any) {
       setError(err.message || "Could not send OTP. Check your connection.");
     } finally {
-      setLoading(false);
+      setOtpLoading(false);
     }
   };
 
-  const handleChange = (text: string) => {
-    setEmail(text);
-    if (error) setError("");
+  const handleGoogleSignIn = async (forceTransfer = false) => {
+    if (!isGoogleAuthConfigured()) {
+      setError(getGoogleAuthConfigHint());
+      return;
+    }
+
+    setError("");
+    if (!forceTransfer) setDeviceConflict(false);
+    setGoogleLoading(true);
+
+    try {
+      let idToken = pendingIdToken;
+      if (!idToken || !forceTransfer) {
+        idToken = await signIn();
+        setPendingIdToken(idToken);
+      }
+
+      const result = await apiGoogleLogin(idToken, { forceTransfer });
+      setPendingIdToken(null);
+      setDeviceConflict(false);
+      await finishLogin(result.token, result.user);
+    } catch (err: any) {
+      if (err instanceof ApiError && err.code === "DEVICE_IN_USE") {
+        setDeviceConflict(true);
+        setError(err.message);
+      } else if (err.message === "Sign-in cancelled") {
+        setError("");
+      } else {
+        setDeviceConflict(false);
+        setPendingIdToken(null);
+        setError(mapGoogleSignInError(err));
+      }
+    } finally {
+      setGoogleLoading(false);
+      setTransferring(false);
+    }
+  };
+
+  const handleTransferDevice = async () => {
+    setTransferring(true);
+    await handleGoogleSignIn(true);
   };
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <View style={s.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#1A0533" />
+    <>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <Animated.View style={[s.root, { backgroundColor: heroBg }]}>
+          <StatusBar barStyle="light-content" backgroundColor={hero.color} />
 
-        <LinearGradient
-          colors={["#1A0533", "#3B0764", "#6B21A8", "#7C3AED"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-
-        <KeyboardAvoidingView
-          style={s.keyboardView}
-          behavior={Platform.OS === "ios" ? "padding" : "padding"}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
-        >
-          <ScrollView
-            contentContainerStyle={{ flexGrow: 1 }}
+          <KeyboardAwareScrollView
+            style={s.flex}
+            contentContainerStyle={s.scroll}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            bounces={false}
+            overScrollMode="never"
+            bottomOffset={24}
           >
-            {/* Top Half: Brand & Header */}
-            <View style={[s.topSection, { paddingTop: Math.max(insets.top, 20) }]}>
-              <View style={s.logoContainer}>
+            {/* ── Coloured hero (changes with each pose) ── */}
+            <Animated.View
+              style={[
+                s.hero,
+                {
+                  paddingTop: Math.max(insets.top, 8) + 4,
+                  backgroundColor: heroBg,
+                },
+              ]}
+            >
+              <View style={s.heroTopRow}>
+                <View style={s.shieldWrap}>
+                  <Ionicons name="shield-checkmark" size={22} color="#FFFFFF" />
+                </View>
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => setSlide((n) => (n + 1) % HERO_SLIDES.length)}
+                style={s.heroCopy}
+              >
+                <Text style={s.heroTitle}>{hero.title}</Text>
+                <Text style={s.heroSubtitle}>{hero.subtitle}</Text>
+              </TouchableOpacity>
+
+              <View style={s.illustration}>
                 <Image
-                  source={require("../assets/images/luvstoer logo.png")}
-                  style={[s.logo, { tintColor: "#EADDFF" }]}
+                  key={slide}
+                  source={hero.image}
+                  style={s.heroImage}
                   contentFit="contain"
+                  transition={400}
                 />
               </View>
-              <Text style={s.heading}>Welcome Back</Text>
-            </View>
 
-            {/* Bottom Card */}
-            <View style={[s.bottomCard, { paddingBottom: Math.max(insets.bottom, 24) }]}>
-              <Text style={s.cardTitle}>Sign In</Text>
-              <Text style={s.cardSubtitle}>
-                Enter your email to receive a verification code
-              </Text>
+              <View style={s.dots}>
+                {HERO_SLIDES.map((_, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => setSlide(i)}
+                    hitSlop={8}
+                    style={[s.dot, i === slide ? s.dotActive : null]}
+                  />
+                ))}
+              </View>
+            </Animated.View>
 
-              {/* Floating Label Input */}
-              <View style={s.inputContainer}>
-                <View style={[s.inputBox, focused && s.inputBoxFocused, error ? s.inputBoxError : null]}>
-                  <Ionicons
-                    name="mail-outline"
-                    size={20}
-                    color={error ? C.error : focused ? C.primary : C.onSurfaceVariant}
-                  />
-                  <TextInput
-                    style={s.textInput}
-                    value={email}
-                    onChangeText={handleChange}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    placeholder={focused ? "you@example.com" : ""}
-                    placeholderTextColor={C.outline}
-                    onFocus={() => setFocused(true)}
-                    onBlur={() => setFocused(false)}
-                    editable={!loading}
-                  />
-                </View>
-                <Animated.Text style={[s.floatingLabel, labelStyle]}>
-                  Email address
-                </Animated.Text>
+            {/* ── White sheet ── */}
+            <View
+              style={[
+                s.sheet,
+                { paddingBottom: Math.max(insets.bottom, 20) + 12 },
+              ]}
+            >
+              <Text style={s.sheetTitle}>Email address</Text>
+
+              <View
+                style={[
+                  s.inputBox,
+                  focused && s.inputBoxFocused,
+                  error && !deviceConflict ? s.inputBoxError : null,
+                ]}
+              >
+                <TextInput
+                  style={s.textInput}
+                  value={email}
+                  onChangeText={(text) => {
+                    setEmail(text);
+                    if (error) setError("");
+                  }}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="email"
+                  placeholder="you@gmail.com"
+                  placeholderTextColor="#9E9E9E"
+                  onFocus={() => setFocused(true)}
+                  onBlur={() => setFocused(false)}
+                  editable={!busy}
+                  returnKeyType="done"
+                  onSubmitEditing={handleSendOtp}
+                />
               </View>
 
-              {/* Error / Hint */}
-              {error ? (
+              {error && !deviceConflict ? (
                 <View style={s.errorRow}>
-                  <Ionicons name="alert-circle-outline" size={16} color={C.error} />
+                  <Ionicons name="alert-circle" size={14} color={C.error} />
                   <Text style={s.errorText}>{error}</Text>
                 </View>
-              ) : (
-                <Text style={s.hintText}>
-                  A 6-digit code will be sent to this email
-                </Text>
-              )}
+              ) : null}
 
-              {/* Submit Button */}
               <TouchableOpacity
-                onPress={handleSubmit}
-                activeOpacity={0.8}
-                disabled={loading || !email.trim()}
-                style={[s.submitBtn, (!email.trim() || loading) && s.submitBtnDisabled]}
+                onPress={handleSendOtp}
+                activeOpacity={0.88}
+                disabled={busy || !email.trim() || deviceConflict}
+                style={[
+                  s.primaryBtn,
+                  (!email.trim() || busy || deviceConflict) &&
+                    s.primaryBtnDisabled,
+                ]}
               >
-                {loading ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                {otpLoading ? (
+                  <ActivityIndicator color={C.ink} size="small" />
                 ) : (
-                  <Text style={s.submitBtnText}>Send Code</Text>
+                  <Text style={s.primaryBtnText}>Get OTP</Text>
                 )}
               </TouchableOpacity>
 
-              {/* Terms & Conditions */}
-              <View style={s.footer}>
-                <Text style={s.footerText}>By continuing, you agree to our </Text>
-                <TouchableOpacity><Text style={s.linkText}>Terms of Service</Text></TouchableOpacity>
-                <Text style={s.footerText}> & </Text>
-                <TouchableOpacity><Text style={s.linkText}>Privacy Policy</Text></TouchableOpacity>
+              <View style={s.orRow}>
+                <View style={s.orLine} />
+                <Text style={s.orText}>or</Text>
+                <View style={s.orLine} />
               </View>
+
+              <TouchableOpacity
+                onPress={() => handleGoogleSignIn(false)}
+                activeOpacity={0.85}
+                disabled={
+                  busy || (!ready && !requiresDevBuild) || deviceConflict
+                }
+                style={[
+                  s.googleBtn,
+                  (busy || (!ready && !requiresDevBuild) || deviceConflict) && {
+                    opacity: 0.65,
+                  },
+                ]}
+              >
+                {googleLoading && !transferring ? (
+                  <ActivityIndicator color="#4285F4" size="small" />
+                ) : (
+                  <>
+                    <GoogleLogo size={20} />
+                    <Text style={s.googleBtnText}>Continue with Google</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <Text style={s.terms}>
+                By proceeding I accept the{" "}
+                <Text style={s.termsBold}>Community Guidelines</Text>
+                {" & "}
+                <Text style={s.termsBold}>Terms of Use</Text>
+              </Text>
             </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </View>
-    </TouchableWithoutFeedback>
+          </KeyboardAwareScrollView>
+        </Animated.View>
+      </TouchableWithoutFeedback>
+
+      <DeviceTransferModal
+        visible={deviceConflict}
+        alertText={error || "Already logged in on another device"}
+        message="This Google account is active on another device. Transfer it to this phone?"
+        buttonText="Transfer to This Device"
+        loading={transferring}
+        disabled={googleLoading && !transferring}
+        onTransfer={handleTransferDevice}
+        onDismiss={() => {
+          setDeviceConflict(false);
+          setError("");
+          setPendingIdToken(null);
+        }}
+      />
+    </>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1 },
-  keyboardView: { flex: 1 },
-  topSection: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 30,
+  root: { flex: 1, backgroundColor: C.primary },
+  flex: { flex: 1 },
+  scroll: {
+    flexGrow: 1,
+    minHeight: SCREEN_H,
   },
-  logoContainer: { marginBottom: 20 },
-  logo: { width: 180, height: 50 },
-  heading: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: "#FFFFFF",
-    letterSpacing: -0.5,
+
+  hero: {
+    paddingHorizontal: 22,
+    paddingBottom: 0,
+    minHeight: SCREEN_W * 0.72,
   },
-  bottomCard: {
-    backgroundColor: C.surface,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    paddingHorizontal: 28,
-    paddingTop: 36,
-    paddingBottom: 40,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    elevation: 20,
-  },
-  cardTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: C.onSurface,
-    letterSpacing: -0.5,
-  },
-  cardSubtitle: {
-    fontSize: 14,
-    color: C.onSurfaceVariant,
-    marginTop: 6,
-    marginBottom: 28,
-  },
-  inputContainer: { position: "relative", width: "100%" },
-  inputBox: {
+  heroTopRow: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: C.outline,
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    height: 56,
-    gap: 12,
-    backgroundColor: C.surface,
+    justifyContent: "flex-end",
+    marginBottom: 4,
   },
-  inputBoxFocused: { borderColor: C.primary, borderWidth: 2 },
-  inputBoxError: { borderColor: C.error },
-  textInput: { flex: 1, fontSize: 16, color: C.onSurface, paddingVertical: 10 },
-  floatingLabel: {
-    position: "absolute",
-    left: 44,
-    paddingHorizontal: 4,
+  shieldWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroCopy: {
+    marginTop: -4,
+  },
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 28,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  heroSubtitle: {
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 15,
     fontWeight: "500",
+    marginTop: 2,
   },
-  errorRow: {
+  illustration: {
+    alignItems: "center",
+    justifyContent: "flex-end",
+    marginTop: 8,
+    marginBottom: 0,
+    height: SCREEN_W * 0.5,
+    overflow: "visible",
+  },
+  heroImage: {
+    width: SCREEN_W * 0.74,
+    height: SCREEN_W * 0.64,
+    transform: [{ translateY: 63 }],
+  },
+
+  dots: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginTop: 8,
-    paddingLeft: 4,
+    marginTop: 0,
+    transform: [{ translateY: 45 }],
   },
-  errorText: { color: C.error, fontSize: 13, fontWeight: "500" },
-  hintText: { color: C.onSurfaceVariant, fontSize: 12, marginTop: 8, paddingLeft: 4 },
-  submitBtn: {
-    backgroundColor: C.primary,
-    borderRadius: 100,
-    height: 48,
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,255,255,0.45)",
+  },
+  dotActive: {
+    width: 22,
+    borderRadius: 4,
+    backgroundColor: "#FFFFFF",
+  },
+
+  sheet: {
+    flexGrow: 1,
+    backgroundColor: C.white,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    marginTop: 55,
+    paddingHorizontal: 24,
+    paddingTop: 40,
+    overflow: "hidden",
+    zIndex: 2,
+  },
+  sheetTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: C.ink,
+    marginBottom: 14,
+    letterSpacing: -0.3,
+  },
+  inputBox: {
+    backgroundColor: C.inputBg,
+    borderRadius: 16,
+    height: 56,
+    paddingHorizontal: 18,
     justifyContent: "center",
-    alignItems: "center",
-    marginTop: 28,
-    marginBottom: 24,
-    shadowColor: C.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
   },
-  submitBtnDisabled: {
-    backgroundColor: C.outline,
-    opacity: 0.6,
-    shadowOpacity: 0,
-    elevation: 0,
+  inputBoxFocused: {
+    borderColor: "#D4D4D8",
+    backgroundColor: "#F7F7F8",
   },
-  submitBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
-  footer: {
+  inputBoxError: {
+    borderColor: C.error,
+  },
+  textInput: {
+    fontSize: 16,
+    color: C.ink,
+    fontWeight: "500",
+    paddingVertical: 0,
+  },
+  errorRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "center",
-    alignItems: "center",
+    alignItems: "flex-start",
+    gap: 6,
+    marginTop: 10,
   },
-  footerText: { fontSize: 12, color: C.onSurfaceVariant },
-  linkText: { fontSize: 12, color: C.primary, fontWeight: "700" },
+  errorText: {
+    flex: 1,
+    color: C.error,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+
+  primaryBtn: {
+    marginTop: 22,
+    backgroundColor: C.yellow,
+    borderRadius: 100,
+    height: 54,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  primaryBtnDisabled: {
+    opacity: 0.45,
+  },
+  primaryBtnText: {
+    color: C.ink,
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+
+  orRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 18,
+    gap: 12,
+  },
+  orLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#D0D0D0",
+  },
+  orText: {
+    fontSize: 12,
+    color: C.muted,
+    fontWeight: "600",
+    textTransform: "uppercase",
+  },
+
+  googleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    height: 52,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: C.googleBorder,
+    backgroundColor: "#FFFFFF",
+  },
+  googleBtnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#3C4043",
+  },
+
+  terms: {
+    marginTop: 22,
+    textAlign: "center",
+    fontSize: 12,
+    color: C.muted,
+    lineHeight: 18,
+    paddingHorizontal: 8,
+  },
+  termsBold: {
+    color: C.ink,
+    fontWeight: "700",
+  },
 });

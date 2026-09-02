@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  apiLogout,
   apiRequest,
   AUTH_TOKEN_KEY,
   AUTH_USER_KEY,
@@ -11,9 +12,12 @@ import {
 
 export type StoredProfile = {
   photo?: string | null;
+  photos?: string[];
   name?: string;
   age?: string | number;
   gender?: string;
+  /** Who this user wants to see in Nearby: Man | Woman | Other | All */
+  showMe?: string;
   height?: string;
   city?: string;
   distance?: string;
@@ -22,6 +26,8 @@ export type StoredProfile = {
   interests?: string[];
   relationshipGoal?: string;
   userId?: string;
+  /** Unique public ID — format ABCD1234 */
+  publicId?: string;
 };
 
 export type AuthUser = {
@@ -57,8 +63,15 @@ export async function getCurrentAuthUser(): Promise<AuthUser | null> {
     const user = JSON.parse(raw) as AuthUser;
     if (!user?.email) return null;
     user.email = normalizeEmail(user.email);
+
+    const token = await getAuthToken();
+    if (!token) {
+      return null;
+    }
+
     return user;
-  } catch {
+  } catch (err) {
+    console.warn('[Auth] Error loading current user:', err);
     return null;
   }
 }
@@ -102,17 +115,27 @@ export async function saveLocalProfile(
 }
 
 export function userToLocalProfile(user: Record<string, unknown>): StoredProfile {
+  const publicId = String(user.publicId || '');
   return {
     name: (user.name as string) || '',
     age: user.age != null ? String(user.age) : '',
     gender: (user.gender as string) || '',
+    showMe: (user.showMe as string) || '',
     bio: (user.bio as string) || '',
     interests: (user.interests as string[]) || [],
     relationshipGoal: (user.relationshipGoal as string) || '',
     photo: (user.photo as string) || null,
+    photos: Array.isArray(user.photos) ? (user.photos as string[]) : [],
     height: user.height != null ? String(user.height) : '',
     userId: String(user.id || user._id || ''),
+    // Only keep valid ABCD1234 — never store Mongo ObjectId here
+    publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : '',
   };
+}
+
+/** True when value is the unique public display ID (ABCD1234). */
+export function isValidPublicId(value?: string | null): boolean {
+  return /^[A-Z]{4}[0-9]{4}$/.test(String(value || '').trim().toUpperCase());
 }
 
 export async function syncProfileToServer(
@@ -124,8 +147,10 @@ export async function syncProfileToServer(
   // If the photo is a local device file URI, upload it to the server first
   if (photoUrl && (photoUrl.startsWith('file://') || photoUrl.startsWith('/') || !photoUrl.startsWith('http'))) {
     try {
-      const FileSystem = await import('expo-file-system');
-      const base64 = await FileSystem.readAsStringAsync(photoUrl, { encoding: 'base64' });
+      const FileSystem = await import('expo-file-system/legacy');
+      const base64 = await FileSystem.readAsStringAsync(photoUrl, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
       const ext = photoUrl.split('.').pop()?.toLowerCase() || 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
       const dataUri = `data:${mimeType};base64,${base64}`;
@@ -136,7 +161,9 @@ export async function syncProfileToServer(
         body: JSON.stringify({ base64: dataUri }),
       });
       const json = await res.json();
-      if (json.url) photoUrl = json.url;
+      if (json.url) {
+        photoUrl = json.url.startsWith('/') ? `${API_BASE}${json.url}` : json.url;
+      }
     } catch (e) {
       console.warn('Could not upload profile photo, using local URI as fallback', e);
     }
@@ -146,6 +173,7 @@ export async function syncProfileToServer(
     name: profile.name?.trim(),
     bio: profile.bio || profile.tagline || '',
     gender: profile.gender || '',
+    showMe: profile.showMe || '',
     interests: profile.interests || [],
     relationshipGoal: profile.relationshipGoal || '',
     photo: photoUrl,
@@ -211,13 +239,23 @@ export async function completeAccountLogin(
 
   await migrateAllGlobalsForAccount(email);
 
-  const hydrated = await hydrateAccountFromServer(token, email);
-  return {
-    id: hydrated.id || user.id,
-    email,
-    name: hydrated.name as string,
-    profileComplete: hydrated.profileComplete,
-  };
+  try {
+    const hydrated = await hydrateAccountFromServer(token, email);
+    return {
+      id: hydrated.id || user.id,
+      email,
+      name: hydrated.name as string,
+      profileComplete: hydrated.profileComplete,
+    };
+  } catch (err) {
+    console.warn('[Auth] Could not hydrate profile from server, using OTP response:', err);
+    return {
+      id: user.id,
+      email,
+      name: user.name || '',
+      profileComplete: user.profileComplete || false,
+    };
+  }
 }
 
 export async function resolvePostLoginRoute(user: AuthUser): Promise<'/(tabs)' | '/create-profile'> {
@@ -235,12 +273,27 @@ export async function resolvePostLoginRoute(user: AuthUser): Promise<'/(tabs)' |
   return '/create-profile';
 }
 
-/** Logout: clear session + all shared global cache (keeps per-email archives) */
+/** Logout: notify server (clears device lock) + clear all local session data */
 export async function logout(): Promise<void> {
-  await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
-  await AsyncStorage.removeItem(AUTH_USER_KEY);
-  await AsyncStorage.removeItem(ACTIVE_ACCOUNT_EMAIL_KEY);
-  await clearLegacyGlobalStorage();
+  try {
+    const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      try {
+        await apiLogout(token);
+      } catch (err) {
+        console.warn('[Auth] Could not notify server of logout:', err);
+      }
+    }
+  } finally {
+    try {
+      const { clearChatListCache } = await import('./chatListCache');
+      clearChatListCache();
+    } catch {
+      /* ignore */
+    }
+    await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, AUTH_USER_KEY, ACTIVE_ACCOUNT_EMAIL_KEY]);
+    await clearLegacyGlobalStorage();
+  }
 }
 
 /** @deprecated use logout() */

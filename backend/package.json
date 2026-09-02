@@ -4,9 +4,11 @@
   "description": "",
   "main": "index.js",
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "accepts": "^2.0.0",
     "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.2",
+    "bullmq": "^5.81.2",
     "bytes": "^3.1.2",
     "call-bind-apply-helpers": "^1.0.2",
     "call-bound": "^1.0.4",
@@ -27,7 +29,9 @@
     "escape-html": "^1.0.3",
     "etag": "^1.8.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.1",
     "finalhandler": "^2.1.1",
+    "firebase-admin": "^14.2.0",
     "forwarded": "^0.2.0",
     "fresh": "^2.0.0",
     "function-bind": "^1.1.2",
@@ -39,6 +43,7 @@
     "http-errors": "^2.0.1",
     "iconv-lite": "^0.7.2",
     "inherits": "^2.0.4",
+    "ioredis": "^5.11.1",
     "ipaddr.js": "^1.9.1",
     "is-promise": "^4.0.0",
     "jsonwebtoken": "^9.0.3",
@@ -61,6 +66,7 @@
     "qs": "^6.15.1",
     "range-parser": "^1.2.1",
     "raw-body": "^3.0.2",
+    "razorpay": "^2.9.8",
     "router": "^2.2.0",
     "safer-buffer": "^2.1.2",
     "send": "^1.2.1",
@@ -80,7 +86,13 @@
   },
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "heartbeat": "node scripts/renderHeartbeat.js",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "simulate:discovery": "node scripts/simulateDiscoveryRotation.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "keywords": [],
   "author": "",
