@@ -60,6 +60,7 @@ function RootLayoutContent() {
         <Stack.Screen name="blocked" options={stackScreenOptions} />
         <Stack.Screen name="delete-account" options={stackScreenOptions} />
         <Stack.Screen name="help-support" options={stackScreenOptions} />
+        <Stack.Screen name="photo-verify" options={stackScreenOptions} />
         <Stack.Screen name="safety-center" options={stackScreenOptions} />
         <Stack.Screen name="notifications" options={stackScreenOptions} />
         <Stack.Screen name="calls" options={stackScreenOptions} />

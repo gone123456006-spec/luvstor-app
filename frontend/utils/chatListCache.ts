@@ -16,6 +16,7 @@ export type ConversationItem = {
   requestType?: 'incoming_like' | 'mutual_match' | 'outgoing_like';
   areFriends?: boolean;
   iLiked?: boolean;
+  theyLiked?: boolean;
   privacyHidden?: boolean;
   iBlocked?: boolean;
   theyBlocked?: boolean;

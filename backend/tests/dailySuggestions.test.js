@@ -29,38 +29,38 @@ const {
 test('the strongest signal becomes the headline', () => {
   assert.equal(
     composeDigest({ matches: 2, likes: 5, views: 3, nearby: 0 }).title,
-    'You have 2 new matches',
+    'You have 2 new matches waiting',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 5, views: 3, nearby: 0 }).title,
-    '5 people liked you',
+    '5 people liked you — open to see who',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 3, nearby: 0 }).title,
-    '3 people viewed your profile',
+    '3 people viewed your profile today',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 0, nearby: 4 }).title,
-    '4 new people joined near you',
+    '4 new people near you',
   );
 });
 
 test('singular and plural copy both read naturally', () => {
   assert.equal(
     composeDigest({ matches: 1, likes: 0, views: 0, nearby: 0 }).title,
-    'You have a new match',
+    'You have a new match — say hi',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 1, views: 0, nearby: 0 }).title,
-    '1 person liked you',
+    '1 person liked you — see who',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 1, nearby: 0 }).title,
-    '1 person viewed your profile',
+    '1 person viewed your profile today',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 0, nearby: 1 }).title,
-    '1 new person joined near you',
+    '1 new person near you',
   );
 });
 

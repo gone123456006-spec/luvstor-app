@@ -37,9 +37,19 @@ const reportSchema = new mongoose.Schema(
       default: 'open',
       index: true,
     },
+    /** Admin moderation fields — set only via admin API */
+    moderatorNote: { type: String, default: '', maxlength: 2000 },
+    reviewedAt: { type: Date, default: null },
+    actionTaken: {
+      type: String,
+      enum: ['none', 'warned', 'hidden', 'banned', 'dismissed'],
+      default: 'none',
+    },
   },
   { timestamps: true },
 );
+
+reportSchema.index({ status: 1, createdAt: -1 });
 
 reportSchema.index({ reporterId: 1, reportedUserId: 1, createdAt: -1 });
 

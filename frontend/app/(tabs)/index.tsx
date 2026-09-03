@@ -4,105 +4,54 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
 import React from "react";
 import {
-    ActivityIndicator,
-    FlatList,
-    Modal,
-    Platform,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Animated,
+  FlatList,
+  Modal,
+  PanResponder,
+  Platform,
+  Pressable,
+  RefreshControl,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAppAlert } from "../../components/AppAlert";
 import { CardGridSkeleton } from "../../components/ScreenSkeleton";
 import UserProfileModal from "../../components/UserProfileModal";
 import WhatsAppAvatar, {
-    getDisplayName,
+  getDisplayName,
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { API_BASE } from "../../utils/api";
 import {
-    getAuthToken,
-    getCurrentAuthUser,
-    getLocalProfile,
+  getAuthToken,
+  getCurrentAuthUser,
+  getLocalProfile,
 } from "../../utils/auth";
+import { fetchForYouPage } from "../../utils/forYou";
 import {
-    FriendshipStatus,
-    getFriendshipStatus,
-    sendLike,
-    unlikeUser,
+  FriendshipStatus,
+  getFriendshipStatus,
+  sendLike,
+  unlikeUser,
 } from "../../utils/friends";
 import {
-    fetchNearbyUsersPage,
-    fetchSavedDiscoveryPrefs,
-    fetchUserProfile,
-    loadNearbyFeed,
-    NEARBY_PAGE_SIZE,
-    NearbyUser,
-    searchUserByPublicId,
+  fetchNearbyUsersPage,
+  fetchSavedDiscoveryPrefs,
+  fetchUserProfile,
+  loadNearbyFeed,
+  NEARBY_PAGE_SIZE,
+  NearbyUser,
+  searchUserByPublicId,
 } from "../../utils/nearby";
-import { isLiveSubscriptionBadge } from "../../utils/subscriptions";
 
 const FALLBACK_AVATAR = require("../../assets/images/boy-image.png");
-
-function WhatsAppFilterIcon({
-  color = "#8696A0",
-  size = 14,
-}: {
-  color?: string;
-  size?: number;
-}) {
-  const lineHeight = 2;
-  const dotSize = 3.5;
-  const rowHeight = dotSize;
-  const rowGap = 1.2;
-  const rows = [
-    { dotLeft: size * 0.66 },
-    { dotLeft: size * 0.2 },
-    { dotLeft: size * 0.5 },
-  ];
-
-  return (
-    <View style={{ width: size, height: size, justifyContent: "center" }}>
-      {rows.map((row, index) => (
-        <View
-          key={index}
-          style={{
-            height: rowHeight,
-            justifyContent: "center",
-            marginBottom: index < rows.length - 1 ? rowGap : 0,
-          }}
-        >
-          <View
-            style={{
-              width: size,
-              height: lineHeight,
-              borderRadius: lineHeight / 2,
-              backgroundColor: color,
-            }}
-          />
-          <View
-            style={{
-              position: "absolute",
-              left: row.dotLeft,
-              width: dotSize,
-              height: dotSize,
-              borderRadius: dotSize / 2,
-              backgroundColor: color,
-            }}
-          />
-        </View>
-      ))}
-    </View>
-  );
-}
 
 const GENDER_OPTIONS = ["All", "Man", "Woman", "Other"];
 const DISTANCE_OPTIONS = [
@@ -187,6 +136,10 @@ export default function DiscoverScreen() {
 
   const [profilePhoto, setProfilePhoto] = React.useState<string | null>(null);
   const [nearbyUsers, setNearbyUsers] = React.useState<NearbyUser[]>([]);
+  const [forYouUsers, setForYouUsers] = React.useState<NearbyUser[]>([]);
+  const [feedTab, setFeedTab] = React.useState<"nearby" | "for_you">("nearby");
+  const [forYouPage, setForYouPage] = React.useState(1);
+  const [forYouHasMore, setForYouHasMore] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [hasMore, setHasMore] = React.useState(true);
@@ -348,6 +301,54 @@ export default function DiscoverScreen() {
   );
 
   // ── Force reload (Retry / pull-to-refresh) ──────────────────────
+  const reloadForYou = React.useCallback(async (forceRefresh = false) => {
+    const token = await getAuthToken();
+    if (!token) return;
+    setLoading(true);
+    setLocationError(null);
+    try {
+      const { users, hasMore } = await fetchForYouPage(token, {
+        page: 1,
+        forceRefresh: !!forceRefresh,
+      });
+      setForYouUsers(users);
+      setForYouPage(1);
+      setForYouHasMore(hasMore);
+      applyRelationships(setRelationshipById, users);
+    } catch (err: any) {
+      if (
+        err?.code === "LOCATION_REQUIRED" ||
+        /location/i.test(err?.message || "")
+      ) {
+        setLocationError(err?.message || "Location needed for For You");
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const loadMoreForYou = React.useCallback(async () => {
+    if (!forYouHasMore || loadingMore || fetchLockRef.current) return;
+    const token = await getAuthToken();
+    if (!token) return;
+    fetchLockRef.current = true;
+    setLoadingMore(true);
+    try {
+      const next = forYouPage + 1;
+      const { users, hasMore } = await fetchForYouPage(token, { page: next });
+      setForYouUsers((prev) => appendNewUsers(prev, users));
+      setForYouPage(next);
+      setForYouHasMore(hasMore);
+      applyRelationships(setRelationshipById, users);
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingMore(false);
+      fetchLockRef.current = false;
+    }
+  }, [forYouHasMore, loadingMore, forYouPage]);
+
   const reloadNearby = React.useCallback(async () => {
     fetchLockRef.current = true;
     setLoading(true);
@@ -812,8 +813,16 @@ export default function DiscoverScreen() {
   const onRefresh = React.useCallback(async () => {
     setRefreshing(true);
     initialLoadedRef.current = false;
-    await reloadNearby();
-  }, [reloadNearby]);
+    try {
+      if (feedTab === "for_you") {
+        await reloadForYou(true);
+      } else {
+        await reloadNearby();
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [feedTab, reloadNearby, reloadForYou]);
 
   // ── Open profile modal ─────────────────────────────────────────
   const openProfile = async (user: NearbyUser) => {
@@ -883,99 +892,96 @@ export default function DiscoverScreen() {
   };
 
   // ── Render a compact WhatsApp-style row ─────────────────────────
-  const renderItem = ({ item }: { item: NearbyUser }) => (
-    <TouchableOpacity
-      style={styles.listItem}
-      activeOpacity={0.65}
-      onPress={() =>
-        router.push({
-          pathname: "/messages/[id]",
-          params: {
-            id: item.id,
-            name: item.name,
-            photo: item.photo,
-            gender: item.gender,
-            isOnline: item.isOnline ? "true" : "false",
-          },
-        })
-      }
-    >
+  const renderItem = ({ item }: { item: NearbyUser }) => {
+    const liked =
+      relationshipById[item.id]?.iLiked ||
+      relationshipById[item.id]?.areFriends;
+    return (
       <TouchableOpacity
-        style={styles.imageContainer}
-        activeOpacity={0.8}
-        onPress={() => openProfile(item)}
+        style={styles.listItem}
+        activeOpacity={0.7}
+        onPress={() =>
+          router.push({
+            pathname: "/messages/[id]",
+            params: {
+              id: item.id,
+              name: item.name,
+              photo: item.photo,
+              gender: item.gender,
+              isOnline: item.isOnline ? "true" : "false",
+            },
+          })
+        }
       >
-        <WhatsAppAvatar
-          photo={item.photo}
-          name={item.name}
-          publicId={item.publicId}
-          size={52}
-          online={!!item.isOnline}
-          badge={item.subscriptionBadge}
-          badgeExpiresAt={item.subscriptionExpiresAt}
-        />
-      </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.imageContainer}
+          activeOpacity={0.8}
+          onPress={() => openProfile(item)}
+        >
+          <WhatsAppAvatar
+            photo={item.photo}
+            name={item.name}
+            publicId={item.publicId}
+            size={56}
+            online={!!item.isOnline}
+            badge={item.subscriptionBadge}
+            badgeExpiresAt={item.subscriptionExpiresAt}
+          />
+        </TouchableOpacity>
 
-      <View style={styles.textContainer}>
-        <View style={styles.nameRow}>
-          <Text style={styles.nameText} numberOfLines={1}>
-            {getDisplayName(item.name, item.publicId)}
-            {item.age ? `, ${item.age}` : ""}
-          </Text>
-          <Text style={styles.metaText}>
-            {item.distanceKm && item.distanceKm !== "?"
-              ? `${item.distanceKm} km`
-              : ""}
-          </Text>
-        </View>
-        <View style={styles.subtitleRow}>
-          <Text style={styles.subtitleText} numberOfLines={1}>
-            <Text
-              style={
-                item.isOnline &&
-                isLiveSubscriptionBadge(
-                  item.subscriptionBadge,
-                  item.subscriptionExpiresAt,
-                )
-                  ? styles.onlineNowText
-                  : undefined
-              }
-            >
-              {item.isOnline ? "Online now" : "Nearby"}
+        <View style={styles.textContainer}>
+          <View style={styles.nameRow}>
+            <Text style={styles.nameText} numberOfLines={1}>
+              {getDisplayName(item.name, item.publicId)}
+              {item.age ? `, ${item.age}` : ""}
             </Text>
+            <Text style={styles.metaText}>
+              {item.distanceKm && item.distanceKm !== "?"
+                ? `${item.distanceKm} km`
+                : ""}
+            </Text>
+          </View>
+          <Text style={styles.subtitleText} numberOfLines={1}>
+            {item.isOnline
+              ? "Active now"
+              : feedTab === "for_you"
+                ? "Suggested for you"
+                : "Nearby"}
+            {(item as any).photoVerified ? " · Verified" : ""}
             {item.relationshipGoal ? ` · ${item.relationshipGoal}` : ""}
           </Text>
-          <TouchableOpacity
-            style={styles.matchBtn}
-            onPress={() => toggleLike(item.id)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            activeOpacity={0.7}
-            disabled={likingId === item.id}
-          >
-            {likingId === item.id ? (
-              <ActivityIndicator size="small" color="#8E2DE2" />
-            ) : (
-              <Ionicons
-                name={
-                  relationshipById[item.id]?.iLiked ||
-                  relationshipById[item.id]?.areFriends
-                    ? "heart"
-                    : "heart-outline"
-                }
-                size={20}
-                color="#FF4B6E"
-              />
-            )}
-          </TouchableOpacity>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+
+        <TouchableOpacity
+          style={[styles.matchBtn, liked && styles.matchBtnLiked]}
+          onPress={() => toggleLike(item.id)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          activeOpacity={0.7}
+          disabled={likingId === item.id}
+        >
+          {likingId === item.id ? (
+            <ActivityIndicator
+              size="small"
+              color={liked ? "#262626" : "#fff"}
+            />
+          ) : (
+            <Text
+              style={[styles.matchBtnText, liked && styles.matchBtnTextLiked]}
+            >
+              {liked ? "Liked" : "Like"}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </TouchableOpacity>
+    );
+  };
+
+  const activeUsers = feedTab === "for_you" ? forYouUsers : nearbyUsers;
 
   // ── Fast search with optimized filtering ──────────────────────
   const filteredUsers = React.useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    if (!q) return nearbyUsers;
+    if (!q) return activeUsers;
 
     // If searching by ID format, don't filter nearby users
     if (/^[A-Z]{4}[0-9]{4}$/i.test(q)) {
@@ -983,7 +989,7 @@ export default function DiscoverScreen() {
     }
 
     // Optimized search: early return for better performance
-    return nearbyUsers.filter((u) => {
+    return activeUsers.filter((u) => {
       // Quick checks with short-circuit evaluation
       const name = u.name?.toLowerCase() || "";
       if (name.includes(q)) return true;
@@ -993,7 +999,7 @@ export default function DiscoverScreen() {
 
       return false;
     });
-  }, [nearbyUsers, debouncedSearch]);
+  }, [activeUsers, debouncedSearch]);
 
   // Combine searched user with filtered users
   const displayUsers = React.useMemo(() => {
@@ -1004,13 +1010,13 @@ export default function DiscoverScreen() {
   }, [searchedUser, filteredUsers]);
 
   const ListEmpty = () => {
-    if (loading && nearbyUsers.length === 0) {
+    if (loading && activeUsers.length === 0) {
       return <CardGridSkeleton count={6} />;
     }
     if (searchByIdLoading) {
       return (
         <View style={styles.emptyContainer}>
-          <ActivityIndicator size="large" color="#8E2DE2" />
+          <ActivityIndicator size="large" color="#262626" />
           <Text style={styles.emptyTitle}>Searching…</Text>
           <Text style={styles.emptyText}>
             Looking for user ID: {searchQuery.trim()}
@@ -1021,7 +1027,7 @@ export default function DiscoverScreen() {
     if (searchByIdError) {
       return (
         <View style={styles.emptyContainer}>
-          <Ionicons name="alert-circle-outline" size={48} color="#FF4B6E" />
+          <Ionicons name="alert-circle-outline" size={48} color="#ED4956" />
           <Text style={styles.emptyTitle}>Search Failed</Text>
           <Text style={styles.emptyText}>{searchByIdError}</Text>
         </View>
@@ -1060,13 +1066,17 @@ export default function DiscoverScreen() {
     return (
       <View style={styles.emptyContainer}>
         <Ionicons name="people-outline" size={48} color="#CCC" />
-        <Text style={styles.emptyTitle}>No One Nearby</Text>
+        <Text style={styles.emptyTitle}>
+          {feedTab === "for_you" ? "No suggestions yet" : "No One Nearby"}
+        </Text>
         <Text style={styles.emptyText}>
-          {prefs.gender !== "All"
-            ? `No ${prefs.gender === "Man" ? "men" : prefs.gender === "Woman" ? "women" : prefs.gender.toLowerCase()} found with your current filters. Try Show me: Everyone or widen distance.`
-            : prefs.activeWithinMinutes > 0
-              ? "No one matches your activity filter. Try Last active: All in preferences."
-              : `No verified users found within ${prefs.radiusKm < 1 ? `${prefs.radiusKm * 1000}m` : `${prefs.radiusKm} km`}. Pull down to refresh.`}
+          {feedTab === "for_you"
+            ? "Add interests on your profile and pull to refresh for personalized matches."
+            : prefs.gender !== "All"
+              ? `No ${prefs.gender === "Man" ? "men" : prefs.gender === "Woman" ? "women" : prefs.gender.toLowerCase()} found with your current filters. Try Show me: Everyone or widen distance.`
+              : prefs.activeWithinMinutes > 0
+                ? "No one matches your activity filter. Try Last active: All in preferences."
+                : `No verified users found within ${prefs.radiusKm < 1 ? `${prefs.radiusKm * 1000}m` : `${prefs.radiusKm} km`}. Pull down to refresh.`}
         </Text>
         {prefs.gender !== "All" ? (
           <TouchableOpacity
@@ -1097,15 +1107,8 @@ export default function DiscoverScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={{ flex: 1 }}>
-        <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-
-        <LinearGradient
-          colors={["#FFFFFF", "#FDF8FF", "#F5E6FF"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
+      <View style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
         {/* ── Header ── */}
         <View style={styles.header}>
@@ -1161,18 +1164,18 @@ export default function DiscoverScreen() {
           </View>
         </View>
 
-        {/* ── Search (same style as Chat) ── */}
+        {/* ── Search ── */}
         <View style={styles.searchContainer}>
           <Ionicons
             name="search"
-            size={18}
-            color="#888"
+            size={16}
+            color="#8E8E8E"
             style={styles.searchIcon}
           />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search by name or ID"
-            placeholderTextColor="#888"
+            placeholder="Search"
+            placeholderTextColor="#8E8E8E"
             value={searchQuery}
             onChangeText={setSearchQuery}
             returnKeyType="search"
@@ -1181,20 +1184,53 @@ export default function DiscoverScreen() {
           />
           {!!searchQuery && (
             <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color="#BBB" />
+              <Ionicons name="close-circle" size={16} color="#C7C7C7" />
             </TouchableOpacity>
           )}
         </View>
 
         {/* Sticky section bar while list scrolls */}
         <View style={styles.stickySectionHeader}>
-          <View style={styles.sectionLeft}>
-            <Ionicons name="location" size={18} color="#E91E63" />
-            <Text style={styles.sectionTitle}>
-              {searchedUser ? "Search Result" : "Nearby People"}
-            </Text>
+          <View style={styles.feedTabs}>
+            <TouchableOpacity
+              style={[
+                styles.feedTab,
+                feedTab === "nearby" && styles.feedTabActive,
+              ]}
+              onPress={() => setFeedTab("nearby")}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.feedTabText,
+                  feedTab === "nearby" && styles.feedTabTextActive,
+                ]}
+              >
+                Nearby
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.feedTab,
+                feedTab === "for_you" && styles.feedTabActive,
+              ]}
+              onPress={() => {
+                setFeedTab("for_you");
+                if (!forYouUsers.length) void reloadForYou();
+              }}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.feedTabText,
+                  feedTab === "for_you" && styles.feedTabTextActive,
+                ]}
+              >
+                For you
+              </Text>
+            </TouchableOpacity>
           </View>
-          {!searchedUser && (
+          {feedTab === "nearby" && !searchedUser && (
             <Pressable
               style={({ pressed }) => [
                 styles.filterBtn,
@@ -1204,7 +1240,7 @@ export default function DiscoverScreen() {
               android_ripple={{ color: "rgba(0,0,0,0.08)", radius: 14 }}
               onPress={() => setPrefsVisible(true)}
             >
-              <WhatsAppFilterIcon size={15} color="#8696A0" />
+              <Ionicons name="options-outline" size={22} color="#262626" />
             </Pressable>
           )}
         </View>
@@ -1212,7 +1248,7 @@ export default function DiscoverScreen() {
         {/* ── List ── */}
         <FlatList
           data={displayUsers}
-          extraData={{ relationshipById, likingId }}
+          extraData={{ relationshipById, likingId, feedTab }}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
@@ -1226,10 +1262,8 @@ export default function DiscoverScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              colors={["#8E2DE2"]}
-              tintColor="#8E2DE2"
-              title="Pull to refresh"
-              titleColor="#8E2DE2"
+              colors={["#262626"]}
+              tintColor="#262626"
             />
           }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -1239,7 +1273,7 @@ export default function DiscoverScreen() {
               <>
                 {loadingMore ? (
                   <View style={styles.loadMoreFooter}>
-                    <ActivityIndicator size="small" color="#8E2DE2" />
+                    <ActivityIndicator size="small" color="#262626" />
                     <Text style={styles.loadMoreText}>Loading more…</Text>
                   </View>
                 ) : null}
@@ -1247,7 +1281,10 @@ export default function DiscoverScreen() {
               </>
             ) : null
           }
-          onEndReached={loadMoreNearby}
+          onEndReached={() => {
+            if (feedTab === "for_you") void loadMoreForYou();
+            else void loadMoreNearby();
+          }}
           onEndReachedThreshold={0.4}
         />
       </View>
@@ -1343,40 +1380,68 @@ function PreferencesModal({
           onPress={onClose}
         />
         <View style={styles.prefsSheet}>
-          <Text style={styles.prefsTitle}>Preferences</Text>
+          <Text style={styles.prefsTitle}>Show me</Text>
 
-          <PrefSection title="Show me">
-            {GENDER_OPTIONS.map((option) => (
-              <PrefOption
-                key={option}
-                label={option}
-                selected={gender === option}
-                onPress={() => setGender(option)}
-              />
-            ))}
-          </PrefSection>
+          <View style={styles.prefsSection}>
+            <View style={styles.prefsEqualRow}>
+              {GENDER_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[
+                    styles.prefsEqualCard,
+                    gender === option && styles.prefsEqualCardSelected,
+                  ]}
+                  onPress={() => setGender(option)}
+                  activeOpacity={0.75}
+                >
+                  <Text
+                    style={[
+                      styles.prefsEqualCardText,
+                      gender === option && styles.prefsEqualCardTextSelected,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {option}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
 
-          <PrefSection title="Distance">
-            {DISTANCE_OPTIONS.map((option) => (
-              <PrefOption
-                key={option.label}
-                label={option.label}
-                selected={radiusKm === option.value}
-                onPress={() => setRadiusKm(option.value)}
-              />
-            ))}
-          </PrefSection>
+          <PrefSliderRow
+            title="Distance"
+            valueLabel={
+              DISTANCE_OPTIONS.find((o) => o.value === radiusKm)?.label ||
+              `${radiusKm} km`
+            }
+            index={Math.max(
+              0,
+              DISTANCE_OPTIONS.findIndex((o) => o.value === radiusKm),
+            )}
+            steps={DISTANCE_OPTIONS.length}
+            onIndexChange={(i) =>
+              setRadiusKm(DISTANCE_OPTIONS[i]?.value ?? 500)
+            }
+          />
 
-          <PrefSection title="Last active">
-            {LOGIN_WITHIN_OPTIONS.map((option) => (
-              <PrefOption
-                key={option.label}
-                label={option.label}
-                selected={activeWithinMinutes === option.minutes}
-                onPress={() => setActiveWithinMinutes(option.minutes)}
-              />
-            ))}
-          </PrefSection>
+          <PrefSliderRow
+            title="Last active"
+            valueLabel={
+              LOGIN_WITHIN_OPTIONS.find(
+                (o) => o.minutes === activeWithinMinutes,
+              )?.label || "All"
+            }
+            index={Math.max(
+              0,
+              LOGIN_WITHIN_OPTIONS.findIndex(
+                (o) => o.minutes === activeWithinMinutes,
+              ),
+            )}
+            steps={LOGIN_WITHIN_OPTIONS.length}
+            onIndexChange={(i) =>
+              setActiveWithinMinutes(LOGIN_WITHIN_OPTIONS[i]?.minutes ?? 0)
+            }
+          />
 
           <View style={styles.prefsActions}>
             <TouchableOpacity
@@ -1402,71 +1467,174 @@ function PreferencesModal({
   );
 }
 
-function PrefSection({
+/** Smooth slider: continuous drag + snap to nearest step on release. */
+function PrefSliderRow({
   title,
-  children,
+  valueLabel,
+  index,
+  steps,
+  onIndexChange,
 }: {
   title: string;
-  children: React.ReactNode;
+  valueLabel: string;
+  index: number;
+  steps: number;
+  onIndexChange: (index: number) => void;
 }) {
+  const trackRef = React.useRef<View>(null);
+  const trackWidth = React.useRef(1);
+  const trackPageX = React.useRef(0);
+  const safeSteps = Math.max(2, steps);
+  const maxIndex = safeSteps - 1;
+
+  const anim = React.useRef(
+    new Animated.Value(clampedRatio(index, maxIndex)),
+  ).current;
+  const dragRatio = React.useRef(clampedRatio(index, maxIndex));
+  const lastEmitted = React.useRef(Math.min(Math.max(index, 0), maxIndex));
+
+  const measureTrack = React.useCallback(() => {
+    trackRef.current?.measureInWindow((x, _y, width) => {
+      trackPageX.current = x;
+      trackWidth.current = Math.max(1, width);
+    });
+  }, []);
+
+  React.useEffect(() => {
+    const next = clampedRatio(index, maxIndex);
+    dragRatio.current = next;
+    lastEmitted.current = Math.min(Math.max(index, 0), maxIndex);
+    Animated.spring(anim, {
+      toValue: next,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 80,
+    }).start();
+  }, [index, maxIndex, anim]);
+
+  const emitNearest = React.useCallback(
+    (ratio: number, force = false) => {
+      const next = Math.round(Math.min(1, Math.max(0, ratio)) * maxIndex);
+      if (force || next !== lastEmitted.current) {
+        lastEmitted.current = next;
+        onIndexChange(next);
+      }
+    },
+    [maxIndex, onIndexChange],
+  );
+
+  const setFromPageX = React.useCallback(
+    (pageX: number) => {
+      const ratio = Math.min(
+        1,
+        Math.max(0, (pageX - trackPageX.current) / (trackWidth.current || 1)),
+      );
+      dragRatio.current = ratio;
+      anim.setValue(ratio);
+      emitNearest(ratio, false);
+    },
+    [anim, emitNearest],
+  );
+
+  const pan = React.useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (e) => {
+          measureTrack();
+          setFromPageX(e.nativeEvent.pageX);
+        },
+        onPanResponderMove: (e) => {
+          setFromPageX(e.nativeEvent.pageX);
+        },
+        onPanResponderRelease: () => {
+          const snapped = Math.round(dragRatio.current * maxIndex) / maxIndex;
+          Animated.spring(anim, {
+            toValue: snapped,
+            useNativeDriver: false,
+            friction: 7,
+            tension: 90,
+          }).start();
+          emitNearest(dragRatio.current, true);
+        },
+        onPanResponderTerminate: () => {
+          const snapped = Math.round(dragRatio.current * maxIndex) / maxIndex;
+          Animated.spring(anim, {
+            toValue: snapped,
+            useNativeDriver: false,
+            friction: 7,
+            tension: 90,
+          }).start();
+          emitNearest(dragRatio.current, true);
+        },
+      }),
+    [anim, emitNearest, maxIndex, measureTrack, setFromPageX],
+  );
+
+  const fillWidth = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0%", "100%"],
+  });
+  const thumbLeft = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0%", "100%"],
+  });
+
   return (
-    <View style={styles.prefsSection}>
-      <Text style={styles.prefsSectionTitle}>{title}</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.prefsOptionsRow}
+    <View style={styles.prefsSliderSection}>
+      <View style={styles.prefsSliderHeader}>
+        <Text style={styles.prefsSliderTitle}>{title}</Text>
+        <Text style={styles.prefsSliderValue}>{valueLabel}</Text>
+      </View>
+      <View
+        ref={trackRef}
+        style={styles.prefsSliderTrackHit}
+        onLayout={measureTrack}
+        {...pan.panHandlers}
       >
-        {children}
-      </ScrollView>
+        <View style={styles.prefsSliderTrack}>
+          <Animated.View
+            style={[styles.prefsSliderFill, { width: fillWidth }]}
+          />
+        </View>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.prefsSliderThumb,
+            {
+              left: thumbLeft,
+              transform: [{ translateX: -11 }],
+            },
+          ]}
+        />
+      </View>
     </View>
   );
 }
 
-function PrefOption({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.prefsOption, selected && styles.prefsOptionSelected]}
-      onPress={onPress}
-      activeOpacity={0.75}
-    >
-      <Text
-        style={[
-          styles.prefsOptionText,
-          selected && styles.prefsOptionTextSelected,
-        ]}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
+function clampedRatio(index: number, maxIndex: number) {
+  return Math.min(Math.max(index, 0), maxIndex) / maxIndex;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1, backgroundColor: "#FFFFFF" },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 6,
-    backgroundColor: "#fff",
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 8,
+    backgroundColor: "#FFFFFF",
   },
   headerTitleContainer: { flex: 1 },
-  headerLogo: { width: 86, height: 30, marginLeft: -5 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  headerLogo: { width: 100, height: 34, marginLeft: -2 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 14 },
   notifBtn: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
@@ -1491,30 +1659,29 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   profileBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: "#FFF0F2",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     overflow: "hidden",
+    backgroundColor: "#EFEFEF",
   },
   headerAvatar: { width: "100%", height: "100%" },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F5F5F5",
-    marginHorizontal: 12,
-    marginTop: 4,
-    marginBottom: 6,
+    backgroundColor: "#EFEFEF",
+    marginHorizontal: 16,
+    marginTop: 2,
+    marginBottom: 8,
     paddingHorizontal: 12,
-    height: 40,
+    height: 36,
     borderRadius: 10,
   },
   searchIcon: { marginRight: 8 },
   searchInput: {
     flex: 1,
     fontSize: 15,
-    color: "#333",
+    color: "#262626",
     paddingVertical: 0,
   },
   listContent: { paddingBottom: 100 },
@@ -1527,7 +1694,7 @@ const styles = StyleSheet.create({
   },
   loadMoreText: {
     fontSize: 13,
-    color: "#888",
+    color: "#8E8E8E",
   },
   premiumWrap: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 },
   premiumCard: {
@@ -1538,6 +1705,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     overflow: "hidden",
+  },
+  premiumIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#DBDBDB",
+    alignItems: "center",
+    justifyContent: "center",
   },
   premiumTextWrap: { flex: 1, minWidth: 0 },
   premiumTitle: {
@@ -1569,12 +1746,34 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 8,
+    paddingTop: 4,
     backgroundColor: "#FFFFFF",
     zIndex: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#ECECEC",
+    borderBottomColor: "#DBDBDB",
+  },
+  feedTabs: {
+    flex: 1,
+    flexDirection: "row",
+  },
+  feedTab: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "transparent",
+  },
+  feedTabActive: {
+    borderBottomColor: "#262626",
+  },
+  feedTabText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#8E8E8E",
+  },
+  feedTabTextActive: {
+    color: "#262626",
   },
   sectionLeft: {
     flexDirection: "row",
@@ -1584,30 +1783,16 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#1A1A2E",
+    color: "#262626",
   },
   filterBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#F0F2F5",
+    width: 40,
+    height: 40,
     alignItems: "center",
     justifyContent: "center",
-    overflow: "hidden",
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 0,
-      },
-    }),
   },
   filterBtnPressed: {
-    opacity: 0.65,
+    opacity: 0.55,
   },
   listItem: {
     flexDirection: "row",
@@ -1618,10 +1803,10 @@ const styles = StyleSheet.create({
   },
   imageContainer: { position: "relative" },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#F5F5F5",
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#EFEFEF",
   },
   onlineStatus: {
     position: "absolute",
@@ -1630,7 +1815,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: "#25D366",
+    backgroundColor: "#78DE45",
     borderWidth: 2,
     borderColor: "#fff",
   },
@@ -1639,6 +1824,7 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     justifyContent: "center",
     minWidth: 0,
+    marginRight: 10,
   },
   nameRow: {
     flexDirection: "row",
@@ -1648,13 +1834,13 @@ const styles = StyleSheet.create({
   },
   nameText: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#111",
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#262626",
   },
   metaText: {
     fontSize: 12,
-    color: "#6750A4",
+    color: "#8E8E8E",
     fontWeight: "500",
   },
   subtitleRow: {
@@ -1665,23 +1851,36 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   subtitleText: {
-    flex: 1,
     fontSize: 13,
-    color: "#667781",
+    color: "#8E8E8E",
+    marginTop: 1,
   },
   onlineNowText: {
-    color: "#25D366",
+    color: "#262626",
     fontWeight: "600",
   },
   matchBtn: {
-    padding: 2,
+    minWidth: 48,
+    height: 28,
+    paddingHorizontal: 7,
+    borderRadius: 7,
+    backgroundColor: "#111",
     justifyContent: "center",
     alignItems: "center",
   },
+  matchBtnLiked: {
+    backgroundColor: "#EFEFEF",
+  },
+  matchBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  matchBtnTextLiked: {
+    color: "#262626",
+  },
   separator: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "#E9EDEF",
-    marginLeft: 76,
+    height: 0,
   },
   emptyContainer: {
     alignItems: "center",
@@ -1690,45 +1889,51 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
     gap: 10,
   },
-  emptyTitle: { fontSize: 18, fontWeight: "700", color: "#555", marginTop: 8 },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#262626",
+    marginTop: 8,
+  },
   emptyText: {
     fontSize: 14,
-    color: "#999",
+    color: "#8E8E8E",
     textAlign: "center",
     lineHeight: 20,
   },
   retryBtn: {
     marginTop: 16,
-    backgroundColor: "#8E2DE2",
+    backgroundColor: "#0095F6",
     paddingHorizontal: 28,
-    paddingVertical: 12,
-    borderRadius: 100,
+    paddingVertical: 10,
+    borderRadius: 8,
   },
   retryBtnText: {
     color: "#fff",
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: "700",
   },
   prefsOverlay: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.28)",
+    backgroundColor: "rgba(0,0,0,0.45)",
   },
   prefsDismissArea: {
     flex: 1,
   },
   prefsSheet: {
     backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 28,
   },
   prefsTitle: {
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: "700",
-    color: "#111",
+    color: "#262626",
+    textAlign: "center",
     marginBottom: 18,
   },
   prefsSection: {
@@ -1737,39 +1942,97 @@ const styles = StyleSheet.create({
   prefsSectionTitle: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#888",
+    color: "#8E8E8E",
     marginBottom: 8,
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
-  prefsOptionsRow: {
+  prefsEqualRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "stretch",
     gap: 8,
-    paddingRight: 8,
+    width: "100%",
   },
-  prefsOption: {
-    paddingHorizontal: 14,
-    height: 36,
-    borderRadius: 10,
+  prefsEqualCard: {
+    flex: 1,
+    minWidth: 0,
+    height: 28,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#E5E5E5",
-    backgroundColor: "#fff",
+    borderColor: "#DBDBDB",
+    backgroundColor: "#FAFAFA",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 4,
   },
-  prefsOptionSelected: {
-    borderColor: "#111",
-    backgroundColor: "#111",
+  prefsEqualCardSelected: {
+    borderColor: "#262626",
+    backgroundColor: "#262626",
   },
-  prefsOptionText: {
-    fontSize: 13,
+  prefsEqualCardText: {
+    fontSize: 12,
     fontWeight: "500",
-    color: "#444",
+    color: "#262626",
+    textAlign: "center",
   },
-  prefsOptionTextSelected: {
+  prefsEqualCardTextSelected: {
     color: "#fff",
     fontWeight: "600",
+  },
+  prefsSliderSection: {
+    marginBottom: Platform.OS === "android" ? 2 : 10,
+  },
+  prefsSliderHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: Platform.OS === "android" ? 4 : 8,
+  },
+  prefsSliderTitle: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#262626",
+  },
+  prefsSliderValue: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#262626",
+  },
+  prefsSliderTrackHit: {
+    height: Platform.OS === "android" ? 28 : 36,
+    justifyContent: "center",
+    marginLeft: 10,
+  },
+  prefsSliderTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#EFEFEF",
+    overflow: "hidden",
+  },
+  prefsSliderFill: {
+    height: "100%",
+    backgroundColor: "#262626",
+    borderRadius: 4,
+  },
+  prefsSliderThumb: {
+    position: "absolute",
+    top: "50%",
+    marginTop: -11,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#FFFFFF",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.10)",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2.5,
+      },
+      android: { elevation: 3 },
+    }),
   },
   prefsActions: {
     flexDirection: "row",
@@ -1778,32 +2041,32 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#EAEAEA",
+    borderTopColor: "#DBDBDB",
   },
   prefsCancelBtn: {
     flex: 1,
-    height: 46,
-    borderRadius: 12,
-    backgroundColor: "#F4F4F4",
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: "#EFEFEF",
     alignItems: "center",
     justifyContent: "center",
   },
   prefsCancelBtnText: {
-    color: "#333",
-    fontSize: 15,
-    fontWeight: "600",
+    color: "#262626",
+    fontSize: 14,
+    fontWeight: "700",
   },
   prefsSearchBtn: {
     flex: 1,
-    height: 46,
-    borderRadius: 12,
-    backgroundColor: "#6750A4",
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: "#0095F6",
     alignItems: "center",
     justifyContent: "center",
   },
   prefsSearchBtnText: {
     color: "#fff",
-    fontSize: 15,
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "700",
   },
 });

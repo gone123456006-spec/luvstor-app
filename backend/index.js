@@ -125,6 +125,11 @@ app.use('/api/subscriptions', require('./routes/subscriptions'));
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/calls', require('./routes/calls'));
+app.use('/api/support', require('./routes/support'));
+app.use('/api/admin', require('./routes/adminModeration'));
+app.use('/api/verification', require('./routes/verification'));
+app.use('/api/recommendations', require('./routes/recommendations'));
+app.use('/api/retention', require('./routes/retention'));
 
 app.get('/', (req, res) => {
   res.json({
@@ -142,6 +147,10 @@ app.get('/', (req, res) => {
       'Nearby People (Geospatial)',
       'FCM Push (BullMQ when Redis set)',
       'WebRTC Voice & Video Calls',
+      'For You recommendations',
+      'Photo verification',
+      'Support tickets',
+      'Report moderation',
     ],
   });
 });

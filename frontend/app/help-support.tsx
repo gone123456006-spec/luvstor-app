@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,8 +12,11 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { getAuthToken } from '../utils/auth';
+import { listMySupportTickets, submitSupportTicket, SupportTicket } from '../utils/support';
 
 const WA = {
   bg: '#FDF8FF',
@@ -51,30 +54,72 @@ const CATEGORIES = ['Account', 'Billing', 'Safety', 'Bug Report'];
 export default function HelpSupportScreen() {
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
-  const [tab, setTab] = useState<'faq' | 'ticket'>('faq');
+  const [tab, setTab] = useState<'faq' | 'ticket' | 'mine'>('faq');
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [ticketCategory, setTicketCategory] = useState('Account');
   const [ticketSubject, setTicketSubject] = useState('');
   const [ticketDescription, setTicketDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [myTickets, setMyTickets] = useState<SupportTicket[]>([]);
+  const [loadingTickets, setLoadingTickets] = useState(false);
 
-  const canSubmit = ticketSubject.trim().length > 0 && ticketDescription.trim().length > 0;
+  const canSubmit =
+    ticketSubject.trim().length >= 3 && ticketDescription.trim().length >= 10;
 
-  const submitTicket = () => {
-    if (!canSubmit) return;
-    Alert.alert(
-      'Ticket Submitted!',
-      `Thank you! Your ticket #${Math.floor(100000 + Math.random() * 900000)} has been raised under "${ticketCategory}".\n\nOur support team will email you within 2 hours.`,
-      [
-        {
-          text: 'OK',
-          onPress: () => {
-            setTicketSubject('');
-            setTicketDescription('');
-            setTab('faq');
+  const loadMyTickets = async () => {
+    const token = await getAuthToken();
+    if (!token) return;
+    setLoadingTickets(true);
+    try {
+      const tickets = await listMySupportTickets(token);
+      setMyTickets(tickets);
+    } catch {
+      /* keep previous */
+    } finally {
+      setLoadingTickets(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'mine') void loadMyTickets();
+  }, [tab]);
+
+  const submitTicket = async () => {
+    if (!canSubmit || submitting) return;
+    const token = await getAuthToken();
+    if (!token) {
+      Alert.alert('Sign in required', 'Please log in to submit a support ticket.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await submitSupportTicket(token, {
+        category: ticketCategory,
+        subject: ticketSubject.trim(),
+        description: ticketDescription.trim(),
+      });
+      Alert.alert(
+        'Ticket Submitted',
+        `Ticket ${result.ticketNumber} raised under "${ticketCategory}".\n\n${result.message || 'Our team will email you within 24 hours.'}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setTicketSubject('');
+              setTicketDescription('');
+              setTab('mine');
+            },
           },
-        },
-      ]
-    );
+        ],
+      );
+    } catch (err: any) {
+      Alert.alert(
+        'Could not submit',
+        err?.message || 'Please try again in a moment.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -91,7 +136,6 @@ export default function HelpSupportScreen() {
           <Text style={styles.headerTitle}>Help & Support</Text>
         </View>
 
-        {/* Tabs */}
         <View style={styles.tabBar}>
           <TouchableOpacity
             style={[styles.tab, tab === 'faq' && styles.tabActive]}
@@ -109,137 +153,125 @@ export default function HelpSupportScreen() {
               Raise Issue
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, tab === 'mine' && styles.tabActive]}
+            onPress={() => setTab('mine')}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.tabText, tab === 'mine' && styles.tabTextActive]}>
+              My tickets
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <ScrollView
           ref={scrollRef}
-          showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          {tab === 'faq' ? (
-            <>
-              <Text style={styles.sectionHint}>Frequently asked questions</Text>
-              <View style={styles.listGroup}>
-                {FAQS.map((faq, i) => {
-                  const open = expandedFaq === i;
-                  return (
-                    <View key={i}>
-                      <TouchableOpacity
-                        style={styles.listRow}
-                        activeOpacity={0.7}
-                        onPress={() => setExpandedFaq(open ? null : i)}
-                      >
-                        <View style={[styles.iconCircle, { backgroundColor: WA.primary }]}>
-                          <Ionicons
-                            name={open ? 'chevron-down' : 'help'}
-                            size={18}
-                            color="#fff"
-                          />
-                        </View>
-                        <Text style={styles.rowLabel}>{faq.q}</Text>
-                        <Ionicons
-                          name={open ? 'chevron-up' : 'chevron-forward'}
-                          size={18}
-                          color={WA.secondary}
-                        />
-                      </TouchableOpacity>
-                      {open && (
-                        <View style={styles.answerBox}>
-                          <Text style={styles.answerText}>{faq.a}</Text>
-                        </View>
-                      )}
-                      {i < FAQS.length - 1 && <View style={styles.divider} />}
-                    </View>
-                  );
-                })}
-              </View>
-            </>
-          ) : (
-            <>
-              <Text style={styles.sectionHint}>Issue category</Text>
-              <View style={styles.listGroup}>
-                {CATEGORIES.map((cat, i) => {
-                  const selected = ticketCategory === cat;
-                  return (
-                    <View key={cat}>
-                      <TouchableOpacity
-                        style={styles.listRow}
-                        activeOpacity={0.7}
-                        onPress={() => setTicketCategory(cat)}
-                      >
-                        <View
-                          style={[
-                            styles.iconCircle,
-                            {
-                              backgroundColor: selected ? WA.primary : '#CAC4D0',
-                            },
-                          ]}
-                        >
-                          <Ionicons
-                            name={
-                              cat === 'Account'
-                                ? 'person'
-                                : cat === 'Billing'
-                                  ? 'card'
-                                  : cat === 'Safety'
-                                    ? 'shield-checkmark'
-                                    : 'bug'
-                            }
-                            size={18}
-                            color="#fff"
-                          />
-                        </View>
-                        <Text style={styles.rowLabel}>{cat}</Text>
-                        <View style={[styles.radio, selected && styles.radioOn]}>
-                          {selected && <View style={styles.radioDot} />}
-                        </View>
-                      </TouchableOpacity>
-                      {i < CATEGORIES.length - 1 && <View style={styles.divider} />}
-                    </View>
-                  );
-                })}
+          {tab === 'faq' &&
+            FAQS.map((item, i) => (
+              <TouchableOpacity
+                key={item.q}
+                style={styles.faqCard}
+                activeOpacity={0.85}
+                onPress={() => setExpandedFaq(expandedFaq === i ? null : i)}
+              >
+                <View style={styles.faqRow}>
+                  <Text style={styles.faqQ}>{item.q}</Text>
+                  <Ionicons
+                    name={expandedFaq === i ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={WA.secondary}
+                  />
+                </View>
+                {expandedFaq === i ? <Text style={styles.faqA}>{item.a}</Text> : null}
+              </TouchableOpacity>
+            ))}
+
+          {tab === 'ticket' && (
+            <View style={styles.form}>
+              <Text style={styles.label}>Category</Text>
+              <View style={styles.chips}>
+                {CATEGORIES.map((c) => (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.chip, ticketCategory === c && styles.chipActive]}
+                    onPress={() => setTicketCategory(c)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        ticketCategory === c && styles.chipTextActive,
+                      ]}
+                    >
+                      {c}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
 
-              <Text style={styles.sectionHint}>Subject</Text>
-              <View style={styles.listGroup}>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Brief summary of the issue..."
-                  placeholderTextColor={WA.secondary}
-                  value={ticketSubject}
-                  onChangeText={setTicketSubject}
-                  onFocus={() => {
-                    setTimeout(() => scrollRef.current?.scrollTo({ y: 180, animated: true }), 100);
-                  }}
-                />
-              </View>
+              <Text style={styles.label}>Subject</Text>
+              <TextInput
+                style={styles.input}
+                value={ticketSubject}
+                onChangeText={setTicketSubject}
+                placeholder="Short summary"
+                placeholderTextColor="#999"
+                maxLength={200}
+              />
 
-              <Text style={styles.sectionHint}>Describe your problem</Text>
-              <View style={styles.listGroup}>
-                <TextInput
-                  style={[styles.input, styles.inputLarge]}
-                  placeholder="Please explain the details..."
-                  placeholderTextColor={WA.secondary}
-                  value={ticketDescription}
-                  onChangeText={setTicketDescription}
-                  multiline
-                  textAlignVertical="top"
-                  onFocus={() => {
-                    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
-                  }}
-                />
-              </View>
+              <Text style={styles.label}>Description</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={ticketDescription}
+                onChangeText={setTicketDescription}
+                placeholder="Tell us what happened (min 10 characters)"
+                placeholderTextColor="#999"
+                multiline
+                maxLength={5000}
+                textAlignVertical="top"
+              />
 
               <TouchableOpacity
-                style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
-                activeOpacity={0.8}
-                onPress={submitTicket}
-                disabled={!canSubmit}
+                style={[styles.submitBtn, (!canSubmit || submitting) && styles.submitDisabled]}
+                disabled={!canSubmit || submitting}
+                onPress={() => void submitTicket()}
+                activeOpacity={0.85}
               >
-                <Text style={styles.submitText}>Submit Problem</Text>
+                {submitting ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.submitText}>Submit ticket</Text>
+                )}
               </TouchableOpacity>
-            </>
+            </View>
+          )}
+
+          {tab === 'mine' && (
+            <View style={styles.form}>
+              {loadingTickets ? (
+                <ActivityIndicator color={WA.primary} style={{ marginTop: 24 }} />
+              ) : myTickets.length === 0 ? (
+                <Text style={styles.emptyTickets}>No tickets yet.</Text>
+              ) : (
+                myTickets.map((t) => (
+                  <View key={t.ticketNumber} style={styles.ticketCard}>
+                    <View style={styles.ticketTop}>
+                      <Text style={styles.ticketNumber}>{t.ticketNumber}</Text>
+                      <Text style={styles.ticketStatus}>{t.status}</Text>
+                    </View>
+                    <Text style={styles.ticketSubject}>{t.subject}</Text>
+                    <Text style={styles.ticketMeta}>
+                      {t.category}
+                      {t.createdAt
+                        ? ` · ${new Date(t.createdAt).toLocaleDateString()}`
+                        : ''}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -252,130 +284,94 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: WA.header,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: WA.border,
+    backgroundColor: WA.header,
   },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: WA.primaryContainer,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: { fontSize: 20, fontWeight: '600', color: WA.text },
+  backBtn: { padding: 6, marginRight: 4 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: WA.text },
   tabBar: {
     flexDirection: 'row',
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: WA.primaryContainer,
+    borderRadius: 12,
+    padding: 4,
+  },
+  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
+  tabActive: { backgroundColor: WA.white },
+  tabText: { fontSize: 13, fontWeight: '600', color: WA.secondary },
+  tabTextActive: { color: WA.primary },
+  scroll: { padding: 16, paddingBottom: 40 },
+  faqCard: {
     backgroundColor: WA.white,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: WA.border,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
   },
-  tab: {
-    flex: 1,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  tabActive: {
-    borderBottomColor: WA.primary,
-  },
-  tabText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: WA.secondary,
-  },
-  tabTextActive: {
-    color: WA.primary,
-  },
-  scroll: { paddingBottom: 40 },
-  sectionHint: {
-    fontSize: 14,
-    color: WA.secondary,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 8,
-  },
-  listGroup: { backgroundColor: WA.white },
-  listRow: {
+  faqRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 16,
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  iconCircle: {
-    width: 40,
-    height: 40,
+  faqQ: { flex: 1, fontSize: 15, fontWeight: '600', color: WA.text },
+  faqA: { marginTop: 10, fontSize: 14, lineHeight: 20, color: WA.secondary },
+  form: { gap: 10 },
+  label: { fontSize: 13, fontWeight: '600', color: WA.secondary, marginTop: 6 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: WA.white,
+    borderWidth: 1,
+    borderColor: WA.border,
   },
-  rowLabel: {
-    flex: 1,
-    fontSize: 16,
-    color: WA.text,
-    fontWeight: '400',
-    lineHeight: 22,
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: WA.border,
-    marginLeft: 72,
-  },
-  answerBox: {
-    paddingHorizontal: 16,
-    paddingLeft: 72,
-    paddingBottom: 14,
-  },
-  answerText: {
-    fontSize: 14,
-    color: WA.secondary,
-    lineHeight: 20,
-  },
-  radio: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: WA.secondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  radioOn: { borderColor: WA.primary },
-  radioDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: WA.primary,
-  },
+  chipActive: { backgroundColor: WA.primaryContainer, borderColor: WA.primary },
+  chipText: { fontSize: 13, color: WA.secondary, fontWeight: '600' },
+  chipTextActive: { color: WA.primary },
   input: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
+    backgroundColor: WA.white,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: WA.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
     color: WA.text,
   },
-  inputLarge: {
-    minHeight: 120,
-    paddingTop: 14,
-  },
+  textArea: { minHeight: 120 },
   submitBtn: {
-    marginHorizontal: 20,
-    marginTop: 24,
-    height: 48,
-    borderRadius: 24,
+    marginTop: 16,
     backgroundColor: WA.primary,
-    justifyContent: 'center',
+    borderRadius: 12,
+    paddingVertical: 14,
     alignItems: 'center',
   },
-  submitBtnDisabled: { opacity: 0.4 },
-  submitText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
+  submitDisabled: { opacity: 0.5 },
+  submitText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  emptyTickets: { textAlign: 'center', color: WA.secondary, marginTop: 32 },
+  ticketCard: {
+    backgroundColor: WA.white,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
   },
+  ticketTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  ticketNumber: { fontWeight: '700', color: WA.primary },
+  ticketStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: WA.secondary,
+    textTransform: 'capitalize',
+  },
+  ticketSubject: { fontSize: 15, fontWeight: '600', color: WA.text },
+  ticketMeta: { marginTop: 4, fontSize: 12, color: WA.secondary },
 });

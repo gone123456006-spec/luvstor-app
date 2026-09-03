@@ -15,12 +15,12 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import { MAX_PROFILE_GALLERY } from "../constants/profile";
 import { isValidPublicId } from "../utils/auth";
 import { resolveMediaUrl } from "../utils/media";
-import ProfileInstagramSection from "./ProfileInstagramSection";
 import ProfileInfoModal from "./ProfileInfoModal";
+import ProfileInstagramSection from "./ProfileInstagramSection";
 import ProfilePhotoViewer from "./ProfilePhotoViewer";
-import { MAX_PROFILE_GALLERY } from "../constants/profile";
 import WhatsAppAvatar, { getDisplayName } from "./WhatsAppAvatar";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");

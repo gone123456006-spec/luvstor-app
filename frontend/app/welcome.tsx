@@ -4,341 +4,210 @@ import { useRouter } from "expo-router";
 import React from "react";
 import {
   Dimensions,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  StatusBar,
 } from "react-native";
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  FadeInUp,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 
-const { width, height } = Dimensions.get("window");
-
-// ── Design Tokens ──────────────────────────────────────────
-const C = {
-  primary: "#7C3AED",          // Brand Purple/Violet
-  primaryContainer: "#F5F0FF",
-  surface: "#FFFFFF",          // Bottom Card White
-  onSurface: "#1A1A2E",
-  onSurfaceVariant: "#7A7A8E",
-  outline: "#CAC4D0",
-};
-
-function DotPattern() {
-  const dots = [];
-  const rows = 6;
-  const cols = 5;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      dots.push(
-        <View
-          key={`${r}-${c}`}
-          style={{
-            width: 4,
-            height: 4,
-            borderRadius: 2,
-            backgroundColor: "rgba(255,255,255,0.4)",
-            position: "absolute",
-            top: r * 12,
-            left: c * 12,
-          }}
-        />,
-      );
-    }
-  }
-  return <View style={{ width: cols * 12, height: rows * 12 }}>{dots}</View>;
-}
-
-function Tag({
-  emoji,
-  label,
-  style,
-}: {
-  emoji: string;
-  label: string;
-  style?: object;
-}) {
-  return (
-    <Animated.View
-      entering={FadeInUp.duration(700).delay(600).springify()}
-      style={[s.tag, style]}
-    >
-      <Text style={s.tagEmoji}>{emoji}</Text>
-      <Text style={s.tagLabel}>{label}</Text>
-    </Animated.View>
-  );
-}
+const { width: W, height: H } = Dimensions.get("window");
 
 export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={s.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#1A0533" />
-      
-      {/* Premium Original Gradient Background */}
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
+
+      {/* Full-bleed photo plane */}
+      <View style={styles.hero}>
+        <Animated.View
+          entering={FadeIn.duration(900)}
+          style={styles.heroCol}
+        >
+          <Image
+            source={require("../assets/images/girls-image.png")}
+            style={styles.heroImage}
+            contentFit="cover"
+          />
+        </Animated.View>
+        <Animated.View
+          entering={FadeIn.duration(900).delay(120)}
+          style={styles.heroCol}
+        >
+          <Image
+            source={require("../assets/images/boy-image.png")}
+            style={styles.heroImage}
+            contentFit="cover"
+          />
+        </Animated.View>
+        <View style={styles.heroDivider} />
+      </View>
+
       <LinearGradient
-        colors={["#1A0533", "#3B0764", "#6B21A8", "#7C3AED"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        colors={[
+          "rgba(0,0,0,0.35)",
+          "rgba(0,0,0,0.15)",
+          "rgba(0,0,0,0.55)",
+          "rgba(0,0,0,0.92)",
+        ]}
+        locations={[0, 0.28, 0.62, 1]}
         style={StyleSheet.absoluteFillObject}
       />
 
-        <View style={s.mainContainer}>
-          
-          {/* Top section with blobs */}
-          <View style={[s.topSection, { paddingTop: Math.max(insets.top, 20) }]}>
-            <Animated.View 
-              entering={FadeInUp.duration(800).delay(100).springify()}
-              style={s.logoContainer}
-            >
-              <Image 
-                source={require("../assets/images/luvstoer logo.png")} 
-                style={[s.logo, { tintColor: "#EADDFF" }]} 
-                contentFit="contain" 
-              />
-            </Animated.View>
-            
-            {/* Blob area */}
-            <View style={s.blobArea}>
-              {/* Right blob - Boy (behind) */}
-              <Animated.View
-                entering={FadeInUp.duration(900).delay(200).springify()}
-                style={s.rightBlobOuter}
-              >
-                <View style={s.rightBlob}>
-                  <View style={s.dotPatternContainer}>
-                    <DotPattern />
-                  </View>
-                  <Image
-                    source={require("../assets/images/boy-image.png")}
-                    style={s.blobImage}
-                    contentFit="cover"
-                  />
-                </View>
-              </Animated.View>
+      <View
+        style={[
+          styles.content,
+          {
+            paddingTop: Math.max(insets.top, 16) + 12,
+            paddingBottom: Math.max(insets.bottom, 20) + 8,
+          },
+        ]}
+      >
+        <Animated.View
+          entering={FadeInDown.duration(700).delay(200)}
+          style={styles.brandBlock}
+        >
+          <Image
+            source={require("../assets/images/luvstoer logo.png")}
+            style={styles.logo}
+            contentFit="contain"
+            tintColor="#FFFFFF"
+          />
+        </Animated.View>
 
-              {/* Left blob - Girl (in front) */}
-              <Animated.View
-                entering={FadeInUp.duration(900).delay(350).springify()}
-                style={s.leftBlobOuter}
-              >
-                <View style={s.leftBlob}>
-                  <Image
-                    source={require("../assets/images/girls-image.png")}
-                    style={s.blobImage}
-                    contentFit="cover"
-                  />
-                </View>
-              </Animated.View>
-
-              {/* MD3-Styled Assist Chips (Tags) */}
-              <Tag emoji="🤝" label="Friends" style={s.friendsTag} />
-              <Tag emoji="🎉" label="Short-term Fun" style={s.funTag} />
-              <Tag emoji="❤️" label="Relationship" style={s.relationshipTag} />
-              <Tag emoji="💬" label="Chats" style={s.chatsTag} />
-            </View>
-          </View>
-
-          {/* Bottom Card (Google Material 3 design spec) */}
-          <Animated.View
-            entering={FadeInDown.duration(900).delay(400).springify()}
-            style={[s.bottomCard, { paddingBottom: Math.max(insets.bottom, 24) }]}
+        <View style={styles.bottomBlock}>
+          <Animated.Text
+            entering={FadeInUp.duration(650).delay(350)}
+            style={styles.headline}
           >
-            <Text style={s.title}>
-              Your ideal match,{"\n"}Your ideal relationship.
-            </Text>
-            <Text style={s.subtitle}>
-              Sign in with Google or email OTP and start meeting people nearby.
-            </Text>
+            Find your people.
+          </Animated.Text>
+          <Animated.Text
+            entering={FadeInUp.duration(650).delay(450)}
+            style={styles.subhead}
+          >
+            Meet nearby. Chat freely. Start something real.
+          </Animated.Text>
 
+          <Animated.View entering={FadeInUp.duration(650).delay(550)}>
             <TouchableOpacity
-              style={s.getStartedBtn}
-              activeOpacity={0.85}
+              style={styles.primaryBtn}
+              activeOpacity={0.88}
               onPress={() => router.push("/login")}
             >
-              <Text style={s.getStartedText}>Get Started</Text>
+              <Text style={styles.primaryBtnText}>Get started</Text>
             </TouchableOpacity>
           </Animated.View>
-          
+
+          <Animated.View entering={FadeInUp.duration(650).delay(650)}>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              activeOpacity={0.7}
+              onPress={() => router.push("/login")}
+            >
+              <Text style={styles.secondaryBtnText}>
+                Already have an account?{" "}
+                <Text style={styles.secondaryBtnLink}>Log in</Text>
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
         </View>
+      </View>
     </View>
   );
 }
 
-const BLOB_AREA_HEIGHT = height * 0.46;
-
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: "#000",
   },
-  safeArea: {
+  hero: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+  },
+  heroCol: {
     flex: 1,
+    height: H,
   },
-  mainContainer: {
-    flex: 1,
-    justifyContent: "space-between",
-  },
-  topSection: {
-    flex: 1,
-    paddingTop: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  logoContainer: {
-    marginBottom: 16,
-    alignItems: "center",
-  },
-  logo: {
-    width: 150,
-    height: 48,
-  },
-  blobArea: {
-    width: width * 0.85,
-    height: BLOB_AREA_HEIGHT,
-    position: "relative",
-  },
-
-  // Left blob (Girl image) — outer = layout animation, inner = transform
-  leftBlobOuter: {
-    position: "absolute",
-    width: width * 0.52,
-    height: BLOB_AREA_HEIGHT * 0.88,
-    left: 0,
-    top: 0,
-    zIndex: 2,
-  },
-  leftBlob: {
-    flex: 1,
-    backgroundColor: "rgba(192, 160, 255, 0.35)",
-    borderTopLeftRadius: 120,
-    borderTopRightRadius: 80,
-    borderBottomLeftRadius: 60,
-    borderBottomRightRadius: 130,
-    overflow: "hidden",
-    transform: [{ rotate: "-3deg" }],
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.2)",
-  },
-  blobImage: {
+  heroImage: {
     width: "100%",
     height: "100%",
   },
-
-  // Right blob (Boy image)
-  rightBlobOuter: {
+  heroDivider: {
     position: "absolute",
-    width: width * 0.45,
-    height: BLOB_AREA_HEIGHT * 0.7,
-    right: -10,
-    top: BLOB_AREA_HEIGHT * 0.12,
-    zIndex: 1,
+    top: 0,
+    bottom: 0,
+    left: W / 2 - StyleSheet.hairlineWidth,
+    width: StyleSheet.hairlineWidth * 2,
+    backgroundColor: "rgba(255,255,255,0.18)",
   },
-  rightBlob: {
+  content: {
     flex: 1,
-    backgroundColor: "rgba(192, 160, 255, 0.30)",
-    borderTopLeftRadius: 80,
-    borderTopRightRadius: 110,
-    borderBottomLeftRadius: 120,
-    borderBottomRightRadius: 70,
-    overflow: "hidden",
-    transform: [{ rotate: "4deg" }],
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.15)",
-  },
-  dotPatternContainer: {
-    position: "absolute",
-    top: 15,
-    right: 15,
-    zIndex: 1,
-  },
-
-  // Material 3 Styled Tags (Assist Chips)
-  tag: {
-    position: "absolute",
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 100, // Fully-rounded pill shape
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 4,
-    zIndex: 10,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.05)",
-  },
-  tagEmoji: {
-    fontSize: 14,
-    marginRight: 6,
-  },
-  tagLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#2C3E50",
-    letterSpacing: 0.1,
-  },
-  friendsTag: {
-    top: BLOB_AREA_HEIGHT * 0.08,
-    left: -5,
-  },
-  funTag: {
-    top: BLOB_AREA_HEIGHT * 0.05,
-    right: -5,
-  },
-  relationshipTag: {
-    top: BLOB_AREA_HEIGHT * 0.52,
-    left: width * 0.22,
-  },
-  chatsTag: {
-    bottom: BLOB_AREA_HEIGHT * 0.02,
-    right: 5,
-  },
-
-  // Sliding Bottom Card (Material 3 styled)
-  bottomCard: {
-    backgroundColor: C.surface,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
+    justifyContent: "space-between",
     paddingHorizontal: 28,
-    paddingTop: 36,
-    paddingBottom: 40,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 24,
   },
-  title: {
-    fontSize: 26,
-    fontWeight: "800",
-    color: C.onSurface,
-    lineHeight: 34,
-    letterSpacing: -0.5,
+  brandBlock: {
+    alignItems: "center",
   },
-  subtitle: {
-    fontSize: 14,
-    color: C.onSurfaceVariant,
+  logo: {
+    width: Math.min(188, W * 0.48),
+    height: 56,
+  },
+  bottomBlock: {
+    width: "100%",
+  },
+  headline: {
+    color: "#FFFFFF",
+    fontSize: 34,
+    fontWeight: "700",
+    letterSpacing: -0.8,
+    lineHeight: 40,
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  subhead: {
+    color: "rgba(255,255,255,0.78)",
+    fontSize: 15,
+    fontWeight: "400",
     lineHeight: 22,
-    marginTop: 8,
-    marginBottom: 32,
+    textAlign: "center",
+    marginBottom: 28,
   },
-
-  getStartedBtn: {
-    backgroundColor: "#F5D547",
-    height: 52,
-    borderRadius: 100,
+  primaryBtn: {
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#0095F6",
     alignItems: "center",
     justifyContent: "center",
   },
-  getStartedText: {
+  primaryBtnText: {
+    color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "700",
-    color: "#1A1A2E",
+    letterSpacing: 0.1,
+  },
+  secondaryBtn: {
+    marginTop: 18,
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  secondaryBtnText: {
+    color: "rgba(255,255,255,0.72)",
+    fontSize: 14,
+    fontWeight: "400",
+  },
+  secondaryBtnLink: {
+    color: "#FFFFFF",
+    fontWeight: "700",
   },
 });

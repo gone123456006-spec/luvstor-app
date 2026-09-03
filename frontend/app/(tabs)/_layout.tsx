@@ -13,6 +13,7 @@ import {
   clearProfileCache,
   preloadProfile,
 } from '../../utils/profileCache';
+import { pingAppOpen } from '../../utils/retention';
 
 export default function TabLayout() {
   const router = useRouter();
@@ -46,6 +47,7 @@ export default function TabLayout() {
       const token = await getAuthToken();
       if (token) {
         void preloadTokenBalance(token);
+        void pingAppOpen(token).catch(() => {});
       }
       void preloadProfile();
     })();

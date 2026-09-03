@@ -37,13 +37,13 @@ import {
     getLocalProfile,
 } from "../../utils/auth";
 import { claimDailySpin, fetchTokenBalance } from "../../utils/chatTokens";
-import {
-  getCachedTokenBalance,
-  preloadTokenBalance,
-  setCachedTokenBalance,
-  updateCachedTokenBalance,
-} from "../../utils/tokenCache";
 import { initiateTokenPurchase } from "../../utils/payment";
+import {
+    getCachedTokenBalance,
+    preloadTokenBalance,
+    setCachedTokenBalance,
+    updateCachedTokenBalance,
+} from "../../utils/tokenCache";
 
 const FALLBACK_AVATAR = require("../../assets/images/boy-image.png");
 
@@ -76,7 +76,9 @@ function segmentsFromCycle(cycle: number[]) {
     const pal = FESTIVAL_PALETTE[i % FESTIVAL_PALETTE.length];
     return {
       label: String(tokens),
-      subLabel: isJackpot ? "JACKPOT" : SPIN_SLICE_LABELS[i % SPIN_SLICE_LABELS.length],
+      subLabel: isJackpot
+        ? "JACKPOT"
+        : SPIN_SLICE_LABELS[i % SPIN_SLICE_LABELS.length],
       tokens,
       color: isJackpot ? "#FFD166" : pal.color,
       textColor: isJackpot ? "#4A2500" : pal.textColor,

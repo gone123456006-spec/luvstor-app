@@ -25,15 +25,15 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import { useAppAlert } from "../../components/AppAlert";
+import ProfileInfoModal from "../../components/ProfileInfoModal";
+import ProfileInstagramSection from "../../components/ProfileInstagramSection";
+import ProfilePhotoViewer from "../../components/ProfilePhotoViewer";
 import WhatsAppAvatar, {
     getDisplayName,
     VerifiedTick,
 } from "../../components/WhatsAppAvatar";
-import ProfileInstagramSection from "../../components/ProfileInstagramSection";
-import ProfileInfoModal from "../../components/ProfileInfoModal";
-import ProfilePhotoViewer from "../../components/ProfilePhotoViewer";
 import { MAX_PROFILE_GALLERY } from "../../constants/profile";
-import { useAppAlert } from "../../components/AppAlert";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { API_BASE, apiRequest } from "../../utils/api";
@@ -45,18 +45,17 @@ import {
     saveLocalProfile,
 } from "../../utils/auth";
 import {
+    getCachedProfile,
+    preloadProfile,
+    ProfileScreenSnapshot
+} from "../../utils/profileCache";
+import {
     followGenderChange,
     resolveShowMe,
     SHOW_ME_OPTIONS,
     showMeLabel,
 } from "../../utils/showMe";
 import { useLiveSubscriptionBadge } from "../../utils/subscriptions";
-import {
-  getCachedProfile,
-  preloadProfile,
-  ProfileScreenSnapshot,
-  updateCachedProfile,
-} from "../../utils/profileCache";
 
 // ── Luvstor theme + WhatsApp-style layout ───────────────────
 const WA = {
@@ -156,7 +155,9 @@ export default function ProfileScreen() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Profile gallery (up to 6 images)
-  const [gallery, setGallery] = useState<string[]>(initialSnapshot?.gallery ?? []);
+  const [gallery, setGallery] = useState<string[]>(
+    initialSnapshot?.gallery ?? [],
+  );
   const [gallerySlotBusy, setGallerySlotBusy] = useState<number | null>(null);
   const [gallerySlot, setGallerySlot] = useState<number>(0);
   const [galleryOptionsVisible, setGalleryOptionsVisible] = useState(false);
@@ -400,8 +401,7 @@ export default function ProfileScreen() {
     if (!avatar) return;
     const uris = gallery.filter(Boolean);
     const idx = uris.findIndex(
-      (uri) =>
-        String(uri).split("?")[0] === String(avatar).split("?")[0],
+      (uri) => String(uri).split("?")[0] === String(avatar).split("?")[0],
     );
     if (idx >= 0) {
       showPhotoViewer(uris, idx);
@@ -749,12 +749,15 @@ export default function ProfileScreen() {
     }
   };
 
-  const applyProfileSnapshot = useCallback((snapshot: ProfileScreenSnapshot) => {
-    setProfile(snapshot.profile);
-    setGallery(snapshot.gallery);
-    setSubscriptionBadge(snapshot.subscriptionBadge);
-    setSubscriptionExpiresAt(snapshot.subscriptionExpiresAt);
-  }, []);
+  const applyProfileSnapshot = useCallback(
+    (snapshot: ProfileScreenSnapshot) => {
+      setProfile(snapshot.profile);
+      setGallery(snapshot.gallery);
+      setSubscriptionBadge(snapshot.subscriptionBadge);
+      setSubscriptionExpiresAt(snapshot.subscriptionExpiresAt);
+    },
+    [],
+  );
 
   // Fetch profile when tab focuses; use preloaded cache first.
   useFocusEffect(
@@ -790,6 +793,12 @@ export default function ProfileScreen() {
       label: "Subscription",
       color: "#FF4B6E",
       route: "/subscription",
+    },
+    {
+      icon: "shield-checkmark",
+      label: "Photo verification",
+      color: "#0095F6",
+      route: "/photo-verify",
     },
     { icon: "shield-checkmark", label: "Safety Center", color: "#4CAF50" },
     { icon: "help-circle", label: "Help & Support", color: "#2196F3" },
@@ -883,6 +892,15 @@ export default function ProfileScreen() {
               {liveSubscriptionBadge ? (
                 <VerifiedTick avatarSize={52} inline />
               ) : null}
+              {profile?.photoVerification?.photoVerified ||
+              profile?.photoVerification?.status === "approved" ? (
+                <Ionicons
+                  name="shield-checkmark"
+                  size={18}
+                  color="#0095F6"
+                  style={{ marginLeft: 4 }}
+                />
+              ) : null}
             </View>
             <Text style={styles.userIdText}>
               ID:{" "}
@@ -920,6 +938,8 @@ export default function ProfileScreen() {
                     router.push((item as any).route);
                   } else if (item.label === "Blocked") {
                     router.push("/blocked" as any);
+                  } else if (item.label === "Photo verification") {
+                    router.push("/photo-verify" as any);
                   } else if (item.label === "Safety Center") {
                     router.push("/safety-center" as any);
                   } else if (item.label === "Help & Support") {
@@ -1973,9 +1993,7 @@ export default function ProfileScreen() {
           height: profile?.height,
           relationshipGoal: profile?.relationshipGoal,
           showMeLabel: showMeLabel(profile?.gender, profile?.showMe),
-          distanceLabel: profile?.distance
-            ? `${profile.distance} km`
-            : "10 km",
+          distanceLabel: profile?.distance ? `${profile.distance} km` : "10 km",
           interests: profile?.interests,
           subscriptionBadge: liveSubscriptionBadge,
           subscriptionExpiresAt: subscriptionExpiresAt,

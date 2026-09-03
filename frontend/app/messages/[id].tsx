@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
@@ -1426,6 +1427,43 @@ export default function MessageScreen() {
     friendshipStatus?.status === "friends" ||
     (friendshipStatus?.iLiked && friendshipStatus?.theyLiked)
   );
+
+  const CALL_PROMPT_AFTER = 6;
+  const [callPromptDismissed, setCallPromptDismissed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!id) return;
+      try {
+        const v = await AsyncStorage.getItem(`call_prompt_dismissed:${id}`);
+        if (!cancelled && v === "1") setCallPromptDismissed(true);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const dismissCallPrompt = useCallback(async () => {
+    setCallPromptDismissed(true);
+    if (id) {
+      try {
+        await AsyncStorage.setItem(`call_prompt_dismissed:${id}`, "1");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [id]);
+
+  const showCallPrompt =
+    isMatched &&
+    !callPromptDismissed &&
+    !friendshipStatus?.iBlocked &&
+    !friendshipStatus?.theyBlocked &&
+    messages.length >= CALL_PROMPT_AFTER;
 
   const [likingHeader, setLikingHeader] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
@@ -3725,12 +3763,11 @@ export default function MessageScreen() {
                   age: profileUser?.age || 0,
                   bio: displayBio || profileUser?.bio || "",
                   photo: seedPhoto,
-                  photos:
-                    profileUser?.photos?.length
-                      ? profileUser.photos
-                      : seedPhoto
-                        ? [seedPhoto]
-                        : [],
+                  photos: profileUser?.photos?.length
+                    ? profileUser.photos
+                    : seedPhoto
+                      ? [seedPhoto]
+                      : [],
                   gender: displayGender || "",
                   height: profileUser?.height,
                   interests: profileUser?.interests || [],
@@ -4000,6 +4037,48 @@ export default function MessageScreen() {
         )}
 
         <View style={styles.composerAccessoryDock}>
+          {showCallPrompt && (
+            <View style={styles.callPromptBar}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.callPromptTitle}>Call them?</Text>
+                <Text style={styles.callPromptSub}>
+                  You&apos;ve been chatting — try a voice or video call
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.callPromptBtn}
+                onPress={() => {
+                  void dismissCallPrompt();
+                  void startMediaCall({
+                    userId: String(id),
+                    name:
+                      (displayName &&
+                      displayName !== "User" &&
+                      displayName.toLowerCase() !== "unknown"
+                        ? displayName
+                        : "") ||
+                      profileUser?.name ||
+                      profileUser?.publicId ||
+                      "User",
+                    photo: displayPhoto || profileUser?.photo || "",
+                    gender: profileUser?.gender || "",
+                    publicId: profileUser?.publicId || "",
+                    callType: "voice",
+                  });
+                }}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="call" size={16} color="#fff" />
+                <Text style={styles.callPromptBtnText}>Call</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => void dismissCallPrompt()}
+                hitSlop={10}
+              >
+                <Ionicons name="close" size={18} color="#666" />
+              </TouchableOpacity>
+            </View>
+          )}
           {friendshipStatus?.iBlocked && (
             <View style={styles.youBlockedBar}>
               <Text style={styles.youBlockedText}>
@@ -4726,27 +4805,26 @@ const styles = StyleSheet.create({
   },
   chatMenuBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(11, 20, 26, 0.06)",
+    backgroundColor: "rgba(0,0,0,0.18)",
   },
   chatMenuCard: {
     position: "absolute",
-    width: 86,
+    width: 168,
     backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    paddingVertical: 0,
+    borderRadius: 14,
+    paddingVertical: 4,
     overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(11, 20, 26, 0.18)",
+    borderWidth: 0,
     shadowColor: "#000",
-    shadowOpacity: 0.28,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 16,
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 14,
   },
   chatMenuItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 38,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    minHeight: 46,
     justifyContent: "center",
     alignItems: "stretch",
     backgroundColor: "#FFFFFF",
@@ -4754,16 +4832,17 @@ const styles = StyleSheet.create({
   chatMenuDivider: {
     height: StyleSheet.hairlineWidth,
     alignSelf: "stretch",
-    backgroundColor: "#D1D7DB",
+    backgroundColor: "#DBDBDB",
   },
   chatMenuText: {
-    fontSize: 14,
-    color: "#111B21",
-    letterSpacing: 0.05,
+    fontSize: 15,
+    color: "#262626",
+    fontWeight: "400",
+    letterSpacing: 0,
     textAlign: "left",
   },
   chatMenuDanger: {
-    color: "#EA4335",
+    color: "#ED4956",
   },
   reportBackdrop: {
     flex: 1,
@@ -4888,6 +4967,40 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff3e0",
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#ffcc80",
+  },
+  callPromptBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#F3E8FF",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#E9D5FF",
+  },
+  callPromptTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#4C1D95",
+  },
+  callPromptSub: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  callPromptBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#6750A4",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  callPromptBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 13,
   },
   warningText: {
     fontSize: 12,

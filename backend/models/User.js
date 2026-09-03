@@ -46,6 +46,25 @@ const userSchema = new mongoose.Schema({
     coordinates: { type: [Number], default: [0, 0] }, // [longitude, latitude]
   },
   isVerified: { type: Boolean, default: false },
+  /**
+   * Photo / selfie verification (trust badge for Nearby + Explore).
+   * Separate from isVerified (email/Google identity) so discovery gating
+   * and blue-tick subscription badges stay untouched.
+   */
+  photoVerification: {
+    status: {
+      type: String,
+      enum: ['none', 'pending', 'approved', 'rejected'],
+      default: 'none',
+    },
+    selfieUrl: { type: String, default: '' },
+    submittedAt: { type: Date, default: null },
+    reviewedAt: { type: Date, default: null },
+    reviewNote: { type: String, default: '', maxlength: 500 },
+  },
+  /** Daily open streak (UTC date key) — retention, does not gate features */
+  openStreakDays: { type: Number, default: 0, min: 0 },
+  lastOpenDate: { type: String, default: null },
   /** Single-device session: only this installation may use the account */
   activeDeviceId: { type: String, default: null },
   activeDeviceBoundAt: { type: Date, default: null },
@@ -127,5 +146,9 @@ userSchema.index({ lastSeen: -1 });
 userSchema.index({ createdAt: -1 });
 // Daily suggestion digest — pick recently active accounts without a full scan
 userSchema.index({ isDeactivated: 1, deletionScheduledAt: 1, lastSeen: -1 });
+// Photo verification moderation queue
+userSchema.index({ 'photoVerification.status': 1, 'photoVerification.submittedAt': 1 });
+// Retention streak lookups
+userSchema.index({ lastOpenDate: 1 });
 
 module.exports = mongoose.model('User', userSchema);

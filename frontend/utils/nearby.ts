@@ -38,9 +38,12 @@ export interface NearbyUser {
   areFriends?: boolean;
   iLiked?: boolean;
   theyLiked?: boolean;
-  source?: 'nearby' | 'random';
+  source?: 'nearby' | 'random' | 'for_you';
   subscriptionBadge?: string | null;
   subscriptionExpiresAt?: string | null;
+  photoVerified?: boolean;
+  matchScore?: number;
+  matchReasons?: string[];
 }
 
 function resolvePhotoUrl(photo: string): string {
@@ -63,7 +66,7 @@ function formatDistanceKm(u: any): string | undefined {
   return undefined;
 }
 
-function mapNearbyUser(u: any): NearbyUser {
+export function mapNearbyUser(u: any): NearbyUser {
   const rawBadge = u.subscriptionBadge || u.subscription?.badge || null;
   const rawExpiresAt =
     u.subscriptionExpiresAt || u.subscription?.expiresAt || null;
@@ -93,9 +96,12 @@ function mapNearbyUser(u: any): NearbyUser {
     areFriends: !!u.areFriends,
     iLiked: !!u.iLiked,
     theyLiked: !!u.theyLiked,
-    source: u.source === 'random' ? 'random' : 'nearby',
+    source: u.source === 'for_you' ? 'for_you' : u.source === 'random' ? 'random' : 'nearby',
     subscriptionBadge: live ? rawBadge : null,
     subscriptionExpiresAt: live ? rawExpiresAt : null,
+    photoVerified: !!u.photoVerified,
+    matchScore: Number(u.matchScore) || undefined,
+    matchReasons: Array.isArray(u.matchReasons) ? u.matchReasons : undefined,
   };
 }
 

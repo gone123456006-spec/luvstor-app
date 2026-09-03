@@ -92,15 +92,28 @@ function composeDigest(signals) {
   let deepLink = '/(tabs)';
 
   if (matches > 0) {
-    title = matches === 1 ? 'You have a new match' : `You have ${matches} new matches`;
+    title =
+      matches === 1
+        ? 'You have a new match — say hi'
+        : `You have ${matches} new matches waiting`;
     deepLink = '/(tabs)/chat';
   } else if (likes > 0) {
-    title = `${plural(likes, 'person', 'people')} liked you`;
+    title =
+      likes === 1
+        ? '1 person liked you — see who'
+        : `${likes} people liked you — open to see who`;
     deepLink = '/(tabs)/chat';
   } else if (views > 0) {
-    title = `${plural(views, 'person', 'people')} viewed your profile`;
+    title =
+      views === 1
+        ? '1 person viewed your profile today'
+        : `${views} people viewed your profile today`;
   } else if (nearby > 0) {
-    title = `${plural(nearby, 'new person', 'new people')} joined near you`;
+    // Retention-first tray copy — concrete nearby count drives opens.
+    title =
+      nearby === 1
+        ? '1 new person near you'
+        : `${nearby} new people near you`;
   } else {
     return null;
   }
@@ -109,13 +122,15 @@ function composeDigest(signals) {
   if (views > 0 && !title.includes('viewed')) {
     extras.push(`${plural(views, 'profile visit', 'profile visits')}`);
   }
-  if (nearby > 0 && !title.includes('joined near you')) {
+  if (nearby > 0 && !title.includes('near you')) {
     extras.push(`${plural(nearby, 'new person', 'new people')} nearby`);
   }
 
   const body = extras.length
-    ? `Also waiting: ${extras.join(' · ')}.`
-    : 'Open Luvstor to see who is waiting for you.';
+    ? `Also waiting: ${extras.join(' · ')}. Tap to catch up.`
+    : nearby > 0
+      ? 'Open Discover and meet someone new today.'
+      : 'Open Luvstor to see who is waiting for you.';
 
   return { title, body, deepLink };
 }

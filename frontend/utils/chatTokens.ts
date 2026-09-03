@@ -121,6 +121,8 @@ export async function fetchTokenBalance(token: string): Promise<{
   spinCycleTokens?: number;
   spinCycle?: number[];
   spinCycleLength?: number;
+  openStreakDays?: number;
+  spinStreakDays?: number;
   hasActiveSession: boolean;
   remainingMs: number;
   sessionExpiresAt: string | null;

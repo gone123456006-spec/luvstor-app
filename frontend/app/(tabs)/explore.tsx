@@ -6,6 +6,7 @@ import {
     Dimensions,
     Platform,
     ScrollView,
+    StatusBar,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -110,6 +111,7 @@ export default function ExploreScreen() {
     );
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
+        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
         <Header />
         <View style={styles.callScreen}>
           <View style={styles.livePill}>
@@ -143,6 +145,7 @@ export default function ExploreScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <Header />
 
       <ScrollView
@@ -323,7 +326,7 @@ function ModeTile({
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: APP_BG,
+    backgroundColor: IG.surface,
   },
   header: {
     alignItems: "center",

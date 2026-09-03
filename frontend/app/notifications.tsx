@@ -1,102 +1,172 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ListRowSkeleton } from '../components/ScreenSkeleton';
+import { Ionicons } from "@expo/vector-icons";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Dimensions,
-  FlatList,
-  Modal,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import WhatsAppAvatar, { getDisplayName } from '../components/WhatsAppAvatar';
-import { useAppAlert } from '../components/AppAlert';
-import { useSocket } from '../contexts/SocketContext';
-import { API_BASE } from '../utils/api';
-import { getAuthToken } from '../utils/auth';
+    ActivityIndicator,
+    Dimensions,
+    FlatList,
+    Modal,
+    Pressable,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useAppAlert } from "../components/AppAlert";
+import { ListRowSkeleton } from "../components/ScreenSkeleton";
+import WhatsAppAvatar, { getDisplayName } from "../components/WhatsAppAvatar";
+import { useSocket } from "../contexts/SocketContext";
+import { API_BASE } from "../utils/api";
+import { getAuthToken } from "../utils/auth";
 import {
-  AppNotification,
-  clearAllNotifications,
-  deleteNotification,
-  fetchNotifications,
-  markNotificationsRead,
-  markNotificationsUnread,
-} from '../utils/notifications';
-import { routeForData } from '../utils/push';
+    AppNotification,
+    clearAllNotifications,
+    deleteNotification,
+    fetchNotifications,
+    markNotificationsRead,
+    markNotificationsUnread,
+} from "../utils/notifications";
+import { routeForData } from "../utils/push";
 
 const PAGE_SIZE = 25;
 
 const C = {
-  purple: '#8E2DE2',
-  text: '#111B21',
-  muted: '#667781',
-  preview: '#667781',
-  border: '#E9EDEF',
-  searchBg: '#F5F5F5',
-  pill: '#F5F5F5',
-  pillActive: '#F3E5F5',
+  purple: "#8E2DE2",
+  text: "#111B21",
+  muted: "#667781",
+  preview: "#667781",
+  border: "#E9EDEF",
+  searchBg: "#F5F5F5",
+  pill: "#F5F5F5",
+  pillActive: "#F3E5F5",
 };
 
-type FilterKey = 'All' | 'Unread';
+type FilterKey = "All" | "Unread";
 
 type ListRow =
-  | { kind: 'section'; id: string; title: string }
-  | { kind: 'item'; id: string; item: AppNotification };
+  | { kind: "section"; id: string; title: string }
+  | { kind: "item"; id: string; item: AppNotification };
 
 function resolvePhoto(photo?: string) {
-  if (!photo) return '';
-  if (photo.startsWith('http') || photo.startsWith('data:')) return photo;
+  if (!photo) return "";
+  if (photo.startsWith("http") || photo.startsWith("data:")) return photo;
   return `${API_BASE}${photo}`;
 }
 
-function typeMeta(type: AppNotification['type']) {
+function typeMeta(type: AppNotification["type"]) {
   switch (type) {
-    case 'friend_request':
-      return { icon: 'heart' as const, color: '#FF4B6E', bg: '#FFE8EE', label: 'Request' };
-    case 'like':
-      return { icon: 'heart' as const, color: '#FF4B6E', bg: '#FFE8EE', label: 'Like' };
-    case 'match':
-      return { icon: 'flame' as const, color: '#FF4B6E', bg: '#FFE8EE', label: 'Match' };
-    case 'friends':
-      return { icon: 'people' as const, color: C.purple, bg: '#F3E8FF', label: 'Friends' };
-    case 'chat':
-      return { icon: 'chatbubble' as const, color: C.purple, bg: '#F3E8FF', label: 'Message' };
-    case 'call':
-      return { icon: 'call' as const, color: '#25D366', bg: '#E7F8EF', label: 'Call' };
-    case 'token':
-    case 'token_purchase':
-      return { icon: 'diamond' as const, color: '#F59E0B', bg: '#FFF8E6', label: 'Tokens' };
-    case 'token_low':
-      return { icon: 'alert-circle' as const, color: '#EA4335', bg: '#FDECEA', label: 'Tokens' };
-    case 'spin':
-      return { icon: 'sparkles' as const, color: C.purple, bg: '#F3E8FF', label: 'Spin' };
-    case 'subscription':
-      return { icon: 'ribbon' as const, color: C.purple, bg: '#F3E8FF', label: 'Plan' };
-    case 'security':
-      return { icon: 'shield-checkmark' as const, color: '#EA4335', bg: '#FDECEA', label: 'Security' };
-    case 'promo':
-      return { icon: 'pricetag' as const, color: '#F59E0B', bg: '#FFF8E6', label: 'Offer' };
-    case 'suggestion':
-      return { icon: 'compass' as const, color: C.purple, bg: '#F3E8FF', label: 'For you' };
+    case "friend_request":
+      return {
+        icon: "heart" as const,
+        color: "#FF4B6E",
+        bg: "#FFE8EE",
+        label: "Request",
+      };
+    case "like":
+      return {
+        icon: "heart" as const,
+        color: "#FF4B6E",
+        bg: "#FFE8EE",
+        label: "Like",
+      };
+    case "match":
+      return {
+        icon: "flame" as const,
+        color: "#FF4B6E",
+        bg: "#FFE8EE",
+        label: "Match",
+      };
+    case "friends":
+      return {
+        icon: "people" as const,
+        color: C.purple,
+        bg: "#F3E8FF",
+        label: "Friends",
+      };
+    case "chat":
+      return {
+        icon: "chatbubble" as const,
+        color: C.purple,
+        bg: "#F3E8FF",
+        label: "Message",
+      };
+    case "call":
+      return {
+        icon: "call" as const,
+        color: "#25D366",
+        bg: "#E7F8EF",
+        label: "Call",
+      };
+    case "token":
+    case "token_purchase":
+      return {
+        icon: "diamond" as const,
+        color: "#F59E0B",
+        bg: "#FFF8E6",
+        label: "Tokens",
+      };
+    case "token_low":
+      return {
+        icon: "alert-circle" as const,
+        color: "#EA4335",
+        bg: "#FDECEA",
+        label: "Tokens",
+      };
+    case "spin":
+      return {
+        icon: "sparkles" as const,
+        color: C.purple,
+        bg: "#F3E8FF",
+        label: "Spin",
+      };
+    case "subscription":
+      return {
+        icon: "ribbon" as const,
+        color: C.purple,
+        bg: "#F3E8FF",
+        label: "Plan",
+      };
+    case "security":
+      return {
+        icon: "shield-checkmark" as const,
+        color: "#EA4335",
+        bg: "#FDECEA",
+        label: "Security",
+      };
+    case "promo":
+      return {
+        icon: "pricetag" as const,
+        color: "#F59E0B",
+        bg: "#FFF8E6",
+        label: "Offer",
+      };
+    case "suggestion":
+      return {
+        icon: "compass" as const,
+        color: C.purple,
+        bg: "#F3E8FF",
+        label: "For you",
+      };
     default:
-      return { icon: 'notifications' as const, color: C.purple, bg: '#F3E8FF', label: 'Update' };
+      return {
+        icon: "notifications" as const,
+        color: C.purple,
+        bg: "#F3E8FF",
+        label: "Update",
+      };
   }
 }
 
 const PERSON_TYPES = new Set([
-  'chat',
-  'call',
-  'friend_request',
-  'friends',
-  'like',
-  'match',
+  "chat",
+  "call",
+  "friend_request",
+  "friends",
+  "like",
+  "match",
 ]);
 
 function startOfDay(d: Date) {
@@ -105,29 +175,29 @@ function startOfDay(d: Date) {
 
 function sectionTitle(iso: string) {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return 'Earlier';
+  if (Number.isNaN(d.getTime())) return "Earlier";
   const today = startOfDay(new Date());
   const day = startOfDay(d);
   const diff = today - day;
-  if (diff === 0) return 'Today';
-  if (diff === 86400000) return 'Yesterday';
-  return 'Earlier';
+  if (diff === 0) return "Today";
+  if (diff === 86400000) return "Yesterday";
+  return "Earlier";
 }
 
 function formatWhen(iso: string) {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
+  if (Number.isNaN(d.getTime())) return "";
   const now = Date.now();
   const diff = now - d.getTime();
-  if (diff < 60_000) return 'now';
+  if (diff < 60_000) return "now";
   if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86400_000) {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
   if (diff < 7 * 86400_000) {
-    return d.toLocaleDateString([], { weekday: 'short' });
+    return d.toLocaleDateString([], { weekday: "short" });
   }
-  return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  return d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
 function displayTitle(n: AppNotification) {
@@ -138,11 +208,11 @@ function displayTitle(n: AppNotification) {
 }
 
 function displayBody(n: AppNotification) {
-  if (n.type === 'friend_request') return n.body || 'Liked you';
-  if (n.type === 'friends') return n.body || "You're now friends";
-  if (n.type === 'chat') return n.body || 'New message';
-  if (n.type === 'match') return n.body || "It's a match!";
-  if (n.type === 'call') return n.body || 'Incoming call';
+  if (n.type === "friend_request") return n.body || "Liked you";
+  if (n.type === "friends") return n.body || "You're now friends";
+  if (n.type === "chat") return n.body || "New message";
+  if (n.type === "match") return n.body || "It's a match!";
+  if (n.type === "call") return n.body || "Incoming call";
   return n.body || n.title;
 }
 
@@ -155,8 +225,8 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filter, setFilter] = useState<FilterKey>('All');
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState<FilterKey>("All");
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 56, right: 12 });
   const [selected, setSelected] = useState<AppNotification | null>(null);
@@ -169,7 +239,7 @@ export default function NotificationsScreen() {
   /** Anchor the overflow menu under the ⋮ button on any screen size. */
   const openMenu = useCallback(() => {
     const node = moreBtnRef.current;
-    if (!node || typeof (node as any).measureInWindow !== 'function') {
+    if (!node || typeof (node as any).measureInWindow !== "function") {
       setMenuPos({ top: 56, right: 12 });
       setMenuOpen(true);
       return;
@@ -177,7 +247,7 @@ export default function NotificationsScreen() {
 
     (node as any).measureInWindow(
       (x: number, y: number, width: number, height: number) => {
-        const { width: winW, height: winH } = Dimensions.get('window');
+        const { width: winW, height: winH } = Dimensions.get("window");
         const menuWidth = 220;
         const gap = 4;
         const edge = 8;
@@ -214,7 +284,7 @@ export default function NotificationsScreen() {
 
         const page = await fetchNotifications(token, {
           limit: PAGE_SIZE,
-          filter: filter === 'Unread' ? 'unread' : 'all',
+          filter: filter === "Unread" ? "unread" : "all",
         });
 
         setItems(page.notifications);
@@ -244,7 +314,7 @@ export default function NotificationsScreen() {
       const page = await fetchNotifications(token, {
         limit: PAGE_SIZE,
         cursor: cursor.current,
-        filter: filter === 'Unread' ? 'unread' : 'all',
+        filter: filter === "Unread" ? "unread" : "all",
       });
 
       setItems((prev) => {
@@ -270,27 +340,27 @@ export default function NotificationsScreen() {
 
   // Filtering by read state happens server-side; hide personal chats + search
   const filtered = useMemo(() => {
-    const noChat = items.filter((n) => n.type !== 'chat');
+    const noChat = items.filter((n) => n.type !== "chat");
     const q = searchQuery.trim().toLowerCase();
     if (!q) return noChat;
     return noChat.filter(
       (n) =>
         n.title.toLowerCase().includes(q) ||
-        (n.body || '').toLowerCase().includes(q) ||
-        (n.actorName || '').toLowerCase().includes(q),
+        (n.body || "").toLowerCase().includes(q) ||
+        (n.actorName || "").toLowerCase().includes(q),
     );
   }, [items, searchQuery]);
 
   const rows: ListRow[] = useMemo(() => {
     const out: ListRow[] = [];
-    let lastSection = '';
+    let lastSection = "";
     for (const item of filtered) {
       const section = sectionTitle(item.createdAt);
       if (section !== lastSection) {
-        out.push({ kind: 'section', id: `sec-${section}`, title: section });
+        out.push({ kind: "section", id: `sec-${section}`, title: section });
         lastSection = section;
       }
-      out.push({ kind: 'item', id: item._id, item });
+      out.push({ kind: "item", id: item._id, item });
     }
     return out;
   }, [filtered]);
@@ -317,15 +387,15 @@ export default function NotificationsScreen() {
       actorId: n.actorId,
     });
 
-    if (route.startsWith('/messages/')) {
+    if (route.startsWith("/messages/")) {
       router.push({
-        pathname: '/messages/[id]',
+        pathname: "/messages/[id]",
         params: {
-          id: route.split('/messages/')[1],
-          name: n.actorName || 'User',
-          photo: resolvePhoto(n.actorPhoto) || '',
-          gender: n.actorGender || '',
-          isOnline: 'false',
+          id: route.split("/messages/")[1],
+          name: n.actorName || "User",
+          photo: resolvePhoto(n.actorPhoto) || "",
+          gender: n.actorGender || "",
+          isOnline: "false",
         },
       });
       return;
@@ -341,7 +411,7 @@ export default function NotificationsScreen() {
       await markNotificationsRead(token, { all: true });
       setItems((prev) => prev.map((x) => ({ ...x, read: true })));
       refreshNotifUnread();
-      if (filter === 'Unread') load(true);
+      if (filter === "Unread") load(true);
     } catch {
       /* ignore */
     }
@@ -351,13 +421,14 @@ export default function NotificationsScreen() {
     setMenuOpen(false);
     if (!items.length) return;
     showAlert({
-      title: 'Clear all notifications?',
-      message: 'This removes your entire notification history. It cannot be undone.',
+      title: "Clear all notifications?",
+      message:
+        "This removes your entire notification history. It cannot be undone.",
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
+        { text: "Cancel", style: "cancel" },
         {
-          text: 'Clear all',
-          style: 'destructive',
+          text: "Clear all",
+          style: "destructive",
           onPress: async () => {
             try {
               const token = await getAuthToken();
@@ -368,7 +439,10 @@ export default function NotificationsScreen() {
               hasMore.current = false;
               refreshNotifUnread();
             } catch {
-              showAlert({ title: 'Could not clear', message: 'Please try again.' });
+              showAlert({
+                title: "Could not clear",
+                message: "Please try again.",
+              });
             }
           },
         },
@@ -411,7 +485,7 @@ export default function NotificationsScreen() {
   };
 
   const renderRow = ({ item: row }: { item: ListRow }) => {
-    if (row.kind === 'section') {
+    if (row.kind === "section") {
       return (
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{row.title}</Text>
@@ -437,7 +511,7 @@ export default function NotificationsScreen() {
             {isPerson ? (
               <WhatsAppAvatar
                 photo={resolvePhoto(item.actorPhoto)}
-                name={item.actorName || item.title || 'User'}
+                name={item.actorName || item.title || "User"}
                 size={52}
               />
             ) : (
@@ -456,9 +530,7 @@ export default function NotificationsScreen() {
         <View style={styles.chatInfo}>
           <View style={styles.chatRow}>
             <View style={styles.nameRow}>
-              <Text
-                style={[styles.chatName, unread && styles.chatNameUnread]}
-              >
+              <Text style={[styles.chatName, unread && styles.chatNameUnread]}>
                 {displayTitle(item)}
               </Text>
               {!isPerson && (
@@ -490,7 +562,7 @@ export default function NotificationsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
 
       {/* WhatsApp-style header */}
@@ -520,7 +592,7 @@ export default function NotificationsScreen() {
               accessibilityRole="button"
               accessibilityLabel="More options"
             >
-              <Ionicons name="ellipsis-vertical" size={22} color="#111B21" />
+              <Ionicons name="ellipsis-horizontal" size={22} color="#262626" />
             </TouchableOpacity>
           </View>
         </View>
@@ -528,7 +600,12 @@ export default function NotificationsScreen() {
 
       {/* Search */}
       <View style={styles.searchContainer}>
-        <Ionicons name="search" size={18} color="#888" style={styles.searchIcon} />
+        <Ionicons
+          name="search"
+          size={18}
+          color="#888"
+          style={styles.searchIcon}
+        />
         <TextInput
           style={styles.searchInput}
           placeholder="Search"
@@ -539,7 +616,7 @@ export default function NotificationsScreen() {
           clearButtonMode="while-editing"
         />
         {!!searchQuery && (
-          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={8}>
+          <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
             <Ionicons name="close-circle" size={18} color="#BBB" />
           </TouchableOpacity>
         )}
@@ -547,7 +624,7 @@ export default function NotificationsScreen() {
 
       {/* Filters */}
       <View style={styles.filtersRow}>
-        {(['All', 'Unread'] as FilterKey[]).map((key) => {
+        {(["All", "Unread"] as FilterKey[]).map((key) => {
           const active = filter === key;
           return (
             <TouchableOpacity
@@ -556,10 +633,12 @@ export default function NotificationsScreen() {
               onPress={() => setFilter(key)}
               activeOpacity={0.7}
             >
-              <Text style={[styles.filterText, active && styles.filterTextActive]}>
+              <Text
+                style={[styles.filterText, active && styles.filterTextActive]}
+              >
                 {key}
               </Text>
-              {key === 'Unread' && notifUnreadCount > 0 && (
+              {key === "Unread" && notifUnreadCount > 0 && (
                 <View
                   style={[
                     styles.filterCount,
@@ -567,7 +646,7 @@ export default function NotificationsScreen() {
                   ]}
                 >
                   <Text style={styles.filterCountText}>
-                    {notifUnreadCount > 99 ? '99+' : notifUnreadCount}
+                    {notifUnreadCount > 99 ? "99+" : notifUnreadCount}
                   </Text>
                 </View>
               )}
@@ -615,14 +694,16 @@ export default function NotificationsScreen() {
             <View style={styles.empty}>
               <Ionicons name="notifications-outline" size={56} color="#DDD" />
               <Text style={styles.emptyTitle}>
-                {filter === 'Unread' ? 'No unread notifications' : 'No notifications yet'}
+                {filter === "Unread"
+                  ? "No unread notifications"
+                  : "No notifications yet"}
               </Text>
             </View>
           }
         />
       )}
 
-      {/* Header overflow menu — positioned under the ⋮ on every device */}
+      {/* Header overflow menu */}
       <Modal
         visible={menuOpen}
         transparent
@@ -630,31 +711,33 @@ export default function NotificationsScreen() {
         statusBarTranslucent
         onRequestClose={() => setMenuOpen(false)}
       >
-        <Pressable style={styles.menuBackdrop} onPress={() => setMenuOpen(false)}>
+        <Pressable
+          style={styles.menuBackdrop}
+          onPress={() => setMenuOpen(false)}
+        >
           <View
             style={[
               styles.menuCard,
               { top: menuPos.top, right: menuPos.right },
             ]}
-            // Stop backdrop press from closing when tapping inside the card
             onStartShouldSetResponder={() => true}
           >
             <TouchableOpacity
               style={styles.menuItem}
               onPress={markAll}
-              activeOpacity={0.55}
+              activeOpacity={0.65}
             >
-              <Ionicons name="checkmark-done" size={20} color={C.text} />
               <Text style={styles.menuText}>Mark all as read</Text>
             </TouchableOpacity>
             <View style={styles.menuDivider} />
             <TouchableOpacity
               style={styles.menuItem}
               onPress={clearAll}
-              activeOpacity={0.55}
+              activeOpacity={0.65}
             >
-              <Ionicons name="trash-outline" size={20} color="#EA4335" />
-              <Text style={[styles.menuText, styles.menuTextDanger]}>Clear all</Text>
+              <Text style={[styles.menuText, styles.menuTextDanger]}>
+                Clear all
+              </Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -664,36 +747,44 @@ export default function NotificationsScreen() {
       <Modal
         visible={!!selected}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setSelected(null)}
       >
-        <Pressable style={styles.sheetBackdrop} onPress={() => setSelected(null)}>
-          <View style={styles.sheet}>
-            <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle} numberOfLines={1}>
-              {selected ? displayTitle(selected) : ''}
-            </Text>
-
+        <Pressable
+          style={styles.sheetBackdrop}
+          onPress={() => setSelected(null)}
+        >
+          <View
+            style={styles.sheetWrap}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.sheet}>
+              <TouchableOpacity
+                style={styles.sheetItem}
+                onPress={() => selected && toggleRead(selected)}
+                activeOpacity={0.65}
+              >
+                <Text style={styles.sheetText}>
+                  {selected?.read ? "Mark as unread" : "Mark as read"}
+                </Text>
+              </TouchableOpacity>
+              <View style={styles.sheetDivider} />
+              <TouchableOpacity
+                style={styles.sheetItem}
+                onPress={() => selected && removeOne(selected)}
+                activeOpacity={0.65}
+              >
+                <Text style={[styles.sheetText, styles.menuTextDanger]}>
+                  Delete
+                </Text>
+              </TouchableOpacity>
+            </View>
             <TouchableOpacity
-              style={styles.sheetItem}
-              onPress={() => selected && toggleRead(selected)}
+              style={styles.sheetCancel}
+              onPress={() => setSelected(null)}
+              activeOpacity={0.7}
             >
-              <Ionicons
-                name={selected?.read ? 'mail-unread-outline' : 'checkmark-done'}
-                size={20}
-                color={C.text}
-              />
-              <Text style={styles.sheetText}>
-                {selected?.read ? 'Mark as unread' : 'Mark as read'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.sheetItem}
-              onPress={() => selected && removeOne(selected)}
-            >
-              <Ionicons name="trash-outline" size={20} color="#EA4335" />
-              <Text style={[styles.sheetText, styles.menuTextDanger]}>Delete</Text>
+              <Text style={styles.sheetCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -703,31 +794,31 @@ export default function NotificationsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: "#fff" },
   header: {
     paddingHorizontal: 4,
     paddingTop: 2,
     paddingBottom: 4,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     zIndex: 20,
   },
   headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     minHeight: 48,
   },
   backBtn: {
     width: 44,
     height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     flexShrink: 0,
   },
   headerTitle: {
     flex: 1,
     fontSize: 22,
-    fontWeight: '700',
-    color: '#111B21',
+    fontWeight: "700",
+    color: "#111B21",
     letterSpacing: -0.3,
     marginLeft: 2,
     marginRight: 8,
@@ -739,12 +830,12 @@ const styles = StyleSheet.create({
   moreBtn: {
     width: 44,
     height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: C.searchBg,
     marginHorizontal: 12,
     paddingHorizontal: 12,
@@ -756,19 +847,19 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
-    color: '#333',
+    color: "#333",
     paddingVertical: 0,
   },
   filtersRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 12,
     marginBottom: 4,
     gap: 8,
   },
   filterPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
     paddingHorizontal: 14,
     paddingVertical: 7,
@@ -780,8 +871,8 @@ const styles = StyleSheet.create({
   },
   filterText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: "600",
+    color: "#666",
   },
   filterTextActive: {
     color: C.purple,
@@ -791,117 +882,117 @@ const styles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     paddingHorizontal: 4,
-    backgroundColor: '#111',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#111",
+    alignItems: "center",
+    justifyContent: "center",
   },
   filterCountActive: {
-    backgroundColor: '#111',
+    backgroundColor: "#111",
   },
   filterCountText: {
     fontSize: 10,
-    fontWeight: '700',
-    color: '#fff',
+    fontWeight: "700",
+    color: "#fff",
   },
   sectionHeader: {
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 6,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   sectionTitle: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
     color: C.muted,
   },
   listContent: {
     paddingBottom: 28,
   },
   chatItem: {
-    flexDirection: 'row',
+    flexDirection: "row",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   avatarWrap: {
     width: 52,
     height: 52,
     marginRight: 12,
-    overflow: 'visible',
+    overflow: "visible",
   },
   avatarClip: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   iconCircle: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   typeBadge: {
-    position: 'absolute',
+    position: "absolute",
     right: -3,
     bottom: -3,
     width: 20,
     height: 20,
     borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: "#fff",
     zIndex: 3,
     elevation: 3,
   },
   chatInfo: {
     flex: 1,
     minWidth: 0,
-    justifyContent: 'center',
+    justifyContent: "center",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.border,
     paddingBottom: 12,
   },
   chatRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
   },
   messageRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
     marginTop: 2,
   },
   nameRow: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginRight: 8,
     minWidth: 0,
   },
   chatName: {
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: "500",
     color: C.text,
     flexShrink: 1,
     lineHeight: 22,
   },
   chatNameUnread: {
-    fontWeight: '700',
+    fontWeight: "700",
   },
   typeTag: {
     marginLeft: 6,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 8,
-    backgroundColor: '#F3E5F5',
+    backgroundColor: "#F3E5F5",
   },
   typeTagText: {
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: "700",
     color: C.purple,
   },
   chatTime: {
@@ -913,7 +1004,7 @@ const styles = StyleSheet.create({
   },
   chatTimeUnread: {
     color: C.purple,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   lastMessage: {
     flex: 1,
@@ -924,126 +1015,145 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   lastMessageUnread: {
-    color: '#3B4A54',
-    fontWeight: '600',
+    color: "#3B4A54",
+    fontWeight: "600",
   },
   unreadBadge: {
     minWidth: 20,
     height: 20,
     borderRadius: 10,
     paddingHorizontal: 5,
-    backgroundColor: '#111',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#111",
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: 2,
   },
   unreadBadgeText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   footerLoader: {
     paddingVertical: 18,
-    alignItems: 'center',
+    alignItems: "center",
   },
   menuBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(11, 20, 26, 0.22)',
+    backgroundColor: "rgba(0,0,0,0.2)",
   },
   menuCard: {
-    position: 'absolute',
-    width: 220,
-    maxWidth: '86%',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    paddingVertical: 6,
-    // WhatsApp-style elevation
-    shadowColor: '#000',
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 12,
+    position: "absolute",
+    width: 210,
+    maxWidth: "86%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    paddingVertical: 4,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 14,
   },
   menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
     minHeight: 48,
+    justifyContent: "center",
   },
   menuDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: C.border,
-    marginHorizontal: 12,
+    backgroundColor: "#DBDBDB",
+    marginHorizontal: 0,
   },
   menuText: {
-    flex: 1,
-    fontSize: 16,
-    color: C.text,
-    fontWeight: '400',
+    fontSize: 15,
+    color: "#262626",
+    fontWeight: "400",
+    textAlign: "left",
   },
   menuTextDanger: {
-    color: '#EA4335',
+    color: "#ED4956",
   },
   sheetBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(11,20,26,0.4)',
-    justifyContent: 'flex-end',
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+  },
+  sheetWrap: {
+    gap: 8,
   },
   sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingBottom: 28,
-    paddingTop: 8,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    overflow: "hidden",
   },
   sheetHandle: {
-    alignSelf: 'center',
-    width: 38,
+    alignSelf: "center",
+    width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#DDD',
+    backgroundColor: "#DBDBDB",
     marginBottom: 10,
   },
   sheetTitle: {
     fontSize: 13,
-    fontWeight: '700',
-    color: C.muted,
+    fontWeight: "600",
+    color: "#8E8E8E",
+    textAlign: "center",
     paddingHorizontal: 20,
     paddingBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
   },
   sheetItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingVertical: 16,
+    minHeight: 52,
+  },
+  sheetDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#DBDBDB",
   },
   sheetText: {
     fontSize: 16,
-    color: C.text,
+    color: "#262626",
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  sheetCancel: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    minHeight: 52,
+  },
+  sheetCancelText: {
+    fontSize: 16,
+    color: "#262626",
+    fontWeight: "700",
   },
   centered: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   emptyWrap: { flexGrow: 1 },
   empty: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 40,
     paddingBottom: 80,
     gap: 8,
   },
   emptyTitle: {
     fontSize: 17,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: "600",
+    color: "#666",
     marginTop: 8,
   },
 });

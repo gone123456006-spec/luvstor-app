@@ -3,25 +3,25 @@ import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
-  Animated,
-  Dimensions,
-  Keyboard,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
-  View,
+    ActivityIndicator,
+    Animated,
+    Dimensions,
+    Keyboard,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    TouchableWithoutFeedback,
+    View,
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Path } from "react-native-svg";
 import DeviceTransferModal from "../components/DeviceTransferModal";
 import {
-  getGoogleAuthConfigHint,
-  isGoogleAuthConfigured,
+    getGoogleAuthConfigHint,
+    isGoogleAuthConfigured,
 } from "../config/googleAuth";
 import { useAuth } from "../contexts/AuthContext";
 import { mapGoogleSignInError, useGoogleAuth } from "../hooks/useGoogleAuth";

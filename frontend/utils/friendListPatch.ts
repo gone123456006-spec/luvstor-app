@@ -54,7 +54,8 @@ export function patchListsForFriendAction(
     | 'friends'
     | 'unlike'
     | 'decline'
-    | 'incoming_like',
+    | 'incoming_like'
+    | 'soft_withdraw',
 ): FriendPatchResult {
   let conversations = cloneRows(snapshot.conversations);
   let friendRows = cloneRows(snapshot.friendRows);
@@ -98,7 +99,7 @@ export function patchListsForFriendAction(
       lastMessage: 'You liked them',
     };
     conversations = upsertRow(conversations, row);
-    requestRows = removeRow(requestRows, otherId);
+    // Keep existing request rows — never wipe Request on outgoing sync.
     onlineRows = patchRow(onlineRows, otherId, { iLiked: true });
   } else if (action === 'like_back' || action === 'friends') {
     const row: ConversationItem = {
@@ -119,6 +120,35 @@ export function patchListsForFriendAction(
       areFriends: true,
       iLiked: true,
       theyLiked: true,
+    });
+  } else if (action === 'soft_withdraw') {
+    // Remote unlike/decline: update labels only — keep All / Friend / Request rows.
+    conversations = patchRow(conversations, otherId, {
+      areFriends: false,
+      iLiked: false,
+      theyLiked: false,
+      relationshipStatus: 'stranger',
+      requestType: undefined,
+      category: 'stranger',
+      lastMessage: base.lastMessage || 'No longer matched',
+    });
+    friendRows = patchRow(friendRows, otherId, {
+      areFriends: false,
+      iLiked: false,
+      theyLiked: false,
+      relationshipStatus: 'stranger',
+      lastMessage: 'No longer matched',
+    });
+    requestRows = patchRow(requestRows, otherId, {
+      theyLiked: false,
+      relationshipStatus: 'stranger',
+      lastMessage: 'Like withdrawn',
+    });
+    onlineRows = patchRow(onlineRows, otherId, {
+      category: 'stranger',
+      areFriends: false,
+      iLiked: false,
+      theyLiked: false,
     });
   } else if (action === 'unlike') {
     const row: ConversationItem = {

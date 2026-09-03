@@ -64,6 +64,9 @@ function spinPayload(user, now = new Date()) {
     spinCycleTokens: cycle[spinCycleDay - 1],
     spinCycle: cycle,
     spinCycleLength: cycle.length,
+    /** Retention: consecutive open days + spin cycle day as spin streak */
+    openStreakDays: Number(user.openStreakDays) || 0,
+    spinStreakDays: spinCycleDay,
     subscription: serializeSubscription(user, now),
   };
 }
@@ -96,7 +99,7 @@ router.get('/balance', auth, async (req, res) => {
   try {
     await syncExpiredSubscription(req.userId);
     const user = await User.findById(req.userId).select(
-      'tokenBalance lastSpinDate spinCycleDay spinCycleDate chatSessionExpiresAt chatSessionStartedAt subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday',
+      'tokenBalance lastSpinDate spinCycleDay spinCycleDate chatSessionExpiresAt chatSessionStartedAt subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday openStreakDays lastOpenDate',
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     const access = serializeAccess(user);
