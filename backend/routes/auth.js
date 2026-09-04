@@ -238,11 +238,15 @@ router.post('/send-otp', async (req, res) => {
   } catch (err) {
     console.error('send-otp error:', err);
     const message =
-      err.code === 'EAUTH'
-        ? 'SMTP authentication failed. Use a Gmail App Password (not your regular password).'
-        : err.code === 'ESOCKET' || err.code === 'ECONNECTION'
-          ? `Cannot reach SMTP server at ${smtpConfig.host}:${smtpConfig.port}`
-          : 'Failed to send verification email. Check SMTP settings in backend/.env';
+      err.code === 'RENDER_SMTP_BLOCKED'
+        ? 'Email blocked on this host. Set BREVO_API_KEY in Render (SMTP ports are blocked on free tier).'
+        : err.code === 'BREVO_API'
+          ? 'Brevo API rejected the email. Check BREVO_API_KEY and that SMTP_FROM_EMAIL is verified in Brevo.'
+          : err.code === 'EAUTH'
+            ? 'SMTP authentication failed. Check SMTP_USER / SMTP_PASS or use BREVO_API_KEY.'
+            : err.code === 'ESOCKET' || err.code === 'ECONNECTION' || /timeout/i.test(err.message || '')
+              ? `Cannot reach SMTP (${smtpConfig.host}:${smtpConfig.port}). On Render free tier set BREVO_API_KEY instead.`
+              : 'Failed to send verification email. Check BREVO_API_KEY / SMTP settings.';
 
     res.status(500).json({ error: message });
   }

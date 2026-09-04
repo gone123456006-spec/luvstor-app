@@ -28,7 +28,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#8E2DE2",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "foregroundImage": "./assets/images/icon.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
@@ -90,12 +90,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 250,
+          "image": "./assets/images/luvstoer logo.png",
+          "imageWidth": 120,
           "resizeMode": "contain",
           "backgroundColor": "#8E2DE2",
           "dark": {
-            "backgroundColor": "#4A00E0"
+            "backgroundColor": "#8E2DE2"
           }
         }
       ],

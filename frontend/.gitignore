@@ -42,6 +42,9 @@ app-example
 /ios
 /android
 
+# local release copies
+/dist
+
 # secrets — never commit
 .env
 backend/.env

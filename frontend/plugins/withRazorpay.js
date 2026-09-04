@@ -9,6 +9,15 @@ const withRazorpay = (config) => {
   config = withAndroidManifest(config, async (config) => {
     const androidManifest = config.modResults.manifest;
 
+    // Ensure tools namespace for tools:replace on CheckoutActivity
+    if (!androidManifest.$) {
+      androidManifest.$ = {};
+    }
+    if (!androidManifest.$['xmlns:tools']) {
+      androidManifest.$['xmlns:tools'] =
+        'http://schemas.android.com/tools';
+    }
+
     // Ensure application tag exists
     if (!androidManifest.application) {
       androidManifest.application = [{}];
@@ -21,21 +30,25 @@ const withRazorpay = (config) => {
       application.activity = [];
     }
 
-    // Check if Razorpay activity already exists
-    const hasRazorpayActivity = application.activity.some(
+    // Align with razorpay:standard-core (exported=false) and force merge
+    const razorpayAttrs = {
+      'android:name': 'com.razorpay.CheckoutActivity',
+      'android:configChanges':
+        'keyboard|keyboardHidden|orientation|screenSize',
+      'android:exported': 'false',
+      'android:theme': '@style/CheckoutTheme',
+      'tools:replace': 'android:exported',
+    };
+
+    const existing = application.activity.find(
       (activity) =>
         activity.$?.['android:name'] === 'com.razorpay.CheckoutActivity'
     );
 
-    if (!hasRazorpayActivity) {
-      application.activity.push({
-        $: {
-          'android:name': 'com.razorpay.CheckoutActivity',
-          'android:configChanges': 'keyboard|keyboardHidden|orientation|screenSize',
-          'android:exported': 'true',
-          'android:theme': '@style/CheckoutTheme',
-        },
-      });
+    if (existing) {
+      existing.$ = { ...existing.$, ...razorpayAttrs };
+    } else {
+      application.activity.push({ $: razorpayAttrs });
     }
 
     return config;

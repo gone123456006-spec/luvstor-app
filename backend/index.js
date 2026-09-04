@@ -364,8 +364,14 @@ async function startHttp() {
   try {
     await verifySmtpConnection();
   } catch (smtpErr) {
-    console.error('❌ SMTP connection failed:', smtpErr.message);
-    console.warn('   Server starting anyway. Fix SMTP in .env to send emails.');
+    console.error('❌ Email connection failed:', smtpErr.message);
+    if (/timeout|ETIMEDOUT|ECONNECTION|ESOCKET/i.test(smtpErr.message || '')) {
+      console.warn(
+        '   Tip: Render free tier blocks SMTP ports 25/465/587. Set BREVO_API_KEY (HTTPS) instead of SMTP.',
+      );
+    } else {
+      console.warn('   Server starting anyway. Fix BREVO_API_KEY / SMTP in env to send emails.');
+    }
   }
 
   server.on('error', (err) => {

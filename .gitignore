@@ -2,7 +2,11 @@ node_modules
 
 # Secrets — never commit
 .env
-.env.local
+.env.*
+!.env.example
+!**/.env.example
+backend/.env
+frontend/.env
 backend/config/firebase-service-account.json
 backend/config/*.serviceaccount.json
 backend/config/*-firebase-adminsdk-*.json
