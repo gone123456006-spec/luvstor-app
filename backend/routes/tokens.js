@@ -326,61 +326,14 @@ router.post('/spin', auth, async (req, res) => {
 
 // ─────────────────────────────────────────────
 // POST /api/tokens/purchase
+// Disabled: previously credited packs with no payment (fraud vector).
+// Real purchases must go through /api/payment/create-order + /verify.
 // ─────────────────────────────────────────────
-router.post('/purchase', auth, async (req, res) => {
-  try {
-    const PACKS = {
-      '10': 10,
-      '100': 100,
-      '500': 500,
-      '1000': 1000,
-      '5000': 5000,
-      '10000': 10000,
-      '50000': 50000,
-      '100000': 100000,
-    };
-    const name = String(req.body.packageName || '');
-    const baseAmount = PACKS[name];
-    if (!baseAmount) {
-      return res.status(400).json({ error: 'Invalid package' });
-    }
-
-    const existing = await User.findById(req.userId).select(
-      'subscriptionPlan subscriptionExpiresAt',
-    );
-    const { totalTokens } = applyTokenBonus(baseAmount, existing);
-
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { $inc: { tokenBalance: totalTokens } },
-      {
-        new: true,
-        select:
-          'tokenBalance lastSpinDate chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
-      },
-    );
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const io = req.app.get('io');
-    await createNotification(io, {
-      userId: req.userId,
-      type: 'token_purchase',
-      title: 'Tokens added',
-      body: `${totalTokens} tokens were credited to your balance.`,
-      data: { screen: 'token', credited: totalTokens, packageName: name },
-    });
-
-    res.json({
-      success: true,
-      packageName: name,
-      credited: totalTokens,
-      tokenBalance: user.tokenBalance ?? 0,
-      ...serializeAccess(user),
-    });
-  } catch (err) {
-    console.error('tokens/purchase error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
+router.post('/purchase', auth, async (_req, res) => {
+  return res.status(403).json({
+    error: 'Direct token purchase is disabled. Complete payment via /api/payment/create-order.',
+    code: 'PAYMENT_REQUIRED',
+  });
 });
 
 module.exports = router;

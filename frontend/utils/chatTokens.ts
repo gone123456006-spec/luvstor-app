@@ -196,7 +196,7 @@ export async function claimDailySpin(authToken: string): Promise<{
   }
 }
 
-/** Credit a token pack to server balance (used by Tokens tab Buy buttons). */
+/** @deprecated Direct purchase is disabled server-side (PAYMENT_REQUIRED). Use Razorpay flow. */
 export async function purchaseTokenPack(
   authToken: string,
   packageName: string,
@@ -209,7 +209,7 @@ export async function purchaseTokenPack(
     },
     body: JSON.stringify({ packageName }),
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     return {
       success: false,

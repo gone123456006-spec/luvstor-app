@@ -6,6 +6,7 @@ const auth = require('../middleware/auth');
 const User = require('../models/User');
 const { serializeAccess } = require('../services/chatTokens');
 const { createNotification } = require('../services/notifications');
+const { resolvePaidPackFromOrder } = require('../utils/paidPackFromOrder');
 
 // Initialize Razorpay instance
 const razorpay = new Razorpay({
@@ -24,6 +25,11 @@ const TOKEN_PACKS = {
   '50000': { tokens: 50000, price: 10000 },
   '100000': { tokens: 100000, price: 15000 },
 };
+
+function getPackPriceInr(packId) {
+  const pack = TOKEN_PACKS[packId];
+  return pack ? pack.price : null;
+}
 
 // ─────────────────────────────────────────────
 // POST /api/payment/create-order
@@ -44,8 +50,9 @@ router.post('/create-order', auth, async (req, res) => {
       receipt: `token_${req.userId}_${Date.now()}`,
       notes: {
         userId: req.userId.toString(),
-        packId: packId,
-        tokens: pack.tokens,
+        packId: String(packId),
+        tokens: String(pack.tokens),
+        priceInr: String(pack.price),
       },
     };
 
@@ -76,7 +83,7 @@ router.post('/verify', auth, async (req, res) => {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
-      packId,
+      packId: clientPackId,
     } = req.body;
 
     // Verify signature
@@ -92,19 +99,42 @@ router.post('/verify', auth, async (req, res) => {
       });
     }
 
-    const pack = TOKEN_PACKS[packId];
-    if (!pack) {
-      return res.status(400).json({ error: 'Invalid token pack' });
-    }
-
     const existingUser = await User.findById(req.userId).select(
-      'tokenBalance lastSpinDate chatSessionStartedAt chatSessionExpiresAt',
+      'tokenBalance lastSpinDate chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
     );
     if (!existingUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const credited = pack.tokens;
+    // Authoritative pack/amount come from Razorpay order notes set at create-order.
+    // Never credit from client-supplied packId (cheap-pay / large-credit attack).
+    let order;
+    try {
+      order = await razorpay.orders.fetch(razorpay_order_id);
+    } catch (e) {
+      console.warn('order fetch failed', e?.message || e);
+      return res.status(400).json({ error: 'Could not verify order' });
+    }
+
+    if (String(order.notes?.userId || '') !== String(req.userId)) {
+      return res.status(403).json({ error: 'Order does not belong to this user' });
+    }
+
+    const resolved = resolvePaidPackFromOrder({
+      order,
+      clientPackId,
+      TOKEN_PACKS,
+      getPackPriceInr,
+      user: existingUser,
+    });
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({
+        error: resolved.error,
+        ...(resolved.code ? { code: resolved.code } : {}),
+      });
+    }
+
+    const { packId, credited } = resolved;
 
     const user = await User.findByIdAndUpdate(
       req.userId,
