@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "luvstor",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
@@ -24,14 +23,12 @@
     "android": {
       "package": "com.luvstor.app",
       "googleServicesFile": "./google-services.json",
-      "usesCleartextTraffic": true,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#8E2DE2",
         "foregroundImage": "./assets/images/icon.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.CAMERA",
@@ -56,7 +53,9 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "expo-dev-client",
       "expo-router",
+      "expo-asset",
       "./plugins/withRazorpay",
       [
         "expo-location",
@@ -103,6 +102,15 @@
         "@react-native-google-signin/google-signin",
         {
           "iosUrlScheme": "com.googleusercontent.apps.944271155469-crp7cmrsa5fuqqk1moaut0pnj2p462dm"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "enableOnBackInvokedCallback": true
+          }
         }
       ]
     ],

@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Audio } from "expo-av";
+import type { Audio as ExpoAudio } from "expo-av";
+import { Audio, isAudioAvailable } from "../../utils/expoAv";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -360,7 +361,7 @@ const VoiceMessage = ({
   delivered?: boolean;
   read?: boolean;
 }) => {
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [sound, setSound] = useState<ExpoAudio.Sound | null>(null);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [durationMs, setDurationMs] = useState(0);
@@ -388,6 +389,11 @@ const VoiceMessage = ({
 
       if (!playableUri || (playableUri.startsWith("file://") && !isMe)) {
         console.warn("Voice URL not playable on this device:", playableUri);
+        return;
+      }
+
+      if (!isAudioAvailable() || !Audio) {
+        console.warn("Voice playback unavailable — expo-av native module missing");
         return;
       }
 
@@ -1383,7 +1389,7 @@ export default function MessageScreen() {
   );
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState<ExpoAudio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [selectedImage, setSelectedImage] = useState<{
@@ -3472,6 +3478,11 @@ export default function MessageScreen() {
 
     const keepKeyboard = isKeyboardVisible;
 
+    if (!isAudioAvailable() || !Audio) {
+      console.warn("Voice recording unavailable — expo-av native module missing");
+      return;
+    }
+
     const perm = await Audio.getPermissionsAsync();
     if (perm.status !== "granted") {
       const np = await Audio.requestPermissionsAsync();
@@ -3502,12 +3513,14 @@ export default function MessageScreen() {
     if (!recording) return;
     setIsRecording(false);
     await recording.stopAndUnloadAsync();
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    });
+    if (Audio) {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+    }
     const uri = recording.getURI();
     setRecording(null);
     setRecordingDuration(0);
@@ -3568,12 +3581,14 @@ export default function MessageScreen() {
     if (!recording) return;
     setIsRecording(false);
     await recording.stopAndUnloadAsync();
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    });
+    if (Audio) {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+    }
     setRecording(null);
     setRecordingDuration(0);
   }

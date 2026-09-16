@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const auth = require('../middleware/auth');
 const {
@@ -14,11 +13,7 @@ const {
 } = require('../services/subscriptions');
 const { createNotification } = require('../services/notifications');
 const User = require('../models/User');
-
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+const { getRazorpay, paymentUnavailable } = require('../utils/razorpayClient');
 
 // ─────────────────────────────────────────────
 // GET /api/subscriptions/plans
@@ -53,6 +48,7 @@ router.get('/status', auth, async (req, res) => {
 // ─────────────────────────────────────────────
 router.post('/create-order', auth, async (req, res) => {
   try {
+    const razorpay = getRazorpay();
     const planId = String(req.body.planId || '');
     const periodId = String(req.body.periodId || 'monthly');
     const plan = PLANS[planId];
@@ -89,6 +85,7 @@ router.post('/create-order', auth, async (req, res) => {
       durationDays: priceInfo.durationDays,
     });
   } catch (err) {
+    if (paymentUnavailable(res, err)) return;
     console.error('subscriptions/create-order error:', err);
     res.status(500).json({ error: 'Failed to create subscription order' });
   }
@@ -100,6 +97,7 @@ router.post('/create-order', auth, async (req, res) => {
 // ─────────────────────────────────────────────
 router.post('/verify', auth, async (req, res) => {
   try {
+    const razorpay = getRazorpay();
     const {
       razorpay_order_id,
       razorpay_payment_id,
@@ -190,6 +188,7 @@ router.post('/verify', auth, async (req, res) => {
       ...subscription,
     });
   } catch (err) {
+    if (paymentUnavailable(res, err)) return;
     console.error('subscriptions/verify error:', err);
     res.status(err.status || 500).json({
       error: err.message || 'Subscription verification failed',
