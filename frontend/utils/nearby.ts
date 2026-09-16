@@ -1,7 +1,8 @@
 import * as Location from 'expo-location';
-import { apiRequest, getApiBase } from './api';
+import { apiRequest } from './api';
 import { resolveShowMe } from './showMe';
 import { isLiveSubscriptionBadge } from './subscriptions';
+import { resolveMediaUrl } from './media';
 
 /**
  * Profiles per discovery batch. The backend runs its 7-day fresh rotation over
@@ -26,10 +27,12 @@ export interface NearbyUser {
   bio: string;
   photo: string;
   photos?: string[];
+  coverPhoto?: string;
   gender: string;
   interests: string[];
   height?: number | null;
   relationshipGoal?: string;
+  showMe?: string;
   isOnline: boolean;
   lastSeen?: Date;
   distance?: number;
@@ -48,22 +51,54 @@ export interface NearbyUser {
 
 function resolvePhotoUrl(photo: string): string {
   if (!photo) return '';
-  if (photo.startsWith('http') || photo.startsWith('data:')) return photo;
-  return `${getApiBase()}${photo}`;
+  return resolveMediaUrl(photo) || photo;
 }
 
-function formatDistanceKm(u: any): string | undefined {
+/** Nearby list shows 1–100 km only (in-radius profiles). */
+export const NEARBY_DISTANCE_MIN_KM = 1;
+export const NEARBY_DISTANCE_MAX_KM = 100;
+
+function parseDistanceKm(u: any): number | undefined {
   const rawKm = u?.distanceKm;
   if (rawKm != null && String(rawKm).trim() !== '' && String(rawKm).trim() !== '?') {
     const cleaned = String(rawKm).replace(/\s*km$/i, '').trim();
     const n = Number(cleaned);
-    if (Number.isFinite(n)) return n.toFixed(1);
+    if (Number.isFinite(n) && n >= 0) return n;
   }
   const metres = Number(u?.distance);
   if (Number.isFinite(metres) && metres >= 0) {
-    return (metres / 1000).toFixed(1);
+    return metres / 1000;
   }
   return undefined;
+}
+
+/**
+ * Format km for Discover Nearby cards.
+ * - Only in-radius (`source: nearby`) profiles show a distance.
+ * - Display is clamped to 1–100 km (closest → at least 1, farthest → at most 100).
+ */
+function formatDistanceKm(u: any): string | undefined {
+  const source =
+    u?.source === 'for_you'
+      ? 'for_you'
+      : u?.source === 'random'
+        ? 'random'
+        : 'nearby';
+  // Expanded / global fills are not "nearby" — hide km.
+  if (source !== 'nearby') return undefined;
+
+  const km = parseDistanceKm(u);
+  if (km == null) return undefined;
+
+  const clamped = Math.min(
+    NEARBY_DISTANCE_MAX_KM,
+    Math.max(NEARBY_DISTANCE_MIN_KM, km),
+  );
+  // Whole kilometres read cleaner at the 1 / 100 ends of the range.
+  if (Math.abs(clamped - Math.round(clamped)) < 0.05) {
+    return String(Math.round(clamped));
+  }
+  return clamped.toFixed(1);
 }
 
 export function mapNearbyUser(u: any): NearbyUser {
@@ -71,6 +106,13 @@ export function mapNearbyUser(u: any): NearbyUser {
   const rawExpiresAt =
     u.subscriptionExpiresAt || u.subscription?.expiresAt || null;
   const live = isLiveSubscriptionBadge(rawBadge, rawExpiresAt);
+  const source: NearbyUser['source'] =
+    u.source === 'for_you'
+      ? 'for_you'
+      : u.source === 'random'
+        ? 'random'
+        : 'nearby';
+  const distanceKm = formatDistanceKm({ ...u, source });
 
   return {
     id: String(u.id || u._id),
@@ -79,6 +121,7 @@ export function mapNearbyUser(u: any): NearbyUser {
     age: u.age || 0,
     bio: u.bio || '',
     photo: resolvePhotoUrl(u.photo || ''),
+    coverPhoto: resolvePhotoUrl(u.coverPhoto || ''),
     photos: Array.isArray(u.photos)
       ? u.photos.map((p: string) => resolvePhotoUrl(p)).filter(Boolean)
       : [],
@@ -86,17 +129,20 @@ export function mapNearbyUser(u: any): NearbyUser {
     interests: u.interests || [],
     height: u.height ?? null,
     relationshipGoal: u.relationshipGoal || '',
+    showMe: u.showMe || '',
     isOnline: !!u.isOnline,
     distance:
-      u.distance != null && Number.isFinite(Number(u.distance))
+      source === 'nearby' &&
+      u.distance != null &&
+      Number.isFinite(Number(u.distance))
         ? Number(u.distance)
         : undefined,
-    distanceKm: formatDistanceKm(u),
+    distanceKm,
     friendshipStatus: u.friendshipStatus || 'stranger',
     areFriends: !!u.areFriends,
     iLiked: !!u.iLiked,
     theyLiked: !!u.theyLiked,
-    source: u.source === 'for_you' ? 'for_you' : u.source === 'random' ? 'random' : 'nearby',
+    source,
     subscriptionBadge: live ? rawBadge : null,
     subscriptionExpiresAt: live ? rawExpiresAt : null,
     photoVerified: !!u.photoVerified,
@@ -121,7 +167,13 @@ function normalizeNearbyResponse(data: any): {
 }
 
 /** Upload GPS once — call before fetching nearby list. */
-export async function uploadMyLocation(token: string): Promise<{ error?: string }> {
+export async function uploadMyLocation(
+  token: string,
+  options: { preferCached?: boolean; timeoutMs?: number } = {},
+): Promise<{ error?: string }> {
+  const preferCached = !!options.preferCached;
+  const timeoutMs = options.timeoutMs ?? (preferCached ? 5000 : 12000);
+
   try {
     const services = await Location.hasServicesEnabledAsync();
     if (!services) {
@@ -140,26 +192,30 @@ export async function uploadMyLocation(token: string): Promise<{ error?: string 
     let latitude: number | null = null;
     let longitude: number | null = null;
 
-    // Prefer a fresh fix; fall back to last-known if GPS is slow.
-    try {
-      const position = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Location timeout')), 12000),
-        ),
-      ]);
-      latitude = position.coords.latitude;
-      longitude = position.coords.longitude;
-    } catch {
-      const last = await Location.getLastKnownPositionAsync({
-        maxAge: 1000 * 60 * 30,
-        requiredAccuracy: 1000,
-      });
-      if (last) {
-        latitude = last.coords.latitude;
-        longitude = last.coords.longitude;
+    // WhatsApp-fast path: use last-known immediately on pull-to-refresh
+    const last = await Location.getLastKnownPositionAsync({
+      maxAge: 1000 * 60 * 30,
+      requiredAccuracy: preferCached ? 5000 : 1000,
+    });
+    if (last) {
+      latitude = last.coords.latitude;
+      longitude = last.coords.longitude;
+    }
+
+    if (!preferCached || latitude == null || longitude == null) {
+      try {
+        const position = await Promise.race([
+          Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Location timeout')), timeoutMs),
+          ),
+        ]);
+        latitude = position.coords.latitude;
+        longitude = position.coords.longitude;
+      } catch {
+        /* keep last-known if we already have it */
       }
     }
 
@@ -179,6 +235,26 @@ export async function uploadMyLocation(token: string): Promise<{ error?: string 
       method: 'PUT',
       body: JSON.stringify({ latitude, longitude }),
     });
+
+    // Refresh GPS in background after a cached refresh (non-blocking)
+    if (preferCached && last) {
+      void (async () => {
+        try {
+          const fresh = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          await apiRequest('/api/users/location', token, {
+            method: 'PUT',
+            body: JSON.stringify({
+              latitude: fresh.coords.latitude,
+              longitude: fresh.coords.longitude,
+            }),
+          });
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
 
     return {};
   } catch (err: any) {
@@ -296,15 +372,51 @@ export async function fetchNearbyUsersPage(
 /** Upload GPS when possible, then fetch the feed (uses saved location if GPS fails). */
 export async function loadNearbyFeed(
   token: string,
-  options: NearbyFetchOptions = {},
+  options: NearbyFetchOptions & {
+    preferCachedLocation?: boolean;
+    /** WhatsApp-style pull refresh: fetch feed immediately, GPS in parallel */
+    refreshFast?: boolean;
+  } = {},
 ): Promise<{
   users: NearbyUser[];
   hasMore: boolean;
   error?: string;
   locationWarning?: string;
 }> {
-  const loc = await uploadMyLocation(token);
-  const feed = await fetchNearbyUsersPage(token, options);
+  const { preferCachedLocation, refreshFast, ...fetchOptions } = options;
+
+  // WhatsApp technique: never wait on GPS before painting the list.
+  // Use last saved server location for the feed; update GPS in parallel.
+  if (refreshFast) {
+    const locPromise = uploadMyLocation(token, {
+      preferCached: true,
+      timeoutMs: 3500,
+    });
+    const feed = await fetchNearbyUsersPage(token, fetchOptions);
+
+    if (feed.error && /location/i.test(feed.error || '')) {
+      const loc = await locPromise;
+      const retry = await fetchNearbyUsersPage(token, fetchOptions);
+      return {
+        users: retry.users,
+        hasMore: retry.hasMore,
+        error: retry.error || loc.error || feed.error,
+        locationWarning: loc.error,
+      };
+    }
+
+    void locPromise;
+    return {
+      users: feed.users,
+      hasMore: feed.hasMore,
+    };
+  }
+
+  const loc = await uploadMyLocation(token, {
+    preferCached: !!preferCachedLocation,
+    timeoutMs: preferCachedLocation ? 4500 : 12000,
+  });
+  const feed = await fetchNearbyUsersPage(token, fetchOptions);
 
   if (feed.error) {
     const needsLocation = /location/i.test(feed.error);

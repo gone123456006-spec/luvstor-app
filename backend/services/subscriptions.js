@@ -1,9 +1,9 @@
 /**
  * Luvstor subscription tiers — server-side source of truth.
- * Free / Gold / Platinum / Black
+ * Free / Explore Plus / Gold / Platinum / Black
  */
 
-const PLAN_IDS = ['free', 'gold', 'platinum', 'black'];
+const PLAN_IDS = ['free', 'explore', 'gold', 'platinum', 'black'];
 
 const PLANS = {
   free: {
@@ -17,8 +17,24 @@ const PLANS = {
     discoverBoost: false,
     topSpotDaily: false,
     topSpotMinutes: 0,
+    explorePrefs: false,
     badge: null,
     accent: '#8696A0',
+  },
+  explore: {
+    id: 'explore',
+    name: 'Explore Plus',
+    chatSessionHours: 2,
+    unlimitedChat: false,
+    tokenBonusPercent: 0,
+    monthlyTokenGrant: 0,
+    spinsPerDay: 1,
+    discoverBoost: false,
+    topSpotDaily: false,
+    topSpotMinutes: 0,
+    explorePrefs: true,
+    badge: null,
+    accent: '#6750A4',
   },
   gold: {
     id: 'gold',
@@ -31,6 +47,7 @@ const PLANS = {
     discoverBoost: false,
     topSpotDaily: false,
     topSpotMinutes: 0,
+    explorePrefs: true,
     badge: 'gold',
     accent: '#FFD700',
   },
@@ -45,6 +62,7 @@ const PLANS = {
     discoverBoost: true,
     topSpotDaily: false,
     topSpotMinutes: 0,
+    explorePrefs: true,
     badge: 'platinum',
     accent: '#E5E4E2',
   },
@@ -59,13 +77,14 @@ const PLANS = {
     discoverBoost: true,
     topSpotDaily: true,
     topSpotMinutes: 40,
+    explorePrefs: true,
     badge: 'black',
     accent: '#1C1B1F',
     spinTokensDailyCap: 500,
   },
 };
 
-const PLAN_RANK = { black: 4, platinum: 3, gold: 2, free: 1 };
+const PLAN_RANK = { black: 5, platinum: 4, gold: 3, explore: 2, free: 1 };
 
 /** Billing periods — prices in INR per plan */
 const BILLING_PERIODS = [
@@ -76,6 +95,7 @@ const BILLING_PERIODS = [
 ];
 
 const PLAN_PRICING = {
+  explore: { monthly: 99 },
   gold: { monthly: 349, quarterly: 899, '6months': 1499, annual: 1999 },
   platinum: { monthly: 699, quarterly: 1799, '6months': 2999, annual: 4199 },
   black: { monthly: 1499, quarterly: 3499, '6months': 5249, annual: 8999 },
@@ -86,7 +106,7 @@ function getBillingPeriod(periodId) {
 }
 
 function getPlanPrice(planId, periodId = 'monthly') {
-  if (!['gold', 'platinum', 'black'].includes(planId)) return null;
+  if (!['explore', 'gold', 'platinum', 'black'].includes(planId)) return null;
   const period = getBillingPeriod(periodId);
   if (!period) return null;
   const priceInr = PLAN_PRICING[planId]?.[period.id];
@@ -106,6 +126,34 @@ function listBillingPeriods() {
 
 function todayKey(d = new Date()) {
   return d.toISOString().slice(0, 10);
+}
+
+/** Free / plan spins reset 24 hours after the first spin in the window. */
+const SPIN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function resolveSpinWindowStart(user) {
+  if (!user) return null;
+  if (user.spinWindowStartedAt) {
+    const t = new Date(user.spinWindowStartedAt);
+    if (!Number.isNaN(t.getTime())) return t;
+  }
+  // Legacy calendar-day users: treat UTC midnight of the stored date as window start
+  const key = user.subscriptionSpinsDate || user.lastSpinDate;
+  if (key && /^\d{4}-\d{2}-\d{2}$/.test(String(key))) {
+    const t = new Date(`${key}T00:00:00.000Z`);
+    if (!Number.isNaN(t.getTime())) return t;
+  }
+  return null;
+}
+
+function isSpinWindowActive(windowStart, now = new Date()) {
+  if (!windowStart) return false;
+  return now.getTime() - windowStart.getTime() < SPIN_WINDOW_MS;
+}
+
+function nextSpinAtFromWindow(windowStart) {
+  if (!windowStart) return null;
+  return new Date(windowStart.getTime() + SPIN_WINDOW_MS);
 }
 
 function getPlanConfig(planId) {
@@ -146,25 +194,28 @@ function applyTokenBonus(baseTokens, user, now = new Date()) {
   return { baseTokens, bonusTokens: bonus, totalTokens: baseTokens + bonus };
 }
 
-function resetSpinCountersIfNeeded(user, today = todayKey()) {
-  if (user.subscriptionSpinsDate !== today) {
+function resetSpinCountersIfNeeded(user, now = new Date()) {
+  const windowStart = resolveSpinWindowStart(user);
+  if (!isSpinWindowActive(windowStart, now)) {
     user.subscriptionSpinsUsedToday = 0;
-    user.subscriptionSpinsDate = today;
+    user.subscriptionSpinsDate = todayKey(now);
     user.spinTokensWonToday = 0;
+    user.spinWindowStartedAt = null;
   }
 }
 
 function getSpinStatus(user, now = new Date()) {
   const plan = getEffectivePlan(user, now);
   const config = getPlanConfig(plan);
-  const today = todayKey(now);
+  const windowStart = resolveSpinWindowStart(user);
+  const active = isSpinWindowActive(windowStart, now);
 
-  let used = user.subscriptionSpinsUsedToday ?? 0;
-  if (user.subscriptionSpinsDate !== today) used = 0;
-
+  const used = active ? user.subscriptionSpinsUsedToday ?? 0 : 0;
   const limit = config.spinsPerDay;
   const remaining = Math.max(0, limit - used);
   const canSpin = remaining > 0;
+  const nextSpinAt =
+    active && !canSpin ? nextSpinAtFromWindow(windowStart) : null;
 
   return {
     plan,
@@ -173,10 +224,20 @@ function getSpinStatus(user, now = new Date()) {
     spinsRemaining: remaining,
     canSpin,
     spinTokensDailyCap: config.spinTokensDailyCap || null,
-    spinTokensWonToday: user.subscriptionSpinsDate === today
-      ? user.spinTokensWonToday ?? 0
+    spinTokensWonToday: active ? user.spinTokensWonToday ?? 0 : 0,
+    spinWindowStartedAt: active && windowStart ? windowStart.toISOString() : null,
+    nextSpinAt: nextSpinAt ? nextSpinAt.toISOString() : null,
+    spinCooldownMs: nextSpinAt
+      ? Math.max(0, nextSpinAt.getTime() - now.getTime())
       : 0,
   };
+}
+
+/** Plans that unlock Profile View identities (Explore/Free stay locked). */
+const PROFILE_VIEW_PLANS = new Set(['gold', 'platinum', 'black']);
+
+function canSeeProfileViews(user, now = new Date()) {
+  return PROFILE_VIEW_PLANS.has(getEffectivePlan(user, now));
 }
 
 function getPlanEntitlements(user, now = new Date()) {
@@ -206,11 +267,16 @@ function getPlanEntitlements(user, now = new Date()) {
     spinsRemaining: spin.spinsRemaining,
     spinsUsedToday: spin.spinsUsedToday,
     canSpin: spin.canSpin,
+    nextSpinAt: spin.nextSpinAt,
+    spinCooldownMs: spin.spinCooldownMs,
     spinTokensDailyCap: spin.spinTokensDailyCap,
     discoverBoost: Boolean(config.discoverBoost && isActive),
     topSpotDaily: Boolean(config.topSpotDaily && isActive),
     topSpotMinutes: config.topSpotDaily && isActive ? (config.topSpotMinutes || 0) : 0,
+    explorePrefs: Boolean(config.explorePrefs && isActive),
     callsFriendsOnly: true,
+    /** Gold / Platinum / Black unlock who viewed your profile */
+    profileViews: canSeeProfileViews(user, now),
   };
 }
 
@@ -294,7 +360,7 @@ async function expireDueSubscriptions(now = new Date()) {
   const User = require('../models/User');
   const result = await User.updateMany(
     {
-      subscriptionPlan: { $in: ['gold', 'platinum', 'black'] },
+      subscriptionPlan: { $in: ['explore', 'gold', 'platinum', 'black'] },
       $or: [
         { subscriptionExpiresAt: { $lte: now } },
         { subscriptionExpiresAt: null },
@@ -308,9 +374,10 @@ async function expireDueSubscriptions(now = new Date()) {
 /**
  * Activate a paid plan after verified payment.
  * Applies plan-specific entitlements: duration, tokens, spins reset, chat session rules.
+ * Blocks accidental downgrades while a higher-tier plan is still active.
  */
 async function activateSubscription(userId, planId, durationDays = 30, options = {}) {
-  if (!['gold', 'platinum', 'black'].includes(planId)) {
+  if (!['explore', 'gold', 'platinum', 'black'].includes(planId)) {
     const err = new Error('Invalid subscription plan');
     err.status = 400;
     throw err;
@@ -339,17 +406,28 @@ async function activateSubscription(userId, planId, durationDays = 30, options =
     return result;
   }
 
-  // Renewing the same active plan stacks remaining days
-  let expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
   const prevPlan = existing.subscriptionPlan || 'free';
   const prevExp = existing.subscriptionExpiresAt
     ? new Date(existing.subscriptionExpiresAt)
     : null;
-  if (
-    prevPlan === planId &&
+  const prevActive =
+    prevPlan !== 'free' &&
     prevExp &&
-    prevExp.getTime() > now.getTime()
-  ) {
+    prevExp.getTime() > now.getTime();
+
+  // Don't silently replace Gold/Platinum/Black with Explore Plus
+  if (prevActive && (PLAN_RANK[planId] || 0) < (PLAN_RANK[prevPlan] || 0)) {
+    const err = new Error(
+      `You already have ${getPlanConfig(prevPlan).name} active. Manage it from Subscriptions.`,
+    );
+    err.status = 409;
+    err.code = 'DOWNGRADE_BLOCKED';
+    throw err;
+  }
+
+  // Renewing the same active plan stacks remaining days
+  let expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+  if (prevActive && prevPlan === planId) {
     expiresAt = new Date(
       prevExp.getTime() + durationDays * 24 * 60 * 60 * 1000,
     );
@@ -360,10 +438,11 @@ async function activateSubscription(userId, planId, durationDays = 30, options =
     subscriptionExpiresAt: expiresAt,
     subscriptionSpinsUsedToday: 0,
     subscriptionSpinsDate: todayKey(now),
+    spinWindowStartedAt: null,
     spinTokensWonToday: 0,
   };
   const wasActivePaid =
-    ['gold', 'platinum', 'black'].includes(prevPlan) &&
+    ['explore', 'gold', 'platinum', 'black'].includes(prevPlan) &&
     prevExp &&
     prevExp.getTime() > now.getTime();
   if (!wasActivePaid) {
@@ -418,12 +497,15 @@ function serializeSubscription(user, now = new Date()) {
 }
 
 function listPlansForClient() {
-  return ['free', 'gold', 'platinum', 'black'].map((id) => {
+  return ['free', 'explore', 'gold', 'platinum', 'black'].map((id) => {
     const p = PLANS[id];
     const pricing = {};
     for (const period of BILLING_PERIODS) {
-      pricing[period.id] =
-        id === 'free' ? 0 : PLAN_PRICING[id][period.id];
+      if (id === 'free') {
+        pricing[period.id] = 0;
+      } else if (PLAN_PRICING[id]?.[period.id] != null) {
+        pricing[period.id] = PLAN_PRICING[id][period.id];
+      }
     }
     return {
       id: p.id,
@@ -450,6 +532,9 @@ function listPlansForClient() {
         topSpotDaily: p.topSpotDaily
           ? `Daily ${p.topSpotMinutes || 40}-min top spot`
           : null,
+        explorePrefs: p.explorePrefs
+          ? 'Explore gender filters + verified only'
+          : null,
         calls: 'Voice & video (friends only)',
         badge: p.badge ? `${p.name} badge` : null,
       },
@@ -470,9 +555,13 @@ function compareDiscoverPriority(aPlan, bPlan) {
 module.exports = {
   PLANS,
   PLAN_IDS,
+  PLAN_RANK,
   BILLING_PERIODS,
   PLAN_PRICING,
+  SPIN_WINDOW_MS,
   todayKey,
+  resolveSpinWindowStart,
+  isSpinWindowActive,
   getPlanConfig,
   getBillingPeriod,
   getPlanPrice,
@@ -490,6 +579,8 @@ module.exports = {
   compareDiscoverPriority,
   compareDiscoverUsers,
   getPlanEntitlements,
+  canSeeProfileViews,
+  PROFILE_VIEW_PLANS,
   ensureDiscoverTopSpot,
   syncExpiredSubscription,
   expireDueSubscriptions,

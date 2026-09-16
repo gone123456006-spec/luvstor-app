@@ -49,9 +49,9 @@ const MAX_RADIUS_METRES = Number(process.env.DISCOVERY_MAX_RADIUS_METRES) || nul
 const RECENT_HISTORY_CAP = 500;
 
 const DISCOVERY_SELECT =
-  'publicId name age bio photo photos gender interests height relationshipGoal ' +
+  'publicId name age bio photo coverPhoto photos gender interests height relationshipGoal ' +
   'isOnline lastSeen location createdAt subscriptionPlan subscriptionExpiresAt ' +
-  'discoverTopSpotUntil discoverTopSpotDate discoveryExposureCount discoveryPrefs';
+  'discoverTopSpotUntil discoverTopSpotDate discoveryExposureCount discoveryPrefs photoVerification';
 
 function toObjectId(id) {
   try {
@@ -345,6 +345,7 @@ function toRankableCandidate({ doc, source }, { lat, lng, now }) {
     name: doc.name,
     photo: doc.photo,
     photos: doc.photos,
+    coverPhoto: doc.coverPhoto || '',
     bio: doc.bio,
     interests: doc.interests,
     age: doc.age,
@@ -487,6 +488,15 @@ async function buildNearbyBatch({
 
   const candidates = pool.map((item) => toRankableCandidate(item, { lat, lng, now }));
 
+  // Time-based discovery mode adjustments
+  const timeBasedDiscovery = require('./timeBasedDiscovery');
+  const customWeights = timeBasedDiscovery.isTimeBasedModeEnabled()
+    ? timeBasedDiscovery.getTimeAdjustedWeights(now)
+    : undefined;
+  const customSlotPlan = timeBasedDiscovery.isTimeBasedModeEnabled()
+    ? timeBasedDiscovery.getTimeAdjustedSlotPlan(now)
+    : undefined;
+
   const { selected, diagnostics } = selectDiscoveryBatch({
     viewerId: String(viewer._id),
     candidates,
@@ -496,6 +506,8 @@ async function buildNearbyBatch({
     rotationBucket,
     excludeIds,
     viewer: { id: String(viewer._id), gender: viewer.gender || '' },
+    customWeights,
+    customSlotPlan,
   });
 
   const friendships = await getFriendshipMap(
@@ -519,6 +531,19 @@ async function buildNearbyBatch({
 
     const metres = Number.isFinite(candidate.distance) ? candidate.distance : NaN;
     const sub = serializeSubscription(candidate.doc, now);
+    const isNearby = candidate.source === 'nearby';
+    // Only in-radius profiles expose distance. Display range is 1–100 km.
+    let distanceKm = null;
+    let distanceM = null;
+    if (isNearby && Number.isFinite(metres)) {
+      const km = metres / 1000;
+      const clamped = Math.min(100, Math.max(1, km));
+      distanceKm =
+        Math.abs(clamped - Math.round(clamped)) < 0.05
+          ? String(Math.round(clamped))
+          : clamped.toFixed(1);
+      distanceM = Math.round(metres);
+    }
 
     return {
       id: doc._id,
@@ -527,22 +552,24 @@ async function buildNearbyBatch({
       age: doc.age,
       bio: doc.bio,
       photo: doc.photo,
+      coverPhoto: doc.coverPhoto || '',
       photos: doc.photos || [],
       gender: doc.gender,
       interests: doc.interests,
       height: doc.height,
       relationshipGoal: doc.relationshipGoal || '',
       isOnline: !!doc.isOnline,
-      distance: Number.isFinite(metres) ? Math.round(metres) : null,
-      distanceKm: Number.isFinite(metres) ? (metres / 1000).toFixed(1) : null,
+      distance: distanceM,
+      distanceKm,
       friendshipStatus: friendship?.status || 'stranger',
       areFriends: !!areFriends,
       iLiked: !!iLiked,
       theyLiked: !!theyLiked,
       // Frontend only distinguishes in-radius from further-away profiles.
-      source: candidate.source === 'nearby' ? 'nearby' : 'random',
+      source: isNearby ? 'nearby' : 'random',
       subscriptionBadge: sub.badge,
       subscriptionExpiresAt: sub.expiresAt,
+      photoVerified: doc.photoVerification?.status === 'approved',
       discoverTopSpot: !!candidate.topSpot,
       _rotation: {
         bucket: candidate.rotationBucket,

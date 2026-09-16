@@ -25,7 +25,9 @@ const {
   createNotification,
   createBulkNotifications,
   broadcastNotification,
+  redactProfileViewPayload,
 } = require('../services/notifications');
+const { canSeeProfileViews } = require('../services/subscriptions');
 const pushQueue = require('../services/pushQueue');
 const fcm = require('../services/fcm');
 const { sendDailySuggestions } = require('../jobs/dailySuggestions');
@@ -34,10 +36,12 @@ const MAX_PAGE_SIZE = 50;
 
 /** Personal chat DMs are not part of the Notification Center. */
 const HIDE_FROM_CENTER = ['chat'];
+/** Profile views live only under the Profile View tab — not All / Unread. */
+const SEPARATE_TABS = ['chat', 'profile_view'];
 
 function centerQuery(extra = {}) {
   return {
-    type: { $nin: HIDE_FROM_CENTER },
+    type: { $nin: SEPARATE_TABS },
     ...extra,
   };
 }
@@ -63,6 +67,7 @@ function serialize(n) {
     actorGender: n.actorGender || '',
     read: !!n.read,
     createdAt: n.createdAt,
+    locked: false,
   };
 }
 
@@ -79,11 +84,14 @@ router.get('/', auth, readLimiter, async (req, res) => {
       MAX_PAGE_SIZE,
     );
 
-    const query = centerQuery({ userId: req.userId });
+    const query = { userId: req.userId };
 
     if (req.query.filter === 'unread') query.read = false;
     if (req.query.type && NOTIFICATION_TYPES.includes(req.query.type)) {
       if (HIDE_FROM_CENTER.includes(req.query.type)) {
+        const meEarly = await User.findById(req.userId)
+          .select('subscriptionPlan subscriptionExpiresAt')
+          .lean();
         return res.json({
           notifications: [],
           nextCursor: null,
@@ -91,9 +99,14 @@ router.get('/', auth, readLimiter, async (req, res) => {
           unread: await Notification.countDocuments(
             centerQuery({ userId: req.userId, read: false }),
           ),
+          profileViewsUnlocked: canSeeProfileViews(meEarly),
         });
       }
+      // Profile View tab — only viewers, independent of All / Unread
       query.type = req.query.type;
+    } else {
+      // All / Unread — exclude chat + profile_view (own tabs)
+      query.type = { $nin: SEPARATE_TABS };
     }
 
     if (req.query.cursor) {
@@ -122,11 +135,25 @@ router.get('/', auth, readLimiter, async (req, res) => {
       centerQuery({ userId: req.userId, read: false }),
     );
 
+    const me = await User.findById(req.userId)
+      .select('subscriptionPlan subscriptionExpiresAt')
+      .lean();
+    const profileViewsUnlocked = canSeeProfileViews(me);
+
+    const notifications = items.map((row) => {
+      const base = serialize(row);
+      if (row.type === 'profile_view' && !profileViewsUnlocked) {
+        return redactProfileViewPayload(base);
+      }
+      return base;
+    });
+
     res.json({
-      notifications: items.map(serialize),
+      notifications,
       nextCursor: hasMore ? items[items.length - 1].createdAt : null,
       hasMore,
       unread,
+      profileViewsUnlocked,
     });
   } catch (err) {
     console.error('notifications/list error:', err.message);

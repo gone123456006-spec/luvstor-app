@@ -21,6 +21,8 @@ import DeviceTransferModal from "../components/DeviceTransferModal";
 import { useAuth } from "../contexts/AuthContext";
 import { ApiError, apiSendOTP, apiVerifyOTP } from "../utils/api";
 import { resolvePostLoginRoute } from "../utils/auth";
+import { consumePendingProfileId } from "../utils/pendingProfileLink";
+import { normalizePublicId } from "../utils/profileLinks";
 
 const OTP_LENGTH = 6;
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
@@ -67,9 +69,10 @@ export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { loginWithToken } = useAuth();
-  const { email, cooldown } = useLocalSearchParams<{
+  const { email, cooldown, redirect } = useLocalSearchParams<{
     email: string;
     cooldown?: string;
+    redirect?: string;
   }>();
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(""));
@@ -170,6 +173,37 @@ export default function OtpScreen() {
       name: user.name,
       profileComplete: user.profileComplete,
     });
+
+    try {
+      const {
+        peekPendingReferralCode,
+        consumePendingReferralCode,
+      } = await import("../utils/pendingReferral");
+      const { claimReferral } = await import("../utils/referrals");
+      const code = await peekPendingReferralCode();
+      if (code) {
+        try {
+          await claimReferral(token, code);
+        } catch {
+          /* already attributed / not new / etc. */
+        }
+        await consumePendingReferralCode();
+      }
+    } catch {
+      /* non-blocking */
+    }
+
+    const redirectRaw = Array.isArray(redirect) ? redirect[0] : redirect;
+    const redirectMatch = String(redirectRaw || "").match(
+      /(?:^|\/)u\/([A-Za-z]{4}\d{4})\b/i,
+    );
+    const fromRedirect = normalizePublicId(redirectMatch?.[1] || null);
+    const pendingId = fromRedirect || (await consumePendingProfileId());
+    if (pendingId) {
+      router.replace(`/u/${pendingId}` as any);
+      return;
+    }
+
     const nextRoute = await resolvePostLoginRoute(hydratedUser);
     router.replace(nextRoute as any);
   };

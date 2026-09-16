@@ -81,18 +81,41 @@ export async function unlikeUser(token: string, userId: string): Promise<{ messa
  * Get friendship status with a specific user
  */
 export async function getFriendshipStatus(token: string, userId: string): Promise<FriendshipStatus> {
-  const res = await fetch(`${API_BASE}/api/friends/status/${userId}`, {
+  const { getApiBase } = await import('./api');
+  const id = String(userId || '').trim();
+  const res = await fetch(`${getApiBase()}/api/friends/status/${id}`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
-  
+
   if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.error || 'Failed to get friendship status');
+    const error = await res.json().catch(() => ({}));
+    throw new Error((error as any).error || 'Failed to get friendship status');
   }
-  
-  return res.json();
+
+  const data = await res.json();
+  const status = String(data?.status || 'stranger') as FriendshipStatus['status'];
+  const matched =
+    !!data?.areFriends ||
+    !!data?.canCall ||
+    status === 'friends' ||
+    status === 'mutual_match';
+
+  return {
+    status,
+    areFriends: matched,
+    // Bidirectional DMs unlock media — independent of friendship
+    canSendMedia: !!data?.canSendMedia,
+    canCall: matched || !!data?.canCall,
+    iLiked: matched || !!data?.iLiked,
+    theyLiked: matched || !!data?.theyLiked,
+    iBlocked: !!data?.iBlocked,
+    theyBlocked: !!data?.theyBlocked,
+    blockedAt: data?.blockedAt ?? null,
+    privacyHidden: !!data?.privacyHidden,
+    friendship: data?.friendship,
+  };
 }
 
 /**

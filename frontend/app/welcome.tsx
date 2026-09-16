@@ -19,9 +19,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width: W, height: H } = Dimensions.get("window");
 
-/** Luvstor logo purple */
-const BRAND_PURPLE = "#34036D";
-
 export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -57,13 +54,13 @@ export default function WelcomeScreen() {
 
       <LinearGradient
         colors={[
-          "rgba(52,3,109,0.45)",
-          "rgba(0,0,0,0.2)",
-          "rgba(52,3,109,0.35)",
+          "rgba(0,0,0,0.35)",
+          "rgba(0,0,0,0.15)",
+          "rgba(0,0,0,0.55)",
           "rgba(0,0,0,0.92)",
         ]}
         locations={[0, 0.28, 0.62, 1]}
-        style={StyleSheet.absoluteFill}
+        style={StyleSheet.absoluteFillObject}
       />
 
       <View
@@ -135,7 +132,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#000",
   },
   hero: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     flexDirection: "row",
   },
   heroCol: {
@@ -189,7 +186,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     height: 48,
     borderRadius: 12,
-    backgroundColor: BRAND_PURPLE,
+    backgroundColor: "#0095F6",
     alignItems: "center",
     justifyContent: "center",
   },

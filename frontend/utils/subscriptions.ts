@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { Alert } from "react-native";
 import { apiRequest, getApiBase } from "./api";
 import { RazorpayCheckout, isRazorpayAvailable } from "./razorpay.native";
 
-export type SubscriptionPlanId = "free" | "gold" | "platinum" | "black";
+export type SubscriptionPlanId =
+  | "free"
+  | "explore"
+  | "gold"
+  | "platinum"
+  | "black";
 
 export type BillingPeriodId = "monthly" | "quarterly" | "6months" | "annual";
 
@@ -13,7 +17,7 @@ export type BillingPeriod = {
   days: number;
 };
 
-export type PlanPricing = Record<BillingPeriodId, number>;
+export type PlanPricing = Partial<Record<BillingPeriodId, number>>;
 
 export type SubscriptionStatus = {
   plan: SubscriptionPlanId;
@@ -32,7 +36,13 @@ export type SubscriptionStatus = {
   canSpin: boolean;
   discoverBoost: boolean;
   topSpotDaily: boolean;
+  explorePrefs?: boolean;
+  /** Gold / Platinum / Black unlock Profile View identities */
+  profileViews?: boolean;
   accent: string;
+  paymentsEnabled?: boolean;
+  tokensCredited?: number;
+  tokenBalance?: number;
 };
 
 export type PlanFeatureSet = {
@@ -42,6 +52,7 @@ export type PlanFeatureSet = {
   dailySpin: string;
   discoverBoost: string | null;
   topSpotDaily: string | null;
+  explorePrefs?: string | null;
   calls: string;
   badge: string | null;
 };
@@ -55,10 +66,20 @@ export type SubscriptionPlan = {
   features: PlanFeatureSet;
 };
 
+function apiErrorMessage(error: any, fallback: string) {
+  return (
+    error?.message ||
+    error?.description ||
+    error?.data?.error ||
+    fallback
+  );
+}
+
 export async function fetchSubscriptionPlans(): Promise<{
   plans: SubscriptionPlan[];
   billingPeriods: BillingPeriod[];
   defaultPeriodId: BillingPeriodId;
+  paymentsEnabled?: boolean;
 }> {
   const res = await fetch(`${getApiBase()}/api/subscriptions/plans`);
   const data = await res.json();
@@ -72,6 +93,36 @@ export async function fetchSubscriptionStatus(
   return apiRequest("/api/subscriptions/status", token);
 }
 
+/** True when Explore gender / verified filters are unlocked. */
+export function hasExplorePrefsAccess(status?: SubscriptionStatus | null) {
+  return !!status?.explorePrefs;
+}
+
+export async function recoverSubscriptionOrder(
+  authToken: string,
+  orderId: string,
+): Promise<{
+  success: boolean;
+  subscription?: SubscriptionStatus;
+  error?: string;
+}> {
+  try {
+    const verified = await apiRequest("/api/subscriptions/recover", authToken, {
+      method: "POST",
+      body: JSON.stringify({ orderId }),
+    });
+    if (verified.success && verified.verified) {
+      return { success: true, subscription: verified as SubscriptionStatus };
+    }
+    return { success: false, error: "Recovery failed" };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: apiErrorMessage(error, "Could not recover payment"),
+    };
+  }
+}
+
 export async function initiateSubscriptionPurchase(
   authToken: string,
   planId: string,
@@ -80,19 +131,20 @@ export async function initiateSubscriptionPurchase(
   userEmail: string,
 ): Promise<{
   success: boolean;
-  subscription?: SubscriptionStatus & {
-    tokensCredited?: number;
-    tokenBalance?: number;
-  };
+  subscription?: SubscriptionStatus;
   error?: string;
+  orderId?: string;
 }> {
+  let orderId: string | undefined;
   try {
     if (!isRazorpayAvailable || !RazorpayCheckout) {
-      Alert.alert(
-        "Development Build Required",
-        "Subscriptions require a development build with Razorpay.\n\nnpx expo run:android",
-      );
-      return { success: false, error: "Razorpay not available" };
+      // Do not Alert.alert here — callers often have a Modal open; nested
+      // native Alert + Modal freezes the UI. Return error for the UI to show.
+      return {
+        success: false,
+        error:
+          "Subscriptions need the Luvstor APK (Razorpay is not in Expo Go).",
+      };
     }
 
     const order = await apiRequest(
@@ -104,42 +156,71 @@ export async function initiateSubscriptionPurchase(
       },
     );
 
-    if (!order.success) {
-      return { success: false, error: "Failed to create order" };
+    if (!order.success || !order.orderId) {
+      return {
+        success: false,
+        error: order.error || "Failed to create order",
+      };
     }
+
+    orderId = String(order.orderId);
 
     const payment = await RazorpayCheckout.open({
       description: `${order.planName} — ${order.periodLabel}`,
-      currency: order.currency,
+      currency: order.currency || "INR",
       key: order.keyId,
       amount: order.amount,
       name: "Luvstor",
       order_id: order.orderId,
-      prefill: { name: userName || "User", email: userEmail || "" },
+      prefill: {
+        name: userName || "User",
+        email: userEmail || "",
+      },
       theme: { color: "#6750A4" },
+      retry: { enabled: true, max_count: 2 },
     });
 
-    const verified = await apiRequest("/api/subscriptions/verify", authToken, {
-      method: "POST",
-      body: JSON.stringify({
-        razorpay_order_id: payment.razorpay_order_id,
-        razorpay_payment_id: payment.razorpay_payment_id,
-        razorpay_signature: payment.razorpay_signature,
-        planId,
-        periodId,
-      }),
-    });
+    try {
+      const verified = await apiRequest("/api/subscriptions/verify", authToken, {
+        method: "POST",
+        body: JSON.stringify({
+          razorpay_order_id: payment.razorpay_order_id,
+          razorpay_payment_id: payment.razorpay_payment_id,
+          razorpay_signature: payment.razorpay_signature,
+        }),
+      });
 
-    if (verified.success && verified.verified) {
-      return { success: true, subscription: verified as SubscriptionStatus };
+      if (verified.success && verified.verified) {
+        return {
+          success: true,
+          subscription: verified as SubscriptionStatus,
+          orderId,
+        };
+      }
+      return { success: false, error: "Verification failed", orderId };
+    } catch (verifyErr: any) {
+      // Payment may have succeeded — try recover once
+      const recovered = await recoverSubscriptionOrder(authToken, orderId!);
+      if (recovered.success) return { ...recovered, orderId };
+      return {
+        success: false,
+        error: apiErrorMessage(verifyErr, "Verification failed"),
+        orderId,
+      };
     }
-    return { success: false, error: "Verification failed" };
   } catch (error: any) {
-    if (error?.code === 0)
-      return { success: false, error: "Payment cancelled" };
+    if (error?.code === 0 || /cancel/i.test(String(error?.description || error?.message || ""))) {
+      return { success: false, error: "Payment cancelled", orderId };
+    }
+    // If checkout closed after pay, recover by order id
+    if (orderId) {
+      const recovered = await recoverSubscriptionOrder(authToken, orderId);
+      if (recovered.success) return { ...recovered, orderId };
+    }
     return {
       success: false,
-      error: error?.description || error?.message || "Payment failed",
+      error: apiErrorMessage(error, "Payment failed"),
+      orderId,
     };
   }
 }
@@ -258,6 +339,8 @@ export function useLiveSubscriptionBadge(
 
 export function planBadgeColor(plan: SubscriptionPlanId): string {
   switch (plan) {
+    case "explore":
+      return "#6750A4";
     case "gold":
       return "#FFD700";
     case "platinum":

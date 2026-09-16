@@ -143,14 +143,29 @@ async function runJob(job, { rethrow = false } = {}) {
   const attempts = Number(job.attempts || 0) + 1;
   job.attempts = attempts;
 
-  const log = await NotificationLog.create({
-    notificationId: notificationId || null,
-    userId,
-    type: payload?.data?.type || 'system',
-    channel: 'fcm',
-    status: 'queued',
-    attempts,
-  }).catch(() => null);
+  const isChat = payload?.data?.type === 'chat';
+
+  // Chat: don't block FCM on log insert (WhatsApp-instant)
+  let log = null;
+  if (isChat) {
+    NotificationLog.create({
+      notificationId: notificationId || null,
+      userId,
+      type: 'chat',
+      channel: 'fcm',
+      status: 'queued',
+      attempts,
+    }).catch(() => null);
+  } else {
+    log = await NotificationLog.create({
+      notificationId: notificationId || null,
+      userId,
+      type: payload?.data?.type || 'system',
+      channel: 'fcm',
+      status: 'queued',
+      attempts,
+    }).catch(() => null);
+  }
 
   if (!tokens?.length) {
     await finishLog(log, {

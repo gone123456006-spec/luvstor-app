@@ -122,33 +122,29 @@ export function patchListsForFriendAction(
       theyLiked: true,
     });
   } else if (action === 'soft_withdraw') {
-    // Remote unlike/decline: update labels only — keep All / Friend / Request rows.
+    // Remote unlike/decline: keep Request / All rows until THIS user acts.
     conversations = patchRow(conversations, otherId, {
       areFriends: false,
       iLiked: false,
-      theyLiked: false,
-      relationshipStatus: 'stranger',
-      requestType: undefined,
-      category: 'stranger',
       lastMessage: base.lastMessage || 'No longer matched',
     });
     friendRows = patchRow(friendRows, otherId, {
       areFriends: false,
       iLiked: false,
-      theyLiked: false,
-      relationshipStatus: 'stranger',
       lastMessage: 'No longer matched',
     });
+    // Stay in Request tab — do not clear category / requestType / theyLiked
     requestRows = patchRow(requestRows, otherId, {
-      theyLiked: false,
-      relationshipStatus: 'stranger',
-      lastMessage: 'Like withdrawn',
+      lastMessage: 'Liked you',
+      category: 'request',
+      requestType: base.requestType || 'incoming_like',
+      theyLiked: true,
+      areFriends: false,
+      relationshipStatus: 'pending_like',
     });
     onlineRows = patchRow(onlineRows, otherId, {
-      category: 'stranger',
       areFriends: false,
       iLiked: false,
-      theyLiked: false,
     });
   } else if (action === 'unlike') {
     const row: ConversationItem = {

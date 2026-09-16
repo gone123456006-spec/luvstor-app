@@ -3,20 +3,20 @@ const assert = require('node:assert/strict');
 const { resolvePaidPackFromOrder } = require('../utils/paidPackFromOrder');
 
 const TOKEN_PACKS = {
-  '10': { tokens: 10, price: 10 },
-  '100000': { tokens: 100000, price: 15000 },
+  '10': { tokens: 10 },
+  '100000': { tokens: 100000 },
 };
 
-const getPackPriceInr = (packId) => TOKEN_PACKS[packId]?.price ?? null;
+const getPackPriceInr = (packId) => (packId === '10' ? 4 : 999);
 
-test('rejects larger client packId than paid order notes', () => {
+test('credits pack from order notes, ignores larger client packId', () => {
   const order = {
-    amount: 1000,
+    amount: 400,
     notes: {
       userId: 'u1',
       packId: '10',
       tokens: '10',
-      priceInr: '10',
+      priceInr: '4',
     },
   };
 
@@ -34,12 +34,12 @@ test('rejects larger client packId than paid order notes', () => {
 
 test('credits tokens from order notes packId when client omitted', () => {
   const order = {
-    amount: 1000,
+    amount: 400,
     notes: {
       userId: 'u1',
       packId: '10',
       tokens: '10',
-      priceInr: '10',
+      priceInr: '4',
     },
   };
 
@@ -58,11 +58,11 @@ test('credits tokens from order notes packId when client omitted', () => {
 
 test('rejects amount that does not match noted price', () => {
   const order = {
-    amount: 1000,
+    amount: 400,
     notes: {
       packId: '100000',
       tokens: '100000',
-      priceInr: '15000',
+      priceInr: '999',
     },
   };
 

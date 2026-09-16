@@ -105,7 +105,9 @@ async function flushThreadWrites() {
   );
 }
 
-/** Background preload — stores raw API rows until the thread is opened. */
+/** Background preload — stores raw API rows until the thread is opened.
+ *  Must NOT pass markRead — visiting Chats must not blue-tick messages.
+ */
 export async function preloadThreadRaw(
   email: string,
   chatId: string,
@@ -125,6 +127,7 @@ export async function preloadThreadRaw(
   }
 
   try {
+    // Intentionally no markRead — list preload must not mark messages seen
     const history: unknown[] = await apiRequest(`/api/chat/history/${id}`, token);
     if (!Array.isArray(history) || !history.length) return;
     await AsyncStorage.setItem(

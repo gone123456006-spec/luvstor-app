@@ -275,8 +275,8 @@ function mutualRelevanceScore(candidate, viewer) {
  * reserved slots. Repeats keep the stricter lexicographic fallback order
  * (longest-unseen first) so the recycling behaviour stays predictable.
  */
-function freshnessScore(entry, viewer, nowMs) {
-  const w = SCORE_WEIGHTS;
+function freshnessScore(entry, viewer, nowMs, weights = null) {
+  const w = weights || SCORE_WEIGHTS;
   return (
     w.recency * recencyScore(entry.lastShownAt === Number.NEGATIVE_INFINITY ? null : entry.lastShownAt, nowMs) +
     w.activity * activityScore(entry.candidate, nowMs) +
@@ -292,17 +292,18 @@ function freshnessScore(entry, viewer, nowMs) {
  * Turn the abstract slot plan into concrete counts for this batch size.
  * Rounding drift is absorbed by the last (largest) category.
  */
-function resolveSlotQuotas(limit) {
+function resolveSlotQuotas(limit, slotPlan = SLOT_PLAN) {
+  const slotPlanBase = slotPlan.reduce((sum, slot) => sum + slot.share, 0);
   const quotas = {};
   let assigned = 0;
-  SLOT_PLAN.forEach((slot, index) => {
-    if (index === SLOT_PLAN.length - 1) {
+  slotPlan.forEach((slot, index) => {
+    if (index === slotPlan.length - 1) {
       quotas[slot.key] = Math.max(0, limit - assigned);
       return;
     }
     const share = Math.min(
       Math.max(0, limit - assigned),
-      Math.round((slot.share * limit) / SLOT_PLAN_BASE),
+      Math.round((slot.share * limit) / slotPlanBase),
     );
     quotas[slot.key] = share;
     assigned += share;
@@ -423,6 +424,8 @@ function selectDiscoveryBatch({
   rotationBucket,
   excludeIds = [],
   viewer = null,
+  customWeights = null,
+  customSlotPlan = null,
 }) {
   const nowMs = now instanceof Date ? now.getTime() : Number(now);
   const bucketToday =
@@ -481,14 +484,15 @@ function selectDiscoveryBatch({
       isNewUser: createdAt != null && nowMs - createdAt <= NEW_USER_WINDOW_MS,
       isRecentlyActive: !!candidate.isOnline || nowMs - lastSeen <= RECENT_ACTIVE_WINDOW_MS,
     };
-    entry.score = freshnessScore(entry, viewer, nowMs);
+    entry.score = freshnessScore(entry, viewer, nowMs, customWeights);
     ranked.push(entry);
   }
 
   ranked.sort(compareRanked);
 
   const limit = Math.max(0, Math.min(Number(targetCount) || 0, MAX_TARGET_COUNT));
-  const quotas = resolveSlotQuotas(limit);
+  const slots = customSlotPlan || SLOT_PLAN;
+  const quotas = resolveSlotQuotas(limit, slots);
 
   // Whoever would have made the cut on rank alone. The exploration slots
   // deliberately look *outside* this set — that is what makes them exploration.

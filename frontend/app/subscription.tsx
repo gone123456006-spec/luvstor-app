@@ -5,6 +5,7 @@ import React from "react";
 import {
     ActivityIndicator,
     Alert,
+    Animated,
     Dimensions,
     ScrollView,
     StatusBar,
@@ -15,8 +16,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, {
+    Circle,
     Defs,
+    Ellipse,
     Path,
+    RadialGradient,
+    Rect,
     Stop,
     LinearGradient as SvgLinearGradient,
 } from "react-native-svg";
@@ -208,57 +213,60 @@ const PLAN_CARD: Record<"free" | "gold" | "platinum" | "black", PlanCardTheme> =
       ],
       bgLocations: [0, 0.12, 0.28, 0.42, 0.58, 0.72, 0.88, 1],
       shine: [
-        "rgba(255,255,255,0.8)",
-        "rgba(255,255,255,0.22)",
-        "rgba(255,255,255,0)",
+        "rgba(255,255,255,0.85)",
         "rgba(255,255,255,0.35)",
-        "rgba(255,255,255,0.1)",
+        "rgba(255,255,255,0)",
+        "rgba(255,255,255,0.45)",
+        "rgba(200,180,255,0.2)",
+        "rgba(255,255,255,0.12)",
       ],
       rim: [
-        "rgba(255,255,255,0.6)",
-        "rgba(255,255,255,0)",
-        "rgba(60,40,100,0.22)",
+        "rgba(255,255,255,0.65)",
+        "rgba(255,255,255,0.05)",
+        "rgba(60,40,100,0.25)",
       ],
-      frame: ["#FFFFFF", "#EADDFF", "#6750A4", "#D0BCFF", "#B69DF8"],
-      border: "#6750A4",
-      title: "#381E72",
+      frame: ["#FFFFFF", "#EFE8F8", "#370372", "#D0BCFF", "#B69DF8"],
+      border: "#370372",
+      title: "#2A0258",
       price: "#1C1B1F",
       period: "rgba(28,27,31,0.6)",
       feature: "#1C1B1F",
-      divider: "rgba(103,80,164,0.22)",
-      checkBg: "#6750A4",
-      checkIcon: "#EADDFF",
+      divider: "rgba(55,3,114,0.22)",
+      checkBg: "#370372",
+      checkIcon: "#EFE8F8",
       featureIcon: "#4F378B",
-      button: ["#7F67BE", "#6750A4", "#4F378B", "#7965AF"],
+      button: ["#5C2D91", "#370372", "#2A0258", "#4F378B"],
       buttonText: "#FFFFFF",
-      popularBg: ["#6750A4", "#4F378B"],
-      popularText: "#EADDFF",
+      popularBg: ["#370372", "#2A0258"],
+      popularText: "#EFE8F8",
     },
     gold: {
       bg: [
-        "#FFF8D6",
-        "#F5E08A",
+        "#FFFBE8",
+        "#F5D76E",
         "#E8C547",
-        "#B8860B",
-        "#D4AF37",
+        "#A67C00",
+        "#FFF1A8",
         "#8B6914",
         "#F0D060",
         "#C9A227",
+        "#6B4E09",
       ],
-      bgLocations: [0, 0.12, 0.28, 0.42, 0.58, 0.72, 0.88, 1],
+      bgLocations: [0, 0.1, 0.22, 0.36, 0.48, 0.6, 0.74, 0.88, 1],
       shine: [
-        "rgba(255,255,255,0.75)",
-        "rgba(255,255,255,0.2)",
+        "rgba(255,255,255,0.92)",
+        "rgba(255,248,200,0.45)",
         "rgba(255,255,255,0)",
-        "rgba(255,248,200,0.35)",
-        "rgba(255,255,255,0.08)",
+        "rgba(255,255,255,0.55)",
+        "rgba(255,215,0,0.2)",
+        "rgba(255,255,255,0.12)",
       ],
       rim: [
-        "rgba(255,255,255,0.55)",
-        "rgba(255,255,255,0)",
-        "rgba(80,50,0,0.35)",
+        "rgba(255,255,255,0.7)",
+        "rgba(255,255,255,0.05)",
+        "rgba(80,50,0,0.4)",
       ],
-      frame: ["#FFF1A8", "#D4AF37", "#8B6914", "#E8C547", "#A67C00"],
+      frame: ["#FFF8D6", "#F0D060", "#8B6914", "#E8C547", "#A67C00"],
       border: "#8B6914",
       title: "#2E2000",
       price: "#1A1200",
@@ -277,26 +285,28 @@ const PLAN_CARD: Record<"free" | "gold" | "platinum" | "black", PlanCardTheme> =
     platinum: {
       bg: [
         "#FFFFFF",
-        "#F2F5F8",
+        "#F4F7FA",
         "#C5CED6",
-        "#E8EEF2",
         "#8E9BA8",
-        "#DDE4EA",
+        "#FFFFFF",
         "#A8B4C0",
-        "#F7F9FB",
+        "#6E7E8A",
+        "#E8EEF2",
+        "#5A6874",
       ],
-      bgLocations: [0, 0.12, 0.28, 0.42, 0.58, 0.72, 0.88, 1],
+      bgLocations: [0, 0.1, 0.24, 0.38, 0.5, 0.62, 0.76, 0.9, 1],
       shine: [
-        "rgba(255,255,255,0.85)",
-        "rgba(255,255,255,0.25)",
+        "rgba(255,255,255,0.95)",
+        "rgba(255,255,255,0.5)",
         "rgba(255,255,255,0)",
-        "rgba(255,255,255,0.4)",
-        "rgba(255,255,255,0.1)",
+        "rgba(255,255,255,0.65)",
+        "rgba(200,210,220,0.25)",
+        "rgba(255,255,255,0.15)",
       ],
       rim: [
-        "rgba(255,255,255,0.65)",
-        "rgba(255,255,255,0)",
-        "rgba(40,50,60,0.28)",
+        "rgba(255,255,255,0.8)",
+        "rgba(255,255,255,0.08)",
+        "rgba(40,50,60,0.32)",
       ],
       frame: ["#FFFFFF", "#C5CED6", "#7A8A96", "#E8EEF2", "#9AA8B4"],
       border: "#6E7E8A",
@@ -315,30 +325,32 @@ const PLAN_CARD: Record<"free" | "gold" | "platinum" | "black", PlanCardTheme> =
     },
     black: {
       bg: [
-        "#5A5A5A",
-        "#2A2A2A",
+        "#8A8A8A",
+        "#3A3A3A",
         "#0A0A0A",
-        "#3D3D3D",
-        "#050505",
-        "#1F1F1F",
-        "#4A4A4A",
+        "#5A5A5A",
+        "#000000",
+        "#2A2A2A",
+        "#6A6A6A",
         "#121212",
+        "#1F1F1F",
       ],
-      bgLocations: [0, 0.14, 0.3, 0.46, 0.62, 0.76, 0.9, 1],
+      bgLocations: [0, 0.12, 0.28, 0.42, 0.55, 0.68, 0.8, 0.92, 1],
       shine: [
-        "rgba(255,255,255,0.38)",
-        "rgba(255,255,255,0.1)",
-        "rgba(255,255,255,0)",
+        "rgba(255,255,255,0.55)",
         "rgba(255,255,255,0.18)",
-        "rgba(255,255,255,0.04)",
+        "rgba(255,255,255,0)",
+        "rgba(255,255,255,0.35)",
+        "rgba(255,255,255,0.08)",
+        "rgba(255,255,255,0.15)",
       ],
       rim: [
-        "rgba(255,255,255,0.28)",
-        "rgba(255,255,255,0)",
-        "rgba(0,0,0,0.45)",
+        "rgba(255,255,255,0.4)",
+        "rgba(255,255,255,0.02)",
+        "rgba(0,0,0,0.55)",
       ],
-      frame: ["#C8C8C8", "#6A6A6A", "#2A2A2A", "#8A8A8A", "#3A3A3A"],
-      border: "#9A9A9A",
+      frame: ["#E0E0E0", "#8A8A8A", "#2A2A2A", "#A0A0A0", "#3A3A3A"],
+      border: "#A8A8A8",
       title: "#FFFFFF",
       price: "#FFFFFF",
       period: "rgba(255,255,255,0.7)",
@@ -370,7 +382,12 @@ const FEATURE_ICONS: Record<
 };
 
 function getPlanCardTheme(id: SubscriptionPlanId): PlanCardTheme | null {
-  if (id === "free" || id === "gold" || id === "platinum" || id === "black") {
+  if (
+    id === "free" ||
+    id === "gold" ||
+    id === "platinum" ||
+    id === "black"
+  ) {
     return PLAN_CARD[id];
   }
   return null;
@@ -425,6 +442,258 @@ function PopularRibbon() {
   );
 }
 
+/** Real metallic membership plates — gold / platinum / black / free */
+function PlanPlateIcon({
+  plan,
+  size = 28,
+}: {
+  plan: SubscriptionPlanId;
+  size?: number;
+}) {
+  const uid = `metal_${plan}_${Math.round(size)}`;
+
+  if (plan === "gold") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 64 64">
+        <Defs>
+          <SvgLinearGradient id={`${uid}_outer`} x1="0.1" y1="0" x2="0.9" y2="1">
+            <Stop offset="0" stopColor="#FFF8DC" />
+            <Stop offset="0.18" stopColor="#F5D76E" />
+            <Stop offset="0.38" stopColor="#C9A227" />
+            <Stop offset="0.55" stopColor="#8B6914" />
+            <Stop offset="0.72" stopColor="#E8C547" />
+            <Stop offset="0.88" stopColor="#A67C00" />
+            <Stop offset="1" stopColor="#5C4300" />
+          </SvgLinearGradient>
+          <RadialGradient id={`${uid}_face`} cx="38%" cy="32%" r="68%">
+            <Stop offset="0" stopColor="#FFFBE8" />
+            <Stop offset="0.25" stopColor="#F0D060" />
+            <Stop offset="0.5" stopColor="#D4AF37" />
+            <Stop offset="0.75" stopColor="#A67C00" />
+            <Stop offset="1" stopColor="#6B4E09" />
+          </RadialGradient>
+          <SvgLinearGradient id={`${uid}_band`} x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0" stopColor="#5C4300" />
+            <Stop offset="0.2" stopColor="#F5E08A" />
+            <Stop offset="0.45" stopColor="#FFF8D6" />
+            <Stop offset="0.65" stopColor="#B8860B" />
+            <Stop offset="1" stopColor="#3D2A00" />
+          </SvgLinearGradient>
+          <SvgLinearGradient id={`${uid}_crown`} x1="0.5" y1="0" x2="0.5" y2="1">
+            <Stop offset="0" stopColor="#FFFDF0" />
+            <Stop offset="0.35" stopColor="#FFE082" />
+            <Stop offset="0.7" stopColor="#C9A227" />
+            <Stop offset="1" stopColor="#7A5A08" />
+          </SvgLinearGradient>
+          <SvgLinearGradient id={`${uid}_glint`} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="0.85" />
+            <Stop offset="0.4" stopColor="#FFFFFF" stopOpacity="0.15" />
+            <Stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
+          </SvgLinearGradient>
+        </Defs>
+        <Circle cx="32" cy="33" r="30" fill="#3D2A00" opacity={0.35} />
+        <Circle cx="32" cy="32" r="30" fill={`url(#${uid}_outer)`} />
+        <Circle cx="32" cy="32" r="26.5" fill={`url(#${uid}_band)`} />
+        <Circle cx="32" cy="32" r="23.5" fill={`url(#${uid}_face)`} />
+        <Circle cx="32" cy="32" r="23.5" fill="none" stroke="#FFF8D6" strokeWidth="0.8" opacity={0.45} />
+        <Ellipse cx="22" cy="20" rx="12" ry="7" fill={`url(#${uid}_glint)`} />
+        <Path
+          d="M14 18 L18 10 L22 18 L26 12 L30 18 L34 10 L38 18 L42 12 L46 18 L50 14"
+          stroke="#FFFBE8"
+          strokeWidth="1.2"
+          fill="none"
+          opacity={0.55}
+          strokeLinecap="round"
+        />
+        <Path
+          d="M18 39 L22 23 L27 32 L32 18 L37 32 L42 23 L46 39 Z"
+          fill={`url(#${uid}_crown)`}
+        />
+        <Path
+          d="M22 23 L27 32 L32 18 L37 32 L42 23"
+          stroke="#FFFBE8"
+          strokeWidth="0.9"
+          fill="none"
+          opacity={0.55}
+        />
+        <Circle cx="22" cy="23" r="2.4" fill="#FFF8D6" />
+        <Circle cx="32" cy="18" r="2.8" fill="#FFFDF5" />
+        <Circle cx="42" cy="23" r="2.4" fill="#FFF8D6" />
+        <Rect x="19" y="39" width="26" height="5" rx="1.5" fill={`url(#${uid}_band)`} />
+        <Rect x="20" y="39.5" width="24" height="1.2" rx="0.6" fill="#FFF8D6" opacity={0.5} />
+      </Svg>
+    );
+  }
+
+  if (plan === "platinum") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 64 64">
+        <Defs>
+          <SvgLinearGradient id={`${uid}_outer`} x1="0.05" y1="0" x2="0.95" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" />
+            <Stop offset="0.15" stopColor="#E8EEF2" />
+            <Stop offset="0.35" stopColor="#A8B4C0" />
+            <Stop offset="0.5" stopColor="#6E7E8A" />
+            <Stop offset="0.68" stopColor="#D5DEE6" />
+            <Stop offset="0.85" stopColor="#8E9BA8" />
+            <Stop offset="1" stopColor="#3A4854" />
+          </SvgLinearGradient>
+          <RadialGradient id={`${uid}_face`} cx="36%" cy="30%" r="70%">
+            <Stop offset="0" stopColor="#FFFFFF" />
+            <Stop offset="0.28" stopColor="#F2F5F8" />
+            <Stop offset="0.52" stopColor="#C5CED6" />
+            <Stop offset="0.78" stopColor="#8E9BA8" />
+            <Stop offset="1" stopColor="#5A6874" />
+          </RadialGradient>
+          <SvgLinearGradient id={`${uid}_band`} x1="0" y1="0.5" x2="1" y2="0.5">
+            <Stop offset="0" stopColor="#3A4854" />
+            <Stop offset="0.22" stopColor="#C5CED6" />
+            <Stop offset="0.48" stopColor="#FFFFFF" />
+            <Stop offset="0.72" stopColor="#8E9BA8" />
+            <Stop offset="1" stopColor="#24323C" />
+          </SvgLinearGradient>
+          <SvgLinearGradient id={`${uid}_gem`} x1="0.5" y1="0" x2="0.5" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" />
+            <Stop offset="0.3" stopColor="#E8EEF2" />
+            <Stop offset="0.65" stopColor="#A8B4C0" />
+            <Stop offset="1" stopColor="#5A6874" />
+          </SvgLinearGradient>
+        </Defs>
+        <Circle cx="32" cy="33" r="30" fill="#1A242C" opacity={0.3} />
+        <Circle cx="32" cy="32" r="30" fill={`url(#${uid}_outer)`} />
+        <Circle cx="32" cy="32" r="26.5" fill={`url(#${uid}_band)`} />
+        <Circle cx="32" cy="32" r="23.5" fill={`url(#${uid}_face)`} />
+        <Circle cx="32" cy="32" r="23.5" fill="none" stroke="#FFFFFF" strokeWidth="0.9" opacity={0.55} />
+        <Ellipse cx="22" cy="19" rx="13" ry="7" fill="#FFFFFF" opacity={0.55} />
+        <Path
+          d="M12 22 Q32 14 52 26"
+          stroke="#FFFFFF"
+          strokeWidth="1.4"
+          fill="none"
+          opacity={0.4}
+        />
+        <Path d="M32 15 L43 28 L32 49 L21 28 Z" fill={`url(#${uid}_gem)`} />
+        <Path d="M32 15 L37.5 28 L26.5 28 Z" fill="#FFFFFF" opacity={0.7} />
+        <Path d="M21 28 L32 49 L26.5 28 Z" fill="#3A4854" opacity={0.4} />
+        <Path d="M43 28 L32 49 L37.5 28 Z" fill="#FFFFFF" opacity={0.25} />
+        <Path d="M26.5 28 L37.5 28 L32 36 Z" fill="#FFFFFF" opacity={0.35} />
+      </Svg>
+    );
+  }
+
+  if (plan === "black") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 64 64">
+        <Defs>
+          <SvgLinearGradient id={`${uid}_outer`} x1="0.1" y1="0" x2="0.9" y2="1">
+            <Stop offset="0" stopColor="#F0F0F0" />
+            <Stop offset="0.2" stopColor="#A0A0A0" />
+            <Stop offset="0.4" stopColor="#4A4A4A" />
+            <Stop offset="0.55" stopColor="#1A1A1A" />
+            <Stop offset="0.7" stopColor="#6A6A6A" />
+            <Stop offset="0.88" stopColor="#2A2A2A" />
+            <Stop offset="1" stopColor="#050505" />
+          </SvgLinearGradient>
+          <RadialGradient id={`${uid}_face`} cx="34%" cy="28%" r="72%">
+            <Stop offset="0" stopColor="#5A5A5A" />
+            <Stop offset="0.3" stopColor="#2A2A2A" />
+            <Stop offset="0.55" stopColor="#0E0E0E" />
+            <Stop offset="0.8" stopColor="#1F1F1F" />
+            <Stop offset="1" stopColor="#000000" />
+          </RadialGradient>
+          <SvgLinearGradient id={`${uid}_band`} x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0" stopColor="#0A0A0A" />
+            <Stop offset="0.25" stopColor="#8A8A8A" />
+            <Stop offset="0.5" stopColor="#E8E8E8" />
+            <Stop offset="0.75" stopColor="#5A5A5A" />
+            <Stop offset="1" stopColor="#050505" />
+          </SvgLinearGradient>
+          <SvgLinearGradient id={`${uid}_mark`} x1="0.2" y1="0" x2="0.8" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" />
+            <Stop offset="0.4" stopColor="#D0D0D0" />
+            <Stop offset="0.75" stopColor="#8A8A8A" />
+            <Stop offset="1" stopColor="#4A4A4A" />
+          </SvgLinearGradient>
+        </Defs>
+        <Circle cx="32" cy="33" r="30" fill="#000000" opacity={0.5} />
+        <Circle cx="32" cy="32" r="30" fill={`url(#${uid}_outer)`} />
+        <Circle cx="32" cy="32" r="26.5" fill={`url(#${uid}_band)`} />
+        <Circle cx="32" cy="32" r="23.5" fill={`url(#${uid}_face)`} />
+        <Circle cx="32" cy="32" r="23.5" fill="none" stroke="#C8C8C8" strokeWidth="0.7" opacity={0.35} />
+        <Ellipse cx="22" cy="18" rx="12" ry="6" fill="#FFFFFF" opacity={0.22} />
+        <Path
+          d="M14 20 Q32 12 50 24"
+          stroke="#FFFFFF"
+          strokeWidth="1.1"
+          fill="none"
+          opacity={0.28}
+        />
+        <Path
+          d="M22 21 L32 16 L42 21 L39 42 L32 47 L25 42 Z"
+          fill={`url(#${uid}_mark)`}
+        />
+        <Path
+          d="M28 27 L32 22 L36 27 L34.5 38 L32 41 L29.5 38 Z"
+          fill="#050505"
+          opacity={0.65}
+        />
+        <Path
+          d="M22 21 L32 16 L42 21"
+          stroke="#FFFFFF"
+          strokeWidth="0.8"
+          fill="none"
+          opacity={0.45}
+        />
+      </Svg>
+    );
+  }
+
+  // Free — brushed amethyst metal
+  return (
+    <Svg width={size} height={size} viewBox="0 0 64 64">
+      <Defs>
+        <SvgLinearGradient id={`${uid}_outer`} x1="0.1" y1="0" x2="0.9" y2="1">
+          <Stop offset="0" stopColor="#FFFFFF" />
+          <Stop offset="0.25" stopColor="#EFE8F8" />
+          <Stop offset="0.5" stopColor="#9B7ED9" />
+          <Stop offset="0.7" stopColor="#370372" />
+          <Stop offset="0.88" stopColor="#C4B0EC" />
+          <Stop offset="1" stopColor="#2A0258" />
+        </SvgLinearGradient>
+        <RadialGradient id={`${uid}_face`} cx="36%" cy="30%" r="68%">
+          <Stop offset="0" stopColor="#FFFFFF" />
+          <Stop offset="0.3" stopColor="#EFE8F8" />
+          <Stop offset="0.6" stopColor="#B69DF8" />
+          <Stop offset="1" stopColor="#4F378B" />
+        </RadialGradient>
+        <SvgLinearGradient id={`${uid}_band`} x1="0" y1="0" x2="1" y2="0">
+          <Stop offset="0" stopColor="#2A0258" />
+          <Stop offset="0.3" stopColor="#D0BCFF" />
+          <Stop offset="0.55" stopColor="#FFFFFF" />
+          <Stop offset="0.8" stopColor="#7F67BE" />
+          <Stop offset="1" stopColor="#1C0540" />
+        </SvgLinearGradient>
+      </Defs>
+      <Circle cx="32" cy="33" r="30" fill="#2A0258" opacity={0.28} />
+      <Circle cx="32" cy="32" r="30" fill={`url(#${uid}_outer)`} />
+      <Circle cx="32" cy="32" r="26.5" fill={`url(#${uid}_band)`} />
+      <Circle cx="32" cy="32" r="23.5" fill={`url(#${uid}_face)`} />
+      <Circle cx="32" cy="32" r="23.5" fill="none" stroke="#FFFFFF" strokeWidth="0.8" opacity={0.5} />
+      <Ellipse cx="22" cy="19" rx="12" ry="7" fill="#FFFFFF" opacity={0.55} />
+      <Path
+        d="M32 17 L34.5 25.5 L43.5 25.5 L36.5 30.5 L39.2 39 L32 33.8 L24.8 39 L27.5 30.5 L20.5 25.5 L29.5 25.5 Z"
+        fill="#FFFFFF"
+        opacity={0.95}
+      />
+      <Path
+        d="M32 17 L34.5 25.5 L29.5 25.5 Z"
+        fill="#EFE8F8"
+        opacity={0.8}
+      />
+    </Svg>
+  );
+}
+
 function PlanBadge({
   label,
   plan,
@@ -436,7 +705,7 @@ function PlanBadge({
     const color = planBadgeColor(plan);
     return (
       <View style={[styles.planBadge, { backgroundColor: `${color}44` }]}>
-        <Ionicons name="diamond" size={13} color={color} />
+        <PlanPlateIcon plan={plan} size={16} />
         <Text style={[styles.planBadgeText, { color: PAGE.text }]}>
           {label}
         </Text>
@@ -448,7 +717,7 @@ function PlanBadge({
     <View
       style={[styles.planBadge, { backgroundColor: "rgba(255,255,255,0.12)" }]}
     >
-      <Ionicons name="diamond" size={13} color={PAGE.text} />
+      <PlanPlateIcon plan="free" size={16} />
       <Text style={[styles.planBadgeText, { color: PAGE.text }]}>{label}</Text>
     </View>
   );
@@ -456,6 +725,99 @@ function PlanBadge({
 
 function formatInr(amount: number) {
   return `₹${amount.toLocaleString("en-IN")}`;
+}
+
+/** Diagonal metal shine that sweeps across the card while you slide */
+function MetalSlideShine({
+  scrollX,
+  index,
+  burst,
+}: {
+  scrollX: Animated.Value;
+  index: number;
+  burst: Animated.Value;
+}) {
+  const step = CARD_WIDTH + CARD_GAP;
+  const translateX = scrollX.interpolate({
+    inputRange: [
+      (index - 1) * step,
+      index * step,
+      (index + 1) * step,
+    ],
+    outputRange: [-CARD_WIDTH * 1.15, CARD_WIDTH * 0.15, CARD_WIDTH * 1.25],
+    extrapolate: "clamp",
+  });
+  const slideOpacity = scrollX.interpolate({
+    inputRange: [
+      (index - 1) * step,
+      index * step - step * 0.35,
+      index * step,
+      index * step + step * 0.35,
+      (index + 1) * step,
+    ],
+    outputRange: [0.05, 0.95, 0.25, 0.95, 0.05],
+    extrapolate: "clamp",
+  });
+  const burstTranslate = burst.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-CARD_WIDTH * 0.9, CARD_WIDTH * 1.1],
+  });
+  const burstOpacity = burst.interpolate({
+    inputRange: [0, 0.2, 0.55, 1],
+    outputRange: [0, 1, 0.85, 0],
+  });
+
+  return (
+    <View style={styles.metalShineHost} pointerEvents="none">
+      <Animated.View
+        style={[
+          styles.metalShineBeam,
+          {
+            opacity: slideOpacity,
+            transform: [{ translateX }, { rotate: "24deg" }],
+          },
+        ]}
+      >
+        <LinearGradient
+          colors={[
+            "rgba(255,255,255,0)",
+            "rgba(255,255,255,0.12)",
+            "rgba(255,255,255,0.85)",
+            "rgba(255,255,255,0.12)",
+            "rgba(255,255,255,0)",
+          ]}
+          locations={[0, 0.28, 0.5, 0.72, 1]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={StyleSheet.absoluteFill}
+        />
+      </Animated.View>
+      <Animated.View
+        style={[
+          styles.metalShineBeam,
+          styles.metalShineBurst,
+          {
+            opacity: burstOpacity,
+            transform: [{ translateX: burstTranslate }, { rotate: "24deg" }],
+          },
+        ]}
+      >
+        <LinearGradient
+          colors={[
+            "rgba(255,255,255,0)",
+            "rgba(255,255,255,0.25)",
+            "rgba(255,255,255,1)",
+            "rgba(255,255,255,0.25)",
+            "rgba(255,255,255,0)",
+          ]}
+          locations={[0, 0.3, 0.5, 0.7, 1]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={StyleSheet.absoluteFill}
+        />
+      </Animated.View>
+    </View>
+  );
 }
 
 export default function SubscriptionScreen() {
@@ -473,6 +835,25 @@ export default function SubscriptionScreen() {
     React.useState<SubscriptionPlanId>("free");
   const [userName, setUserName] = React.useState("");
   const [userEmail, setUserEmail] = React.useState("");
+  const scrollX = React.useRef(new Animated.Value(0)).current;
+  const shineBurst = React.useRef(new Animated.Value(0)).current;
+  const shineBurstRef = React.useRef<() => void>(() => {});
+
+  shineBurstRef.current = () => {
+    shineBurst.setValue(0);
+    Animated.timing(shineBurst, {
+      toValue: 1,
+      duration: 700,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      shineBurstRef.current();
+    }, 400);
+    return () => clearTimeout(t);
+  }, []);
 
   const activePeriod =
     billingPeriods.find((p) => p.id === selectedPeriod) ??
@@ -491,7 +872,12 @@ export default function SubscriptionScreen() {
     const index = Math.round(offsetX / (CARD_WIDTH + CARD_GAP));
     const id =
       PLAN_ORDER[Math.min(Math.max(index, 0), PLAN_ORDER.length - 1)] ?? "free";
-    setFocusedPlanId(id);
+    setFocusedPlanId((prev) => {
+      if (prev !== id) {
+        shineBurstRef.current();
+      }
+      return id;
+    });
   }
 
   const load = React.useCallback(async () => {
@@ -547,6 +933,15 @@ export default function SubscriptionScreen() {
     if (buying) return;
     const plan = plans.find((p) => p.id === planId);
     if (!plan || planId === "free") return;
+
+    const price = plan.pricing[selectedPeriod];
+    if (price == null || price <= 0) {
+      Alert.alert(
+        "Unavailable",
+        "This billing period is not available for this plan. Try Monthly.",
+      );
+      return;
+    }
 
     const isRenew =
       status?.isActive && status.plan === planId;
@@ -684,18 +1079,23 @@ export default function SubscriptionScreen() {
           </View>
 
           <View style={styles.choosePlanHint}>
-            <Ionicons name="diamond" size={12} color="#C9A227" />
+            <PlanPlateIcon plan="gold" size={16} />
             <Text style={[styles.sectionHint, styles.choosePlanHintText]}>
               Choose a plan
             </Text>
           </View>
-          <ScrollView
+          <Animated.ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             decelerationRate="fast"
             snapToInterval={CARD_WIDTH + CARD_GAP}
             snapToAlignment="start"
             contentContainerStyle={styles.planCardsRow}
+            scrollEventThrottle={16}
+            onScroll={Animated.event(
+              [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+              { useNativeDriver: true },
+            )}
             onMomentumScrollEnd={(e) =>
               updateFocusedPlanFromScroll(e.nativeEvent.contentOffset.x)
             }
@@ -703,7 +1103,7 @@ export default function SubscriptionScreen() {
               updateFocusedPlanFromScroll(e.nativeEvent.contentOffset.x)
             }
           >
-            {PLAN_ORDER.map((id) => {
+            {PLAN_ORDER.map((id, index) => {
               const plan = plans.find((p) => p.id === id);
               if (!plan) return null;
               const isCurrent = activePlan === id;
@@ -734,7 +1134,7 @@ export default function SubscriptionScreen() {
                   >
                     <LinearGradient
                       colors={theme.shine}
-                      locations={[0, 0.18, 0.42, 0.68, 1]}
+                      locations={[0, 0.15, 0.35, 0.55, 0.78, 1]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                       style={styles.planCardShine}
@@ -760,17 +1160,20 @@ export default function SubscriptionScreen() {
                       style={styles.planCardSpecular}
                       pointerEvents="none"
                     />
+                    <MetalSlideShine
+                      scrollX={scrollX}
+                      index={index}
+                      burst={shineBurst}
+                    />
 
                     {theme.popular ? <PopularRibbon /> : null}
 
                     <View style={styles.planCardContent}>
                       <View style={styles.planHeader}>
                         <View style={styles.planTitleRow}>
-                          <Ionicons
-                            name="diamond"
-                            size={15}
-                            color={theme.title}
-                          />
+                          <View style={styles.planPlateWrap}>
+                            <PlanPlateIcon plan={id} size={34} />
+                          </View>
                           <Text
                             style={[styles.planName, { color: theme.title }]}
                             numberOfLines={1}
@@ -935,7 +1338,7 @@ export default function SubscriptionScreen() {
                 </View>
               );
             })}
-          </ScrollView>
+          </Animated.ScrollView>
 
           <View style={styles.trustRow}>
             <View style={styles.trustIconWrap}>
@@ -1193,6 +1596,21 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     opacity: 0.55,
   },
+  metalShineHost: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: "hidden",
+    zIndex: 2,
+  },
+  metalShineBeam: {
+    position: "absolute",
+    top: -60,
+    bottom: -60,
+    width: CARD_WIDTH * 0.42,
+    left: 0,
+  },
+  metalShineBurst: {
+    width: CARD_WIDTH * 0.5,
+  },
   popularRibbonWrap: {
     position: "absolute",
     top: 10,
@@ -1224,8 +1642,13 @@ const styles = StyleSheet.create({
   planTitleRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
     marginBottom: 4,
+  },
+  planPlateWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
   },
   planName: {
     fontSize: 20,

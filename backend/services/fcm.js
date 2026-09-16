@@ -48,6 +48,10 @@ function isEnabled() {
 
 /**
  * Build the FCM message body. All `data` values must be strings.
+ *
+ * TTL policy (WhatsApp-like):
+ * - call invites: short (60s) — stale rings are useless
+ * - chat + everything else: long (24h) — must survive offline / Doze
  */
 function buildMessage({
   tokens,
@@ -61,6 +65,7 @@ function buildMessage({
   sound = 'default',
   badge,
   collapseKey,
+  ttlMs,
 }) {
   const stringData = {};
   for (const [key, value] of Object.entries(data || {})) {
@@ -70,6 +75,13 @@ function buildMessage({
   }
 
   const isHigh = priority === 'high';
+  const type = String(stringData.type || channelId || '');
+  const resolvedTtl =
+    typeof ttlMs === 'number'
+      ? ttlMs
+      : type === 'call'
+        ? 60 * 1000
+        : 24 * 60 * 60 * 1000;
 
   return {
     tokens,
@@ -82,8 +94,7 @@ function buildMessage({
     android: {
       priority: isHigh ? 'high' : 'normal',
       ...(collapseKey ? { collapseKey } : {}),
-      // Drop rather than deliver stale pushes (e.g. a call invite)
-      ttl: isHigh ? 60 * 1000 : 24 * 60 * 60 * 1000,
+      ttl: resolvedTtl,
       notification: {
         channelId,
         sound,
@@ -98,6 +109,10 @@ function buildMessage({
     apns: {
       headers: {
         'apns-priority': isHigh ? '10' : '5',
+        // Keep chat pushes available offline (call stays high-priority short-lived)
+        'apns-expiration': String(
+          Math.floor(Date.now() / 1000) + Math.floor(resolvedTtl / 1000),
+        ),
         ...(collapseKey ? { 'apns-collapse-id': collapseKey } : {}),
       },
       payload: {

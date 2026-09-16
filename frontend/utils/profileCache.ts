@@ -1,4 +1,4 @@
-import { API_BASE, apiRequest } from './api';
+import { apiRequest, getApiBase } from './api';
 import {
   AuthUser,
   getAuthToken,
@@ -8,22 +8,17 @@ import {
   saveLocalProfile,
   StoredProfile,
 } from './auth';
+import { resolveMediaUrl } from './media';
 
 function toAbsolute(url?: string | null) {
   if (!url) return '';
-  if (
-    url.startsWith('http') ||
-    url.startsWith('data:') ||
-    url.startsWith('file:')
-  ) {
-    return url;
-  }
-  return `${API_BASE}${url}`;
+  return resolveMediaUrl(url) || `${getApiBase()}${url.startsWith('/') ? url : `/${url}`}`;
 }
 
 export type ProfileScreenSnapshot = {
   profile: StoredProfile | null;
   gallery: string[];
+  coverPhoto: string;
   subscriptionBadge: string | null;
   subscriptionExpiresAt: string | null;
   at: number;
@@ -49,7 +44,18 @@ export function setCachedProfile(
 export function updateCachedProfile(
   patch: Partial<Omit<ProfileScreenSnapshot, 'at'>>,
 ) {
-  if (!cached) return;
+  if (!cached) {
+    cached = {
+      profile: null,
+      gallery: [],
+      coverPhoto: '',
+      subscriptionBadge: null,
+      subscriptionExpiresAt: null,
+      at: Date.now(),
+      ...patch,
+    };
+    return;
+  }
   cached = { ...cached, ...patch, at: Date.now() };
 }
 
@@ -72,6 +78,7 @@ async function snapshotFromLocal(
     profile.publicId = '';
   }
   profile.photo = toAbsolute(profile.photo);
+  profile.coverPhoto = toAbsolute(profile.coverPhoto);
 
   const gallery = Array.isArray(profile.photos)
     ? profile.photos.map(toAbsolute).filter(Boolean)
@@ -80,6 +87,7 @@ async function snapshotFromLocal(
   return {
     profile,
     gallery,
+    coverPhoto: toAbsolute(profile.coverPhoto),
     subscriptionBadge: cached?.subscriptionBadge ?? null,
     subscriptionExpiresAt: cached?.subscriptionExpiresAt ?? null,
     at: Date.now(),
@@ -93,6 +101,7 @@ export async function buildProfileSnapshot(
   const localSnapshot = await snapshotFromLocal(authUser);
   let profile = localSnapshot?.profile ?? null;
   let gallery = localSnapshot?.gallery ?? [];
+  let coverPhoto = localSnapshot?.coverPhoto ?? '';
 
   if (profile) {
     await saveLocalProfile(authUser.email, profile);
@@ -106,7 +115,12 @@ export async function buildProfileSnapshot(
     gallery = me.photos.map(toAbsolute).filter(Boolean);
   }
 
+  // Prefer server cover when present; otherwise keep local (avoids wipe races)
+  const serverCover = toAbsolute(me?.coverPhoto || '');
+  coverPhoto = serverCover || coverPhoto;
+
   const serverPublicId = String(me?.publicId || '').toUpperCase();
+  const pv = me?.photoVerification;
   const next: StoredProfile = {
     ...(profile || {}),
     name: me?.name || profile?.name,
@@ -118,9 +132,18 @@ export async function buildProfileSnapshot(
     relationshipGoal: me?.relationshipGoal || profile?.relationshipGoal,
     height: me?.height ?? profile?.height,
     photo: toAbsolute(me?.photo || profile?.photo),
+    coverPhoto: coverPhoto || null,
     photos: Array.isArray(me?.photos) ? me.photos : profile?.photos,
     userId: String(me?.id || me?._id || profile?.userId || authUser.id || ''),
     publicId: isValidPublicId(serverPublicId) ? serverPublicId : '',
+    photoVerification: pv
+      ? {
+          status: String(pv.status || 'none'),
+          photoVerified:
+            !!pv.photoVerified || String(pv.status || '') === 'approved',
+          reviewNote: String(pv.reviewNote || ''),
+        }
+      : profile?.photoVerification || null,
   };
 
   await saveLocalProfile(authUser.email, next);
@@ -134,6 +157,7 @@ export async function buildProfileSnapshot(
   return {
     profile,
     gallery,
+    coverPhoto,
     subscriptionBadge,
     subscriptionExpiresAt,
     at: Date.now(),

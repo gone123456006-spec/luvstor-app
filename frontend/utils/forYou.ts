@@ -3,6 +3,7 @@ import {
   mapNearbyUser,
   NearbyUser,
   NEARBY_BATCH_SIZE,
+  uploadMyLocation,
 } from './nearby';
 
 export type ForYouUser = NearbyUser & {
@@ -44,4 +45,54 @@ export async function fetchForYouPage(
     hasMore: !!data?.hasMore,
     cacheHit: !!data?.cacheHit,
   };
+}
+
+/**
+ * WhatsApp-style For You load.
+ * refreshFast: paint from ranked cache immediately; GPS updates in parallel.
+ * Does not wait for a full forceRefresh rebuild.
+ */
+export async function loadForYouFeed(
+  token: string,
+  options: {
+    page?: number;
+    count?: number;
+    forceRefresh?: boolean;
+    refreshFast?: boolean;
+  } = {},
+): Promise<{ users: ForYouUser[]; hasMore: boolean; cacheHit?: boolean }> {
+  const { refreshFast, forceRefresh, page = 1, count } = options;
+
+  if (refreshFast) {
+    const locPromise = uploadMyLocation(token, {
+      preferCached: true,
+      timeoutMs: 3500,
+    });
+
+    try {
+      // Cache-backed page — no ranked rebuild wait
+      const feed = await fetchForYouPage(token, {
+        page,
+        count,
+        forceRefresh: false,
+      });
+      void locPromise;
+      return feed;
+    } catch (err: any) {
+      if (
+        err?.code === 'LOCATION_REQUIRED' ||
+        /location/i.test(err?.message || '')
+      ) {
+        await locPromise;
+        return fetchForYouPage(token, {
+          page,
+          count,
+          forceRefresh: false,
+        });
+      }
+      throw err;
+    }
+  }
+
+  return fetchForYouPage(token, { page, count, forceRefresh: !!forceRefresh });
 }

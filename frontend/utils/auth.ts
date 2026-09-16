@@ -12,6 +12,8 @@ import {
 
 export type StoredProfile = {
   photo?: string | null;
+  /** Banner cover — independent from DP and posts */
+  coverPhoto?: string | null;
   photos?: string[];
   name?: string;
   age?: string | number;
@@ -28,6 +30,11 @@ export type StoredProfile = {
   userId?: string;
   /** Unique public ID — format ABCD1234 */
   publicId?: string;
+  photoVerification?: {
+    status?: string;
+    photoVerified?: boolean;
+    reviewNote?: string;
+  } | null;
 };
 
 export type AuthUser = {
@@ -49,7 +56,28 @@ export function profileStorageKey(email: string): string {
 }
 
 export function isLocalProfileComplete(profile: StoredProfile | null | undefined): boolean {
-  return Boolean(profile?.name && String(profile.name).trim().length > 0);
+  if (!profile) return false;
+  const name = String(profile.name || '').trim();
+  const gender = String(profile.gender || '').trim();
+  const photo = String(
+    profile.photo || (Array.isArray(profile.photos) && profile.photos[0]) || '',
+  ).trim();
+  const age = Number(profile.age);
+  const ageOk = Number.isFinite(age) && age >= 18;
+  const bio = String(profile.bio || '').trim();
+  const interests = Array.isArray(profile.interests)
+    ? profile.interests.filter((i) => String(i || '').trim())
+    : [];
+  const goal = String(profile.relationshipGoal || '').trim();
+  return Boolean(
+    name && ageOk && gender && photo && bio && interests.length > 0 && goal,
+  );
+}
+
+/** Server /me shape → profileComplete (same rules as backend). */
+export function isServerProfileComplete(me: Record<string, unknown> | null | undefined): boolean {
+  if (!me) return false;
+  return isLocalProfileComplete(userToLocalProfile(me));
 }
 
 export async function getAuthToken(): Promise<string | null> {
@@ -125,11 +153,13 @@ export function userToLocalProfile(user: Record<string, unknown>): StoredProfile
     interests: (user.interests as string[]) || [],
     relationshipGoal: (user.relationshipGoal as string) || '',
     photo: (user.photo as string) || null,
+    coverPhoto: (user.coverPhoto as string) || null,
     photos: Array.isArray(user.photos) ? (user.photos as string[]) : [],
     height: user.height != null ? String(user.height) : '',
     userId: String(user.id || user._id || ''),
     // Only keep valid ABCD1234 — never store Mongo ObjectId here
     publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : '',
+    photoVerification: (user.photoVerification as StoredProfile['photoVerification']) || null,
   };
 }
 
@@ -200,7 +230,7 @@ export async function hydrateAccountFromServer(
     id: String(me._id || me.id || ''),
     email: accountEmail,
     name: (me.name as string) || '',
-    profileComplete: Boolean(me.name && String(me.name).trim()),
+    profileComplete: isServerProfileComplete(me),
     ...me,
   };
 }
@@ -258,18 +288,36 @@ export async function completeAccountLogin(
   }
 }
 
-export async function resolvePostLoginRoute(user: AuthUser): Promise<'/(tabs)' | '/create-profile'> {
+export async function resolvePostLoginRoute(
+  user: AuthUser,
+): Promise<'/(tabs)' | '/create-profile'> {
   const email = normalizeEmail(user.email);
-
-  if (user.profileComplete) {
-    return '/(tabs)';
-  }
-
   const local = await getLocalProfile(email);
+
+  // Full dating profile already on device → Discover (home tabs)
   if (isLocalProfileComplete(local)) {
     return '/(tabs)';
   }
 
+  // Confirm with server (covers reinstall / another device)
+  try {
+    const token = await getAuthToken();
+    if (token) {
+      const me = (await apiRequest('/api/users/me', token)) as Record<
+        string,
+        unknown
+      >;
+      const mapped = userToLocalProfile(me);
+      await saveLocalProfile(email, mapped);
+      if (isLocalProfileComplete(mapped)) {
+        return '/(tabs)';
+      }
+    }
+  } catch {
+    /* offline — fall through to create-profile */
+  }
+
+  // New / incomplete user (incl. Google name+photo only) → Create profile
   return '/create-profile';
 }
 

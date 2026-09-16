@@ -1,7 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { Audio as ExpoAudio } from "expo-av";
-import { Audio, isAudioAvailable } from "../../utils/expoAv";
+import {
+    AudioModule,
+    createAudioPlayer,
+    getRecordingPermissionsAsync,
+    RecordingPresets,
+    requestRecordingPermissionsAsync,
+    setAudioModeAsync,
+    type AudioPlayer,
+    type AudioRecorder,
+} from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -25,6 +33,7 @@ import React, {
 import {
     ActivityIndicator,
     Animated,
+    AppState,
     BackHandler,
     Dimensions,
     FlatList,
@@ -59,8 +68,9 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { io, Socket } from "socket.io-client";
+import { Socket } from "socket.io-client";
 import { useAppAlert } from "../../components/AppAlert";
+import { sharePublicProfile } from "../../components/CopyablePublicId";
 import { ChatThreadSkeleton } from "../../components/ScreenSkeleton";
 import UserProfileModal from "../../components/UserProfileModal";
 import WhatsAppAvatar, {
@@ -68,6 +78,7 @@ import WhatsAppAvatar, {
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useCall } from "../../contexts/CallContext";
+import { usePush } from "../../contexts/PushContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { API_BASE, apiRequest } from "../../utils/api";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
@@ -361,7 +372,7 @@ const VoiceMessage = ({
   delivered?: boolean;
   read?: boolean;
 }) => {
-  const [sound, setSound] = useState<ExpoAudio.Sound | null>(null);
+  const [sound, setSound] = useState<AudioPlayer | null>(null);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [durationMs, setDurationMs] = useState(0);
@@ -376,12 +387,17 @@ const VoiceMessage = ({
   async function toggle() {
     try {
       if (sound) {
-        const status = await sound.getStatusAsync();
-        if (status.isLoaded && status.isPlaying) {
-          await sound.pauseAsync();
+        if (sound.playing) {
+          sound.pause();
           setPlaying(false);
-        } else if (status.isLoaded) {
-          await sound.playAsync();
+        } else {
+          if (
+            sound.duration > 0 &&
+            sound.currentTime >= sound.duration - 0.05
+          ) {
+            await sound.seekTo(0);
+          }
+          sound.play();
           setPlaying(true);
         }
         return;
@@ -392,36 +408,31 @@ const VoiceMessage = ({
         return;
       }
 
-      if (!isAudioAvailable() || !Audio) {
-        console.warn("Voice playback unavailable — expo-av native module missing");
-        return;
-      }
-
       setLoading(true);
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldRouteThroughEarpiece: false,
       });
-      const { sound: s } = await Audio.Sound.createAsync(
+      const s = createAudioPlayer(
         { uri: playableUri },
-        { shouldPlay: true },
+        { updateInterval: 100 },
       );
       setSound(s);
       setPlaying(true);
-      s.setOnPlaybackStatusUpdate((st) => {
-        if (!st.isLoaded) return;
-        if (typeof st.durationMillis === "number")
-          setDurationMs(st.durationMillis);
-        if (typeof st.positionMillis === "number")
-          setPositionMs(st.positionMillis);
+      s.addListener("playbackStatusUpdate", (st) => {
+        if (typeof st.duration === "number") setDurationMs(st.duration * 1000);
+        if (typeof st.currentTime === "number")
+          setPositionMs(st.currentTime * 1000);
+        setPlaying(!!st.playing);
         if (st.didJustFinish) {
           setPlaying(false);
           setPositionMs(0);
-          s.setPositionAsync(0);
+          void s.seekTo(0);
         }
       });
+      s.play();
     } catch (e) {
       console.warn("Voice playback failed", e);
       setPlaying(false);
@@ -432,7 +443,11 @@ const VoiceMessage = ({
 
   useEffect(
     () => () => {
-      sound?.unloadAsync();
+      try {
+        sound?.remove();
+      } catch {
+        /* ignore */
+      }
     },
     [sound],
   );
@@ -1357,6 +1372,10 @@ export default function MessageScreen() {
     gender,
     isOnline: isOnlineParam,
     privacyHidden: privacyHiddenParam,
+    areFriends: areFriendsParam,
+    iLiked: iLikedParam,
+    theyLiked: theyLikedParam,
+    friendshipStatus: friendshipStatusParam,
   } = useLocalSearchParams<{
     id: string;
     name: string;
@@ -1364,13 +1383,21 @@ export default function MessageScreen() {
     gender: string;
     isOnline: string;
     privacyHidden?: string;
+    areFriends?: string;
+    iLiked?: string;
+    theyLiked?: string;
+    friendshipStatus?: string;
   }>();
+  const peerId = String(Array.isArray(id) ? id[0] : id || "");
   const router = useRouter();
   const { showAlert } = useAppAlert();
   const { sessionVersion, user } = useAuth();
   const { startCall: startMediaCall } = useCall();
+  const { clearConversation } = usePush();
   const {
+    socket: globalSocket,
     friendTick,
+    lastFriendUpdate,
     refreshUnread,
     profileTick,
     lastProfileUpdate,
@@ -1379,17 +1406,23 @@ export default function MessageScreen() {
     conversationDeletedTick,
     lastConversationDeleted,
     bumpChatPreview,
+    markChatAsRead,
   } = useSocket();
 
+  const seedMatched =
+    areFriendsParam === "true" ||
+    friendshipStatusParam === "friends" ||
+    friendshipStatusParam === "mutual_match";
+
   const [messages, setMessages] = useState<ChatMsg[]>(() =>
-    getCachedThread(String(id)),
+    getCachedThread(peerId),
   );
   const [loading, setLoading] = useState(
-    () => getCachedThread(String(id)).length === 0,
+    () => getCachedThread(peerId).length === 0,
   );
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [recording, setRecording] = useState<ExpoAudio.Recording | null>(null);
+  const [recording, setRecording] = useState<AudioRecorder | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [selectedImage, setSelectedImage] = useState<{
@@ -1420,19 +1453,88 @@ export default function MessageScreen() {
     consecutiveCount: number;
   }>({ canSend: true, consecutiveCount: 0 });
   const [friendshipStatus, setFriendshipStatus] =
-    useState<FriendshipStatus | null>(null);
-  const friendshipStatusRef = useRef<FriendshipStatus | null>(null);
+    useState<FriendshipStatus | null>(() =>
+      seedMatched
+        ? {
+            status:
+              friendshipStatusParam === "mutual_match"
+                ? "mutual_match"
+                : "friends",
+            areFriends: true,
+            canSendMedia: false,
+            canCall: true,
+            iLiked: iLikedParam !== "false",
+            theyLiked: theyLikedParam !== "false",
+          }
+        : null,
+    );
+  const friendshipStatusRef = useRef(friendshipStatus);
   friendshipStatusRef.current = friendshipStatus;
 
-  /** Both liked each other → + photo / voice / calls unlock */
+  /** Friends / mutual like → voice & video calls unlock */
   const isMatched = !!(
     friendshipStatus?.areFriends ||
     friendshipStatus?.canCall ||
-    friendshipStatus?.canSendMedia ||
     friendshipStatus?.status === "mutual_match" ||
     friendshipStatus?.status === "friends" ||
     (friendshipStatus?.iLiked && friendshipStatus?.theyLiked)
   );
+
+  /** Both users have sent a DM → photo / camera / voice unlock */
+  const bothSidesMessaged = useMemo(() => {
+    let me = false;
+    let other = false;
+    for (const m of messages) {
+      if (m.sender === "me") me = true;
+      else if (m.sender === "other") other = true;
+      if (me && other) return true;
+    }
+    return false;
+  }, [messages]);
+
+  const isMediaUnlocked = !!friendshipStatus?.canSendMedia || bothSidesMessaged;
+
+  useEffect(() => {
+    if (!bothSidesMessaged) return;
+    setFriendshipStatus((prev) => {
+      if (prev?.canSendMedia) return prev;
+      return {
+        status: prev?.status || "stranger",
+        areFriends: !!prev?.areFriends,
+        canSendMedia: true,
+        canCall: !!prev?.canCall,
+        iLiked: !!prev?.iLiked,
+        theyLiked: !!prev?.theyLiked,
+        iBlocked: prev?.iBlocked,
+        theyBlocked: prev?.theyBlocked,
+        blockedAt: prev?.blockedAt,
+        privacyHidden: prev?.privacyHidden,
+      };
+    });
+  }, [bothSidesMessaged]);
+
+  const MEDIA_LOCK_MSG =
+    "Photos and voice unlock when they reply to your message.";
+
+  const requireMediaUnlocked = useCallback(() => {
+    if (friendshipStatus?.theyBlocked) {
+      showAlert({
+        title: "Text only",
+        message: "Only text messages can be sent right now.",
+        icon: "ban",
+      });
+      return false;
+    }
+    if (!isMediaUnlocked) {
+      showAlert({
+        title: "Reply needed",
+        message: MEDIA_LOCK_MSG,
+        icon: "chatbubbles",
+      });
+      return false;
+    }
+    return true;
+  }, [friendshipStatus?.theyBlocked, isMediaUnlocked]);
 
   const CALL_PROMPT_AFTER = 6;
   const [callPromptDismissed, setCallPromptDismissed] = useState(false);
@@ -1474,14 +1576,21 @@ export default function MessageScreen() {
   const [likingHeader, setLikingHeader] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState({ top: 56, right: 12 });
-  const menuPosRef = useRef({ top: 56, right: 12 });
-  const menuOpenRef = useRef(false);
-  const menuOpenGuardRef = useRef(false);
-  const menuOverlayRef = useRef<View>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const [blockSheetOpen, setBlockSheetOpen] = useState(false);
+  const [reasonPickerOpen, setReasonPickerOpen] = useState(false);
+  const [pendingAlsoBlock, setPendingAlsoBlock] = useState(false);
+  const [optionsAlert, setOptionsAlert] = useState<{
+    title: string;
+    message: string;
+    confirmText: string;
+    cancelText?: string;
+    destructive?: boolean;
+    onConfirm?: () => void | Promise<void>;
+  } | null>(null);
+  const [optionsActionBusy, setOptionsActionBusy] = useState(false);
+  const optionsSheetAnim = useRef(new Animated.Value(0)).current;
   const [chatMuted, setChatMuted] = useState(false);
-  const moreBtnRef = useRef<View>(null);
   const [profileUser, setProfileUser] = useState<NearbyUser | null>(null);
   const [displayName, setDisplayName] = useState(name || "User");
   const [displayPhoto, setDisplayPhoto] = useState(photo || "");
@@ -1496,6 +1605,8 @@ export default function MessageScreen() {
     isOnlineParam === "true",
   );
   const socketRef = useRef<Socket | null>(null);
+  /** Latest message timestamp for WhatsApp-style reconnect catch-up */
+  const messagesLatestAtRef = useRef(0);
   const flatListRef = useRef<FlatList>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
@@ -1585,38 +1696,22 @@ export default function MessageScreen() {
   };
 
   const handleMuteChat = () => {
-    closeChatMenu(async () => {
-      try {
-        const token = await getAuthToken();
-        if (!token || !id) return;
-        const next = !chatMuted;
-        const data: any = await apiRequest(`/api/chat/mute/${id}`, token, {
-          method: "POST",
-          body: JSON.stringify({ muted: next }),
-        });
-        setChatMuted(!!data?.muted);
-        showAlert({
-          title: data?.muted ? "Chat muted" : "Chat unmuted",
-          message: data?.muted
-            ? "You won't get push notifications from this chat."
-            : "Push notifications for this chat are on again.",
-          icon: data?.muted ? "notifications-off" : "notifications",
-        });
-      } catch (e: any) {
-        showAlert({
-          title: "Could not update mute",
-          message: e?.message || "Please try again.",
-          icon: "alert-circle",
-        });
-      }
+    setOptionsAlert({
+      title: chatMuted ? "Unmute chat?" : "Mute chat?",
+      message: chatMuted
+        ? "You’ll get push notifications from this chat again."
+        : "You won’t get push notifications from this chat.",
+      confirmText: chatMuted ? "Unmute" : "Mute",
+      cancelText: "Cancel",
+      onConfirm: () => void runMuteAction(),
     });
   };
 
   const fetchFriendshipStatus = async () => {
     try {
       const token = await getAuthToken();
-      if (!token) return;
-      const status = await getFriendshipStatus(token, id);
+      if (!token || !peerId) return;
+      const status = await getFriendshipStatus(token, peerId);
       setFriendshipStatus(status);
       if (status.theyBlocked || status.iBlocked) {
         setPrivacyHidden(!!status.theyBlocked);
@@ -1625,7 +1720,7 @@ export default function MessageScreen() {
         setPrivacyHidden(false);
         // After unblock, restore real online status from profile
         try {
-          const { user } = await fetchUserProfile(token, String(id));
+          const { user } = await fetchUserProfile(token, peerId);
           if (user) {
             setOtherUserOnline(!!user.isOnline);
             if (user.photo) {
@@ -1642,6 +1737,24 @@ export default function MessageScreen() {
       console.error("Failed to fetch friendship status", e);
     }
   };
+
+  const unlockAsFriends = useCallback(
+    (status: FriendshipStatus["status"] = "friends") => {
+      setFriendshipStatus((prev) => ({
+        status,
+        areFriends: true,
+        canSendMedia: !!prev?.canSendMedia,
+        canCall: true,
+        iLiked: true,
+        theyLiked: true,
+        iBlocked: prev?.iBlocked,
+        theyBlocked: prev?.theyBlocked,
+        blockedAt: prev?.blockedAt,
+        privacyHidden: prev?.privacyHidden,
+      }));
+    },
+    [],
+  );
 
   const toggleHeaderLike = async () => {
     if (likingHeader || !id) return;
@@ -1681,7 +1794,7 @@ export default function MessageScreen() {
       applyFriendshipLocal({
         status: "stranger",
         areFriends: false,
-        canSendMedia: false,
+        canSendMedia: !!previous?.canSendMedia,
         canCall: false,
         iLiked: false,
         theyLiked: false,
@@ -1738,7 +1851,7 @@ export default function MessageScreen() {
       status:
         relStatus === "mutual_match" || theyLiked ? "friends" : "pending_like",
       areFriends: relStatus === "mutual_match" || theyLiked,
-      canSendMedia: relStatus === "mutual_match" || theyLiked,
+      canSendMedia: !!status?.canSendMedia,
       canCall: relStatus === "mutual_match" || theyLiked,
       iLiked: true,
       theyLiked,
@@ -1756,6 +1869,12 @@ export default function MessageScreen() {
       } else {
         const result = await sendLike(token, String(id));
         resultStatus = result.status;
+      }
+
+      if (resultStatus === "friends" || resultStatus === "mutual_match") {
+        unlockAsFriends(
+          resultStatus === "mutual_match" ? "mutual_match" : "friends",
+        );
       }
 
       await fetchFriendshipStatus();
@@ -1779,168 +1898,296 @@ export default function MessageScreen() {
     }
   };
 
-  const reportAnim = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
     if (!menuOpen) return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (optionsAlert) {
+        setOptionsAlert(null);
+        return true;
+      }
+      if (reasonPickerOpen) {
+        setReasonPickerOpen(false);
+        return true;
+      }
+      if (reportOpen) {
+        setReportOpen(false);
+        return true;
+      }
+      if (blockSheetOpen) {
+        setBlockSheetOpen(false);
+        return true;
+      }
       closeChatMenu();
       return true;
     });
     return () => sub.remove();
-  }, [menuOpen]);
+  }, [menuOpen, optionsAlert, reasonPickerOpen, reportOpen, blockSheetOpen]);
 
   useEffect(() => {
-    if (reportOpen) {
-      reportAnim.setValue(0);
-      Animated.timing(reportAnim, {
-        toValue: 1,
-        duration: 220,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [reportOpen, reportAnim]);
-
-  const closeChatMenu = (after?: () => void) => {
-    menuOpenRef.current = false;
-    menuOverlayRef.current?.setNativeProps({
-      opacity: 0,
-      pointerEvents: "none",
-    });
-    setMenuOpen(false);
-    if (after) requestAnimationFrame(after);
-  };
-
-  const computeMenuPosition = () => {
-    const gap = Platform.OS === "android" ? 28 : 14;
-    const edge = Platform.OS === "android" ? 12 : 10;
-    const node = moreBtnRef.current;
-    if (!node || typeof (node as any).measureInWindow !== "function") {
+    const sheetOpen = blockSheetOpen || reportOpen || reasonPickerOpen;
+    if (!sheetOpen) {
+      optionsSheetAnim.setValue(0);
       return;
     }
-    (node as any).measureInWindow(
-      (x: number, y: number, width: number, height: number) => {
-        const { width: winW, height: winH } = Dimensions.get("window");
-        const menuWidth = 86;
-        let right = Math.max(edge, winW - (x + width) + 4);
-        if (winW - right - menuWidth < edge) {
-          right = Math.max(edge, winW - menuWidth - edge);
-        }
-        let top = y + Math.max(height, 40) + gap;
-        const minTop =
-          Platform.OS === "android"
-            ? Math.max(edge, insets.top + 56)
-            : edge + 8;
-        top = Math.max(top, minTop);
-        const estimatedH = 168;
-        if (top + estimatedH > winH - edge) {
-          top = Math.max(minTop, y - estimatedH - gap);
-        }
-        const prev = menuPosRef.current;
-        if (prev.top === top && prev.right === right) return;
-        const pos = { top, right };
-        menuPosRef.current = pos;
-        setMenuPos(pos);
-      },
-    );
+    optionsSheetAnim.setValue(0);
+    Animated.timing(optionsSheetAnim, {
+      toValue: 1,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [blockSheetOpen, reportOpen, reasonPickerOpen, optionsSheetAnim]);
+
+  const closeChatMenu = (after?: () => void) => {
+    setMenuOpen(false);
+    setOptionsAlert(null);
+    setBlockSheetOpen(false);
+    setReportOpen(false);
+    setReasonPickerOpen(false);
+    setPendingAlsoBlock(false);
+    if (after) {
+      InteractionManager.runAfterInteractions(() => {
+        requestAnimationFrame(after);
+      });
+    }
+  };
+
+  const showOptionsNotice = (title: string, message: string) => {
+    setOptionsAlert({
+      title,
+      message,
+      confirmText: "OK",
+    });
+  };
+
+  const runMuteAction = async () => {
+    if (optionsActionBusy) return;
+    setOptionsActionBusy(true);
+    setOptionsAlert(null);
+    try {
+      const token = await getAuthToken();
+      if (!token || !id) return;
+      const next = !chatMuted;
+      const data: any = await apiRequest(`/api/chat/mute/${id}`, token, {
+        method: "POST",
+        body: JSON.stringify({ muted: next }),
+      });
+      setChatMuted(!!data?.muted);
+      showOptionsNotice(
+        data?.muted ? "Chat muted" : "Chat unmuted",
+        data?.muted
+          ? "You won't get push notifications from this chat."
+          : "Push notifications for this chat are on again.",
+      );
+    } catch (e: any) {
+      showOptionsNotice(
+        "Could not update mute",
+        e?.message || "Please try again.",
+      );
+    } finally {
+      setOptionsActionBusy(false);
+    }
+  };
+
+  const runUnblockAction = async () => {
+    if (optionsActionBusy) return;
+    setOptionsActionBusy(true);
+    setOptionsAlert(null);
+    try {
+      const token = await getAuthToken();
+      if (!token || !id) return;
+      await unblockUser(token, String(id));
+      await fetchFriendshipStatus();
+      showOptionsNotice("User unblocked", "You can message them again.");
+    } catch (e: any) {
+      showOptionsNotice("Could not unblock", e?.message || "Please try again.");
+    } finally {
+      setOptionsActionBusy(false);
+    }
+  };
+
+  const runUnlikeFromOptions = async () => {
+    if (likingHeader || !id || optionsActionBusy) return;
+    setOptionsAlert(null);
+    setOptionsActionBusy(true);
+    setLikingHeader(true);
+    const previous = friendshipStatus;
+    setFriendshipStatus((prev) => ({
+      status: "stranger",
+      areFriends: false,
+      canSendMedia: !!prev?.canSendMedia,
+      canCall: false,
+      iLiked: false,
+      theyLiked: false,
+      iBlocked: prev?.iBlocked,
+      theyBlocked: prev?.theyBlocked,
+    }));
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      await unlikeUser(token, String(id));
+      await fetchFriendshipStatus();
+      showOptionsNotice("Unliked", "Your like was removed.");
+    } catch (e: any) {
+      if (previous) setFriendshipStatus(previous);
+      showOptionsNotice("Could not unlike", e?.message || "Please try again.");
+    } finally {
+      setLikingHeader(false);
+      setOptionsActionBusy(false);
+    }
+  };
+
+  const runLikeFromOptions = async () => {
+    if (likingHeader || !id || optionsActionBusy) return;
+    setOptionsAlert(null);
+    setOptionsActionBusy(true);
+    setLikingHeader(true);
+    const status = friendshipStatus;
+    const theyLiked = !!status?.theyLiked;
+    const relStatus = status?.status;
+    const previous = friendshipStatus;
+    setFriendshipStatus((prev) => ({
+      status:
+        relStatus === "mutual_match" || theyLiked ? "friends" : "pending_like",
+      areFriends: relStatus === "mutual_match" || theyLiked,
+      canSendMedia: !!prev?.canSendMedia,
+      canCall: relStatus === "mutual_match" || theyLiked,
+      iLiked: true,
+      theyLiked,
+      iBlocked: prev?.iBlocked,
+      theyBlocked: prev?.theyBlocked,
+    }));
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      let resultStatus = "pending_like";
+      if (relStatus === "mutual_match") {
+        const result = await acceptFriendRequest(token, String(id));
+        resultStatus = result.status;
+      } else {
+        const result = await sendLike(token, String(id));
+        resultStatus = result.status;
+      }
+      if (resultStatus === "friends" || resultStatus === "mutual_match") {
+        unlockAsFriends(
+          resultStatus === "mutual_match" ? "mutual_match" : "friends",
+        );
+      }
+      await fetchFriendshipStatus();
+      if (resultStatus === "friends") {
+        showOptionsNotice("You're friends!", "Moved to the Friend section.");
+      } else {
+        showOptionsNotice("Liked", "Your like was sent.");
+      }
+    } catch (e: any) {
+      if (previous) setFriendshipStatus(previous);
+      showOptionsNotice(
+        "Could not send like",
+        e?.message || "Please try again.",
+      );
+    } finally {
+      setLikingHeader(false);
+      setOptionsActionBusy(false);
+    }
   };
 
   const openChatMenu = () => {
-    if (menuOpenRef.current) return;
-    menuOpenRef.current = true;
-    menuOpenGuardRef.current = true;
-
-    // Show overlay on the same frame as touch — before React re-render
-    menuOverlayRef.current?.setNativeProps({
-      opacity: 1,
-      pointerEvents: "box-none",
-    });
+    Keyboard.dismiss();
     setMenuOpen(true);
-
-    requestAnimationFrame(() => {
-      menuOpenGuardRef.current = false;
-    });
-
-    if (keyboardWasOpenRef.current) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
   };
 
-  const closeReportSheet = (after?: () => void) => {
-    Animated.timing(reportAnim, {
-      toValue: 0,
-      duration: 160,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (!finished) return;
-      setReportOpen(false);
-      if (after) requestAnimationFrame(after);
+  const handleShareFromMenu = () => {
+    void sharePublicProfile({
+      publicId: profileUser?.publicId,
+      name: getDisplayName(displayName) || displayName,
     });
   };
 
   const handleMenuLike = () => {
-    closeChatMenu(() => toggleHeaderLike());
-  };
-
-  const handleBlockUser = () => {
-    closeChatMenu(() => {
-      const label = getDisplayName(displayName) || "this user";
-      showAlert({
-        title: `Block ${label}?`,
-        message:
-          "Blocked contacts can't message you or see your profile photo. You can unblock them anytime.",
-        icon: "hand-left",
-        buttons: [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Block",
-            style: "destructive",
-            onPress: async () => {
-              try {
-                const token = await getAuthToken();
-                if (!token || !id) return;
-                await blockUser(token, String(id));
-                await fetchFriendshipStatus();
-                showAlert({
-                  title: "User blocked",
-                  message: `${label} has been blocked.`,
-                  icon: "checkmark-circle",
-                });
-              } catch (e: any) {
-                showAlert({
-                  title: "Could not block",
-                  message: e?.message || "Please try again.",
-                  icon: "alert-circle",
-                });
-              }
-            },
-          },
-        ],
+    const areFriends = !!friendshipStatus?.areFriends;
+    const iLiked = !!friendshipStatus?.iLiked;
+    if (areFriends || iLiked) {
+      setOptionsAlert({
+        title: "Unlike?",
+        message: areFriends
+          ? `Remove ${getDisplayName(displayName) || "this user"} from friends?`
+          : "Remove your like for this user.",
+        confirmText: "Unlike",
+        cancelText: "Cancel",
+        destructive: true,
+        onConfirm: () => void runUnlikeFromOptions(),
       });
+      return;
+    }
+    setOptionsAlert({
+      title: "Like?",
+      message: `Send a like to ${getDisplayName(displayName) || "this user"}?`,
+      confirmText: "Like",
+      cancelText: "Cancel",
+      onConfirm: () => void runLikeFromOptions(),
     });
   };
 
+  const handleBlockUser = () => {
+    setReportOpen(false);
+    setReasonPickerOpen(false);
+    setOptionsAlert(null);
+    setBlockSheetOpen(true);
+  };
+
+  const doBlockFromOptions = async () => {
+    if (optionsActionBusy || !id) return;
+    setOptionsActionBusy(true);
+    setBlockSheetOpen(false);
+    const label = getDisplayName(displayName) || "this user";
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      await blockUser(token, String(id));
+      await fetchFriendshipStatus();
+      showOptionsNotice("User blocked", `${label} has been blocked.`);
+    } catch (e: any) {
+      showOptionsNotice("Could not block", e?.message || "Please try again.");
+    } finally {
+      setOptionsActionBusy(false);
+    }
+  };
+
   const handleReportUser = () => {
-    closeChatMenu(() => setReportOpen(true));
+    setBlockSheetOpen(false);
+    setReasonPickerOpen(false);
+    setOptionsAlert(null);
+    setReportOpen(true);
+  };
+
+  const openReasonPicker = (alsoBlock: boolean) => {
+    setBlockSheetOpen(false);
+    setReportOpen(false);
+    setPendingAlsoBlock(alsoBlock);
+    setReasonPickerOpen(true);
   };
 
   const submitReport = async (reason: ReportReason, alsoBlock: boolean) => {
+    if (optionsActionBusy || !id) return;
+    setOptionsActionBusy(true);
+    setReasonPickerOpen(false);
+    setReportOpen(false);
+    setBlockSheetOpen(false);
     try {
       const token = await getAuthToken();
-      if (!token || !id) return;
+      if (!token) return;
       const result = await reportUser(token, String(id), reason, { alsoBlock });
       await fetchFriendshipStatus();
-      showAlert({
-        title: alsoBlock ? "Reported & blocked" : "Report sent",
-        message: result.message,
-        icon: "checkmark-circle",
-      });
+      showOptionsNotice(
+        alsoBlock ? "Reported & blocked" : "Report sent",
+        result.message ||
+          (alsoBlock
+            ? "User was reported and blocked."
+            : "Thanks — our team will review this report."),
+      );
     } catch (e: any) {
-      showAlert({
-        title: "Could not report",
-        message: e?.message || "Please try again.",
-        icon: "alert-circle",
-      });
+      showOptionsNotice("Could not report", e?.message || "Please try again.");
+    } finally {
+      setOptionsActionBusy(false);
     }
   };
 
@@ -1970,6 +2217,21 @@ export default function MessageScreen() {
       chatAccess?.hasActiveSession ||
       chatAccess?.canChat
     ) {
+      // Still open/renew this conversation session when needed (free reply also costs 10)
+      if (!chatAccess?.unlimitedChat && !chatAccess?.hasActiveSession && id) {
+        try {
+          const token = await getAuthToken();
+          if (!token) return false;
+          const status = await ensureChatSession(token, String(id));
+          applyChatAccess(status);
+          if (status.ok === false || status.code === "INSUFFICIENT_TOKENS") {
+            showInsufficientTokensPopup(status.message);
+            return false;
+          }
+        } catch (e) {
+          console.error("ensureChatSession failed", e);
+        }
+      }
       return true;
     }
     if (chatAccess && chatAccess.canChat === false) {
@@ -1980,7 +2242,7 @@ export default function MessageScreen() {
     try {
       const token = await getAuthToken();
       if (!token) return false;
-      const status = await ensureChatSession(token);
+      const status = await ensureChatSession(token, id ? String(id) : null);
       applyChatAccess(status);
       if (status.ok === false || status.code === "INSUFFICIENT_TOKENS") {
         showInsufficientTokensPopup(status.message);
@@ -2004,7 +2266,7 @@ export default function MessageScreen() {
       try {
         const token = await getAuthToken();
         if (!token || cancelled) return;
-        const status = await fetchChatAccess(token);
+        const status = await fetchChatAccess(token, id ? String(id) : null);
         if (!cancelled) {
           applyChatAccess(status);
           await fetchConversationStatus();
@@ -2021,8 +2283,45 @@ export default function MessageScreen() {
   // Live friendship updates (like / unlike / became friends)
   useEffect(() => {
     if (friendTick === 0) return;
-    fetchFriendshipStatus();
-  }, [friendTick, id]);
+
+    const payload = lastFriendUpdate;
+    if (payload && peerId) {
+      const otherId = String(
+        payload.silent || payload.action === "sync"
+          ? payload.otherUserId || payload.fromUserId
+          : payload.fromUserId,
+      );
+      if (otherId === peerId) {
+        if (
+          payload.action === "friends" ||
+          payload.status === "friends" ||
+          payload.status === "mutual_match"
+        ) {
+          unlockAsFriends(
+            payload.status === "mutual_match" ? "mutual_match" : "friends",
+          );
+        } else if (
+          payload.action === "unlike" ||
+          payload.action === "decline" ||
+          payload.status === "stranger" ||
+          payload.status === "declined"
+        ) {
+          setFriendshipStatus((prev) => ({
+            status: "stranger",
+            areFriends: false,
+            canSendMedia: !!prev?.canSendMedia,
+            canCall: false,
+            iLiked: false,
+            theyLiked: false,
+            iBlocked: prev?.iBlocked,
+            theyBlocked: prev?.theyBlocked,
+          }));
+        }
+      }
+    }
+
+    void fetchFriendshipStatus();
+  }, [friendTick, peerId, lastFriendUpdate, unlockAsFriends]);
 
   // Chat deleted — leave thread immediately (WhatsApp-style)
   useEffect(() => {
@@ -2098,9 +2397,10 @@ export default function MessageScreen() {
               lastProfileUpdate.bio != null ? lastProfileUpdate.bio : prev.bio,
             photo: hidden
               ? ""
-              : lastProfileUpdate.photo
+              : lastProfileUpdate.photo != null
                 ? resolveMediaUrl(lastProfileUpdate.photo) ||
-                  lastProfileUpdate.photo
+                  lastProfileUpdate.photo ||
+                  ""
                 : prev.photo,
             photos: Array.isArray(lastProfileUpdate.photos)
               ? (lastProfileUpdate.photos
@@ -2183,7 +2483,7 @@ export default function MessageScreen() {
             Math.max(latestAtRef.current - 1000, 0),
           ).toISOString();
           const poll: any[] = await apiRequest(
-            `/api/chat/poll/${id}?after=${encodeURIComponent(afterIso)}`,
+            `/api/chat/poll/${id}?after=${encodeURIComponent(afterIso)}&markRead=1`,
             token,
           ).catch(() => []);
 
@@ -2236,7 +2536,7 @@ export default function MessageScreen() {
           const token = await getAuthToken();
           if (!token || cancelled) return;
           await Promise.all([
-            fetchChatAccess(token).then((access) => {
+            fetchChatAccess(token, id ? String(id) : null).then((access) => {
               if (!cancelled) applyChatAccess(access);
             }),
             fetchConversationStatus(),
@@ -2298,7 +2598,7 @@ export default function MessageScreen() {
       try {
         const token = await getAuthToken();
         if (!token) return;
-        const status = await fetchChatAccess(token);
+        const status = await fetchChatAccess(token, id ? String(id) : null);
         applyChatAccess(status);
       } catch {
         /* ignore */
@@ -2604,10 +2904,24 @@ export default function MessageScreen() {
     };
   }, [protectViewOnceCapture, showAlert]);
 
+  // WhatsApp: clear list/tab badge as soon as this thread is open
+  useEffect(() => {
+    if (!id) return;
+    markChatAsRead(String(id));
+    try {
+      clearConversation(String(id));
+    } catch {
+      /* push module optional */
+    }
+  }, [id, markChatAsRead, clearConversation]);
+
   // ── Load history & Setup Socket.IO ──────────────────────────────
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+    const boundHandlers: Array<[string, (...args: any[]) => void]> = [];
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let onConnectHandler: (() => void) | null = null;
 
     const init = async () => {
       const token = await getAuthToken();
@@ -2634,12 +2948,16 @@ export default function MessageScreen() {
       if (!hadLocal) setLoading(true);
       try {
         const history: any[] = await apiRequest(
-          `/api/chat/history/${id}`,
+          `/api/chat/history/${id}?markRead=1`,
           token,
         );
         if (cancelled) return;
         const mapped = history.map((m) => mapMsg(m, authUser.id));
         setMessages(mapped);
+        messagesLatestAtRef.current = mapped.reduce(
+          (max, m) => Math.max(max, m.createdAt || 0),
+          0,
+        );
         schedulePersistThread(chatId, mapped as CachedChatMsg[]);
         for (const raw of history.slice(-12)) {
           if (raw?.type === "image" && raw.mediaUrl && !raw.viewOnce) {
@@ -2652,21 +2970,84 @@ export default function MessageScreen() {
         if (!cancelled) setLoading(false);
       }
 
-      // Connect Socket.IO
-      const socketUrl = API_BASE.replace("/api", "");
-      const socket = io(socketUrl, {
-        auth: { token },
-        transports: ["websocket"],
-      });
+      // WhatsApp: one shared socket (SocketContext) — no second connection
+      const socket = globalSocket;
+      if (!socket) return;
       socketRef.current = socket;
 
-      socket.on("connect", () => {
+      const syncMissed = async () => {
+        try {
+          const afterMs = messagesLatestAtRef.current || 0;
+          const afterIso = new Date(Math.max(afterMs - 1000, 0)).toISOString();
+          const poll: any[] = await apiRequest(
+            `/api/chat/poll/${id}?after=${encodeURIComponent(afterIso)}&markRead=1`,
+            token,
+          ).catch(() => []);
+          if (cancelled || !Array.isArray(poll) || !poll.length) return;
+          setMessages((prev) => {
+            const byId = new Map(prev.map((m) => [m._id, m]));
+            let changed = false;
+            let maxAt = messagesLatestAtRef.current || 0;
+            for (const raw of poll) {
+              const mapped = mapMsg(raw, authUser.id);
+              if (mapped.undelivered && mapped.sender === "other") continue;
+              if (
+                friendshipStatusRef.current?.iBlocked &&
+                mapped.sender === "other"
+              ) {
+                continue;
+              }
+              const at = mapped.createdAt || 0;
+              if (at > maxAt) maxAt = at;
+              if (!byId.has(mapped._id)) {
+                byId.set(mapped._id, mapped);
+                changed = true;
+              } else {
+                byId.set(mapped._id, { ...byId.get(mapped._id)!, ...mapped });
+                changed = true;
+              }
+            }
+            messagesLatestAtRef.current = maxAt;
+            if (!changed) return prev;
+            return Array.from(byId.values()).sort(
+              (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+            );
+          });
+        } catch {
+          /* ignore */
+        }
+      };
+
+      const onConnect = () => {
         socket.emit("chat:join", { otherUserId: id });
         socket.emit("chat:read", { otherUserId: id });
-      });
+        markChatAsRead(String(id));
+        void syncMissed();
+      };
 
-      socket.on("chat:message", (msg: any) => {
-        if (cancelled) return;
+      if (socket.connected) onConnect();
+      onConnectHandler = onConnect;
+      socket.on("connect", onConnect);
+
+      const bind = (event: string, fn: (...args: any[]) => void) => {
+        const wrapped = (...args: any[]) => {
+          if (!cancelled) fn(...args);
+        };
+        socket.on(event, wrapped);
+        boundHandlers.push([event, wrapped]);
+      };
+
+      heartbeatTimer = setInterval(() => {
+        if (cancelled || AppState.currentState !== "active") return;
+        if (!socket.connected) return;
+        try {
+          socket.emit("chat:heartbeat", { otherUserId: id });
+        } catch {
+          /* ignore */
+        }
+      }, 60_000);
+
+      bind("chat:message", (msg: any) => {
         const incoming = mapMsg(msg, authUser.id);
         const clientMsgId = msg.clientMsgId;
         const fs = friendshipStatusRef.current;
@@ -2707,6 +3088,12 @@ export default function MessageScreen() {
 
           return [...prev, incoming];
         });
+        if (incoming.createdAt) {
+          messagesLatestAtRef.current = Math.max(
+            messagesLatestAtRef.current,
+            incoming.createdAt,
+          );
+        }
         if (
           incoming.sender === "other" &&
           incoming.type === "image" &&
@@ -2717,10 +3104,11 @@ export default function MessageScreen() {
         }
         if (!incoming.undelivered && incoming.sender === "other") {
           socket.emit("chat:read", { otherUserId: id });
+          markChatAsRead(String(id));
         }
       });
 
-      socket.on("chat:image-preview", (msg: any) => {
+      bind("chat:image-preview", (msg: any) => {
         if (cancelled) return;
         const clientMsgId = String(msg?.clientMsgId || "");
         if (!clientMsgId) return;
@@ -2764,7 +3152,7 @@ export default function MessageScreen() {
         });
       });
 
-      socket.on(
+      bind(
         "chat:delivered",
         ({ messageIds, by }: { messageIds?: string[]; by?: string }) => {
           if (cancelled || !Array.isArray(messageIds) || !messageIds.length)
@@ -2781,7 +3169,7 @@ export default function MessageScreen() {
         },
       );
 
-      socket.on(
+      bind(
         "chat:read",
         ({ messageIds, by }: { messageIds?: string[]; by?: string }) => {
           if (cancelled) return;
@@ -2809,7 +3197,7 @@ export default function MessageScreen() {
       );
 
       // Delete for everyone — sync from server / other device
-      socket.on(
+      bind(
         "chat:deleted",
         ({ messageIds }: { messageIds?: string[]; scope?: string }) => {
           if (cancelled || !Array.isArray(messageIds) || !messageIds.length)
@@ -2834,7 +3222,7 @@ export default function MessageScreen() {
       );
 
       // Delete for me — remove from this user's chat only
-      socket.on(
+      bind(
         "chat:deleted-for-me",
         ({ messageIds }: { messageIds?: string[] }) => {
           if (cancelled || !Array.isArray(messageIds) || !messageIds.length)
@@ -2845,7 +3233,7 @@ export default function MessageScreen() {
         },
       );
 
-      socket.on(
+      bind(
         "chat:view-once-open",
         (payload: {
           messageId?: string;
@@ -2889,7 +3277,7 @@ export default function MessageScreen() {
         },
       );
 
-      socket.on("chat:view-once-opened", (payload: { messageId?: string }) => {
+      bind("chat:view-once-opened", (payload: { messageId?: string }) => {
         if (cancelled || !payload?.messageId) return;
         const mid = String(payload.messageId);
         setMessages((prev) =>
@@ -2906,7 +3294,7 @@ export default function MessageScreen() {
         );
       });
 
-      socket.on("chat:error", (payload: any) => {
+      bind("chat:error", (payload: any) => {
         console.warn("chat:error", payload?.error || payload);
         if (payload?.code === "INSUFFICIENT_TOKENS") {
           if (typeof payload.tokenBalance === "number") {
@@ -2945,18 +3333,18 @@ export default function MessageScreen() {
         }
       });
 
-      socket.on("connect_error", (err: any) => {
+      bind("connect_error", (err: any) => {
         console.warn("socket connect_error", err?.message || err);
       });
 
-      socket.on("chat:typing", ({ senderId, isTyping: t }: any) => {
+      bind("chat:typing", ({ senderId, isTyping: t }: any) => {
         if (String(senderId) === String(id)) {
           setIsTyping(t);
         }
       });
 
       // Track real-time online/offline status of the other user
-      socket.on("user:online", ({ userId }: any) => {
+      bind("user:online", ({ userId }: any) => {
         if (String(userId) !== String(id)) return;
         const fs = friendshipStatusRef.current;
         if (fs?.iBlocked || fs?.theyBlocked) {
@@ -2965,7 +3353,7 @@ export default function MessageScreen() {
         }
         setOtherUserOnline(true);
       });
-      socket.on("user:offline", ({ userId }: any) => {
+      bind("user:offline", ({ userId }: any) => {
         if (String(userId) === String(id)) setOtherUserOnline(false);
       });
     };
@@ -2973,16 +3361,52 @@ export default function MessageScreen() {
     init();
     return () => {
       cancelled = true;
-      // Restore pushes for this conversation (WhatsApp-style)
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      const sock = socketRef.current || globalSocket;
       try {
-        socketRef.current?.emit("chat:leave", { otherUserId: id });
+        if (sock?.connected) {
+          sock.emit("chat:leave", { otherUserId: id });
+        }
       } catch {
         /* ignore */
       }
-      socketRef.current?.disconnect();
-      socketRef.current = null;
+      if (sock && onConnectHandler) {
+        sock.off("connect", onConnectHandler);
+      }
+      if (sock) {
+        for (const [event, fn] of boundHandlers) {
+          sock.off(event, fn);
+        }
+      }
+      // Keep global SocketContext connection alive (WhatsApp single-socket)
+      if (socketRef.current === sock) socketRef.current = null;
     };
-  }, [id, sessionVersion]);
+  }, [id, sessionVersion, globalSocket, markChatAsRead]);
+
+  // WhatsApp: leave viewing when app backgrounds so FCM still fires; re-join on resume
+  useEffect(() => {
+    const onChange = (state: string) => {
+      const sock = socketRef.current;
+      if (!sock?.connected || !id) return;
+      if (state === "active") {
+        try {
+          sock.emit("chat:join", { otherUserId: id });
+          sock.emit("chat:read", { otherUserId: id });
+          markChatAsRead(String(id));
+        } catch {
+          /* ignore */
+        }
+      } else if (state === "background" || state === "inactive") {
+        try {
+          sock.emit("chat:leave", { otherUserId: id });
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
+  }, [id, markChatAsRead]);
 
   // Also reflect global presence from SocketContext (instant, even before chat:join)
   useEffect(() => {
@@ -3130,9 +3554,10 @@ export default function MessageScreen() {
       return;
     }
 
-    // Start/refresh session in background if needed
+    // Free users: start OR reply both need a paid 2h session for this chat
     if (!chatAccess?.unlimitedChat && !chatAccess?.hasActiveSession) {
-      void requireChatAccess();
+      const allowed = await requireChatAccess();
+      if (!allowed) return;
     }
 
     if (selectedImage) {
@@ -3231,18 +3656,22 @@ export default function MessageScreen() {
       return;
     }
 
-    if (!isMatched) {
+    if (friendshipStatus?.theyBlocked) {
       setSendingPhoto(false);
       showAlert({
-        title: "Friends only",
-        message: "Photos unlock when you both like each other.",
-        icon: "image",
+        title: "Text only",
+        message: "Only text messages can be sent right now.",
+        icon: "ban",
       });
       return;
     }
 
     if (!chatAccess?.unlimitedChat && !chatAccess?.hasActiveSession) {
-      void requireChatAccess();
+      const allowed = await requireChatAccess();
+      if (!allowed) {
+        setSendingPhoto(false);
+        return;
+      }
     }
 
     const optId = `opt-img-${Date.now()}`;
@@ -3361,14 +3790,7 @@ export default function MessageScreen() {
   };
 
   const pickImage = async () => {
-    if (!isMatched) {
-      showAlert({
-        title: "Friends only",
-        message: "Photos unlock when you both like each other.",
-        icon: "image",
-      });
-      return;
-    }
+    if (!requireMediaUnlocked()) return;
 
     Keyboard.dismiss();
     inputRef.current?.blur();
@@ -3384,14 +3806,7 @@ export default function MessageScreen() {
   };
 
   const takePhoto = async () => {
-    if (!isMatched) {
-      showAlert({
-        title: "Friends only",
-        message: "Photos unlock when you both like each other.",
-        icon: "image",
-      });
-      return;
-    }
+    if (!requireMediaUnlocked()) return;
 
     Keyboard.dismiss();
     inputRef.current?.blur();
@@ -3466,42 +3881,35 @@ export default function MessageScreen() {
   };
 
   async function startRecording() {
-    // Block audio for non-friends (Friends & Match feature)
-    if (!isMatched) {
-      showAlert({
-        title: "Friends Only",
-        message: "Voice messages unlock when you both like each other.",
-        icon: "people",
-      });
-      return;
-    }
+    if (!requireMediaUnlocked()) return;
 
     const keepKeyboard = isKeyboardVisible;
 
-    if (!isAudioAvailable() || !Audio) {
-      console.warn("Voice recording unavailable — expo-av native module missing");
-      return;
-    }
-
-    const perm = await Audio.getPermissionsAsync();
+    const perm = await getRecordingPermissionsAsync();
     if (perm.status !== "granted") {
-      const np = await Audio.requestPermissionsAsync();
+      const np = await requestRecordingPermissionsAsync();
       if (np.status !== "granted") return;
     }
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+      interruptionMode: "doNotMix",
     });
-    const { recording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY,
-    );
-    setRecording(recording);
+    const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+    await rec.prepareToRecordAsync();
+    rec.record();
+    setRecording(rec);
     setIsRecording(true);
     setRecordingDuration(0);
-    recording.setOnRecordingStatusUpdate((s) => {
-      if (s.isRecording) setRecordingDuration(s.durationMillis);
-    });
+    const tick = setInterval(() => {
+      try {
+        const st = rec.getStatus();
+        if (st?.isRecording) setRecordingDuration(st.durationMillis || 0);
+      } catch {
+        /* ignore */
+      }
+    }, 200);
+    (rec as any).__durationTick = tick;
 
     if (keepKeyboard) {
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -3512,16 +3920,17 @@ export default function MessageScreen() {
   async function stopRecording() {
     if (!recording) return;
     setIsRecording(false);
-    await recording.stopAndUnloadAsync();
-    if (Audio) {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
+    if ((recording as any).__durationTick) {
+      clearInterval((recording as any).__durationTick);
     }
-    const uri = recording.getURI();
+    await recording.stop();
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: "duckOthers",
+      shouldRouteThroughEarpiece: false,
+    });
+    const uri = recording.uri;
     setRecording(null);
     setRecordingDuration(0);
     if (!uri) return;
@@ -3580,15 +3989,16 @@ export default function MessageScreen() {
   async function cancelRecording() {
     if (!recording) return;
     setIsRecording(false);
-    await recording.stopAndUnloadAsync();
-    if (Audio) {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
+    if ((recording as any).__durationTick) {
+      clearInterval((recording as any).__durationTick);
     }
+    await recording.stop();
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: "duckOthers",
+      shouldRouteThroughEarpiece: false,
+    });
     setRecording(null);
     setRecordingDuration(0);
   }
@@ -3737,7 +4147,7 @@ export default function MessageScreen() {
   return (
     <GestureHandlerRootView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView edges={["top"]} style={{ backgroundColor: "#fff" }}>
+      <SafeAreaView edges={["top"]} style={{ backgroundColor: "#FFFFFF" }}>
         {selectionMode ? (
           <View style={styles.selectionHeader}>
             <View style={styles.selectionHeaderLeft}>
@@ -3818,6 +4228,7 @@ export default function MessageScreen() {
                 <WhatsAppAvatar
                   photo={resolveMediaUrl(displayPhoto) || displayPhoto}
                   name={displayName}
+                  gender={displayGender}
                   size={40}
                   online={
                     !privacyHidden &&
@@ -3926,28 +4337,16 @@ export default function MessageScreen() {
                   </>
                 );
               })()}
-              <View
-                ref={moreBtnRef}
-                collapsable={false}
-                onLayout={computeMenuPosition}
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={openChatMenu}
+                activeOpacity={0.55}
+                hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                accessibilityRole="button"
+                accessibilityLabel="More options"
               >
-                <Pressable
-                  style={styles.actionButton}
-                  onTouchStart={() => {
-                    keyboardWasOpenRef.current = isKeyboardVisible;
-                    openChatMenu();
-                  }}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="More options"
-                >
-                  <Ionicons
-                    name="ellipsis-vertical"
-                    size={22}
-                    color="#111B21"
-                  />
-                </Pressable>
-              </View>
+                <Ionicons name="ellipsis-vertical" size={22} color="#111B21" />
+              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -4217,34 +4616,27 @@ export default function MessageScreen() {
               <View style={styles.inputContainer}>
                 <TouchableOpacity
                   onPress={() => {
-                    if (!isMatched || friendshipStatus?.theyBlocked) {
-                      showAlert({
-                        title: "Friends only",
-                        message: "Photos unlock when you both like each other.",
-                        icon: "image",
-                      });
-                      return;
-                    }
                     void pickImage();
                   }}
                   style={styles.attachButton}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   activeOpacity={
-                    isMatched && !friendshipStatus?.theyBlocked ? 0.6 : 1
+                    friendshipStatus?.theyBlocked || !isMediaUnlocked ? 1 : 0.6
                   }
                   accessibilityRole="button"
                   accessibilityLabel="Attach photo"
                   accessibilityState={{
-                    disabled: !isMatched || !!friendshipStatus?.theyBlocked,
+                    disabled:
+                      !!friendshipStatus?.theyBlocked || !isMediaUnlocked,
                   }}
                 >
                   <Ionicons
                     name="add-circle"
                     size={ATTACH_ICON}
                     color={
-                      isMatched && !friendshipStatus?.theyBlocked
-                        ? "#111B21"
-                        : "#B0B0B0"
+                      friendshipStatus?.theyBlocked || !isMediaUnlocked
+                        ? "#B0B0B0"
+                        : "#111B21"
                     }
                   />
                 </TouchableOpacity>
@@ -4304,26 +4696,14 @@ export default function MessageScreen() {
                 {!showSendIcon && !isRecording ? (
                   <TouchableOpacity
                     onPress={() => {
-                      if (!isMatched || friendshipStatus?.theyBlocked) {
-                        showAlert({
-                          title: friendshipStatus?.theyBlocked
-                            ? "Text only"
-                            : "Friends only",
-                          message: friendshipStatus?.theyBlocked
-                            ? "Only text messages can be sent right now."
-                            : "Photos unlock when you both like each other.",
-                          icon: friendshipStatus?.theyBlocked
-                            ? "ban"
-                            : "camera",
-                        });
-                        return;
-                      }
                       void takePhoto();
                     }}
                     style={styles.cameraButton}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     activeOpacity={
-                      isMatched && !friendshipStatus?.theyBlocked ? 0.6 : 1
+                      friendshipStatus?.theyBlocked || !isMediaUnlocked
+                        ? 1
+                        : 0.6
                     }
                     accessibilityRole="button"
                     accessibilityLabel="Take photo"
@@ -4332,9 +4712,9 @@ export default function MessageScreen() {
                       name="camera"
                       size={ATTACH_ICON}
                       color={
-                        isMatched && !friendshipStatus?.theyBlocked
-                          ? "#54656F"
-                          : "#B0B0B0"
+                        friendshipStatus?.theyBlocked || !isMediaUnlocked
+                          ? "#B0B0B0"
+                          : "#54656F"
                       }
                     />
                   </TouchableOpacity>
@@ -4503,214 +4883,6 @@ export default function MessageScreen() {
         </View>
       </Modal>
 
-      {/* WhatsApp-style chat overflow menu — always mounted for instant open */}
-      <View
-        ref={menuOverlayRef}
-        style={[
-          styles.chatMenuOverlay,
-          {
-            opacity: menuOpen ? 1 : 0,
-            pointerEvents: menuOpen ? "box-none" : "none",
-          },
-        ]}
-        collapsable={false}
-      >
-        <Pressable
-          style={styles.chatMenuBackdrop}
-          onPress={() => {
-            if (menuOpenGuardRef.current) return;
-            closeChatMenu();
-          }}
-        >
-          <View
-            style={[
-              styles.chatMenuCard,
-              {
-                top: menuPos.top,
-                right: menuPos.right,
-              },
-            ]}
-            onStartShouldSetResponder={() => true}
-          >
-            {(() => {
-              const blocked =
-                friendshipStatus?.status === "blocked" ||
-                !!friendshipStatus?.iBlocked;
-              const liked =
-                !!friendshipStatus?.areFriends || !!friendshipStatus?.iLiked;
-              return (
-                <>
-                  {!blocked && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.chatMenuItem}
-                        onPress={handleMenuLike}
-                        activeOpacity={0.55}
-                        disabled={likingHeader}
-                      >
-                        <Text style={styles.chatMenuText}>
-                          {liked ? "Unlike" : "Like"}
-                        </Text>
-                      </TouchableOpacity>
-                      <View style={styles.chatMenuDivider} />
-                    </>
-                  )}
-                  <TouchableOpacity
-                    style={styles.chatMenuItem}
-                    onPress={handleMuteChat}
-                    activeOpacity={0.55}
-                  >
-                    <Text style={styles.chatMenuText}>
-                      {chatMuted ? "Unmute" : "Mute"}
-                    </Text>
-                  </TouchableOpacity>
-                  <View style={styles.chatMenuDivider} />
-                  <TouchableOpacity
-                    style={styles.chatMenuItem}
-                    onPress={handleReportUser}
-                    activeOpacity={0.55}
-                  >
-                    <Text style={styles.chatMenuText}>Report</Text>
-                  </TouchableOpacity>
-                  <View style={styles.chatMenuDivider} />
-                  <TouchableOpacity
-                    style={styles.chatMenuItem}
-                    onPress={
-                      friendshipStatus?.iBlocked
-                        ? () =>
-                            closeChatMenu(async () => {
-                              try {
-                                const token = await getAuthToken();
-                                if (!token || !id) return;
-                                await unblockUser(token, String(id));
-                                await fetchFriendshipStatus();
-                                showAlert({
-                                  title: "User unblocked",
-                                  message: "You can message them again.",
-                                  icon: "checkmark-circle",
-                                });
-                              } catch (e: any) {
-                                showAlert({
-                                  title: "Could not unblock",
-                                  message: e?.message || "Please try again.",
-                                  icon: "alert-circle",
-                                });
-                              }
-                            })
-                        : handleBlockUser
-                    }
-                    activeOpacity={0.55}
-                  >
-                    <Text style={[styles.chatMenuText, styles.chatMenuDanger]}>
-                      {friendshipStatus?.iBlocked ? "Unblock" : "Block"}
-                    </Text>
-                  </TouchableOpacity>
-                </>
-              );
-            })()}
-          </View>
-        </Pressable>
-      </View>
-
-      {/* Report reason picker */}
-      <Modal
-        visible={reportOpen}
-        transparent
-        animationType="none"
-        statusBarTranslucent
-        onRequestClose={() => closeReportSheet()}
-      >
-        <View style={styles.reportBackdrop}>
-          <Animated.View
-            style={[
-              StyleSheet.absoluteFillObject,
-              {
-                backgroundColor: "rgba(11, 20, 26, 0.42)",
-                opacity: reportAnim,
-              },
-            ]}
-          >
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={() => closeReportSheet()}
-            />
-          </Animated.View>
-          <Animated.View
-            style={[
-              styles.reportSheet,
-              {
-                transform: [
-                  {
-                    translateY: reportAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [48, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            <View style={styles.reportHandle} />
-            <Text style={styles.reportTitle}>Report</Text>
-            <Text style={styles.reportSubtitle}>
-              Why are you reporting {getDisplayName(displayName) || "this user"}
-              ?
-            </Text>
-            {(
-              [
-                { key: "spam", label: "Spam" },
-                { key: "harassment", label: "Harassment or bullying" },
-                { key: "inappropriate", label: "Inappropriate content" },
-                { key: "fake_profile", label: "Fake profile" },
-                { key: "underage", label: "Underage user" },
-                { key: "other", label: "Other" },
-              ] as { key: ReportReason; label: string }[]
-            ).map((item, idx, arr) => (
-              <TouchableOpacity
-                key={item.key}
-                style={[
-                  styles.reportRow,
-                  idx < arr.length - 1 && styles.reportRowBorder,
-                ]}
-                activeOpacity={0.55}
-                onPress={() => {
-                  closeReportSheet(() => {
-                    showAlert({
-                      title: "Submit report?",
-                      message:
-                        "Reports are anonymous. You can also block this user so they can't message you.",
-                      icon: "flag",
-                      buttons: [
-                        { text: "Cancel", style: "cancel" },
-                        {
-                          text: "Report only",
-                          style: "default",
-                          onPress: () => submitReport(item.key, false),
-                        },
-                        {
-                          text: "Report & block",
-                          style: "destructive",
-                          onPress: () => submitReport(item.key, true),
-                        },
-                      ],
-                    });
-                  });
-                }}
-              >
-                <Text style={styles.reportRowText}>{item.label}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={styles.reportCancel}
-              onPress={() => closeReportSheet()}
-              activeOpacity={0.6}
-            >
-              <Text style={styles.reportCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </View>
-      </Modal>
-
       <UserProfileModal
         visible={profileModalVisible}
         user={
@@ -4742,20 +4914,459 @@ export default function MessageScreen() {
         onLike={toggleHeaderLike}
         onUnlike={toggleHeaderLike}
         likingInProgress={likingHeader}
+        onBlocked={async () => {
+          setProfileModalVisible(false);
+          setProfileUser(null);
+          try {
+            await fetchFriendshipStatus();
+          } catch {
+            /* ignore */
+          }
+        }}
       />
+
+      {/* Chat Options — full page (same as profile Options) */}
+      <Modal
+        visible={menuOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        statusBarTranslucent
+        onRequestClose={() => {
+          if (optionsAlert) setOptionsAlert(null);
+          else if (reasonPickerOpen) setReasonPickerOpen(false);
+          else if (reportOpen) setReportOpen(false);
+          else if (blockSheetOpen) setBlockSheetOpen(false);
+          else closeChatMenu();
+        }}
+      >
+        <View style={styles.optionsPage}>
+          <View
+            style={[
+              styles.optionsHeader,
+              { paddingTop: Math.max(insets.top, 8) },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.optionsBackBtn}
+              onPress={() => closeChatMenu()}
+              activeOpacity={0.7}
+              hitSlop={8}
+            >
+              <Ionicons name="arrow-back" size={24} color="#262626" />
+            </TouchableOpacity>
+            <Text style={styles.optionsTitle} numberOfLines={1}>
+              Options
+            </Text>
+            <View style={styles.optionsHeaderSpacer} />
+          </View>
+
+          <View
+            style={[
+              styles.optionsBody,
+              { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+            ]}
+          >
+            <View style={styles.optionsAvatarBlock}>
+              <WhatsAppAvatar
+                photo={
+                  resolveMediaUrl(displayPhoto) || displayPhoto || undefined
+                }
+                name={displayName}
+                publicId={profileUser?.publicId}
+                size={96}
+                online={!!otherUserOnline}
+                badge={profileUser?.subscriptionBadge}
+                badgeExpiresAt={profileUser?.subscriptionExpiresAt}
+                photoVerified={!!profileUser?.photoVerified}
+              />
+              <Text style={styles.optionsUserName} numberOfLines={1}>
+                {getDisplayName(displayName) || displayName || "User"}
+              </Text>
+            </View>
+
+            <View style={styles.optionsGroup}>
+              {!(
+                friendshipStatus?.status === "blocked" ||
+                friendshipStatus?.iBlocked
+              ) ? (
+                <>
+                  <TouchableOpacity
+                    style={styles.optionsRow}
+                    onPress={handleMenuLike}
+                    activeOpacity={0.65}
+                    disabled={likingHeader}
+                  >
+                    <Text style={styles.optionsRowText}>
+                      {friendshipStatus?.areFriends || friendshipStatus?.iLiked
+                        ? "Unlike"
+                        : "Like"}
+                    </Text>
+                    <Ionicons
+                      name={
+                        friendshipStatus?.areFriends || friendshipStatus?.iLiked
+                          ? "heart"
+                          : "heart-outline"
+                      }
+                      size={22}
+                      color={
+                        friendshipStatus?.areFriends || friendshipStatus?.iLiked
+                          ? "#ED4956"
+                          : "#262626"
+                      }
+                    />
+                  </TouchableOpacity>
+                  <View style={styles.optionsDivider} />
+                </>
+              ) : null}
+
+              <TouchableOpacity
+                style={styles.optionsRow}
+                onPress={handleMuteChat}
+                activeOpacity={0.65}
+              >
+                <Text style={styles.optionsRowText}>
+                  {chatMuted ? "Unmute" : "Mute"}
+                </Text>
+                <Ionicons
+                  name={
+                    chatMuted
+                      ? "notifications-outline"
+                      : "notifications-off-outline"
+                  }
+                  size={22}
+                  color="#262626"
+                />
+              </TouchableOpacity>
+              <View style={styles.optionsDivider} />
+
+              <TouchableOpacity
+                style={styles.optionsRow}
+                onPress={handleShareFromMenu}
+                activeOpacity={0.65}
+              >
+                <Text style={styles.optionsRowText}>Share</Text>
+                <Ionicons name="share-outline" size={22} color="#262626" />
+              </TouchableOpacity>
+              <View style={styles.optionsDivider} />
+              <TouchableOpacity
+                style={styles.optionsRow}
+                onPress={
+                  friendshipStatus?.iBlocked
+                    ? () =>
+                        setOptionsAlert({
+                          title: "Unblock?",
+                          message: `Unblock ${
+                            getDisplayName(displayName) || "this user"
+                          } so you can message again?`,
+                          confirmText: "Unblock",
+                          cancelText: "Cancel",
+                          onConfirm: () => void runUnblockAction(),
+                        })
+                    : handleBlockUser
+                }
+                activeOpacity={0.65}
+              >
+                <Text style={[styles.optionsRowText, styles.optionsDanger]}>
+                  {friendshipStatus?.iBlocked ? "Unblock" : "Block"}
+                </Text>
+                <Ionicons name="hand-left-outline" size={22} color="#ED4956" />
+              </TouchableOpacity>
+              <View style={styles.optionsDivider} />
+              <TouchableOpacity
+                style={styles.optionsRow}
+                onPress={handleReportUser}
+                activeOpacity={0.65}
+              >
+                <Text style={[styles.optionsRowText, styles.optionsDanger]}>
+                  Report
+                </Text>
+                <Ionicons name="flag-outline" size={22} color="#ED4956" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* In-page confirm alert (Like / Mute / success) */}
+          {optionsAlert ? (
+            <View style={styles.optOverlay} pointerEvents="box-none">
+              <Pressable
+                style={styles.optBackdrop}
+                onPress={() => setOptionsAlert(null)}
+              />
+              <View style={styles.optAlertCard}>
+                <Text style={styles.optAlertTitle}>{optionsAlert.title}</Text>
+                <Text style={styles.optAlertMessage}>
+                  {optionsAlert.message}
+                </Text>
+                <View style={styles.optAlertActions}>
+                  {optionsAlert.cancelText ? (
+                    <>
+                      <TouchableOpacity
+                        style={styles.optAlertBtn}
+                        onPress={() => setOptionsAlert(null)}
+                        activeOpacity={0.55}
+                      >
+                        <Text style={styles.optAlertBtnCancel}>
+                          {optionsAlert.cancelText}
+                        </Text>
+                      </TouchableOpacity>
+                      <View style={styles.optAlertVDivider} />
+                    </>
+                  ) : null}
+                  <TouchableOpacity
+                    style={styles.optAlertBtn}
+                    onPress={() => {
+                      const fn = optionsAlert.onConfirm;
+                      if (fn) void fn();
+                      else setOptionsAlert(null);
+                    }}
+                    activeOpacity={0.55}
+                    disabled={optionsActionBusy}
+                  >
+                    <Text
+                      style={[
+                        styles.optAlertBtnConfirm,
+                        optionsAlert.destructive && styles.optAlertBtnDanger,
+                      ]}
+                    >
+                      {optionsAlert.confirmText}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Block sheet */}
+          {blockSheetOpen ? (
+            <View style={styles.optSheetOverlay} pointerEvents="box-none">
+              <Pressable
+                style={styles.optBackdrop}
+                onPress={() => setBlockSheetOpen(false)}
+              />
+              <Animated.View
+                style={[
+                  styles.optSheet,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16),
+                    transform: [
+                      {
+                        translateY: optionsSheetAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [420, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.optSheetHeader}>
+                  <Text style={styles.optSheetTitle} numberOfLines={2}>
+                    {`Block "${getDisplayName(displayName) || "User"}"?`}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.optCloseBtn}
+                    onPress={() => setBlockSheetOpen(false)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={20} color="#6750A4" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.optInfoCard}>
+                  <Text style={styles.optInfoText}>
+                    This person won’t be able to message or call you. They won’t
+                    know you blocked or reported them.
+                  </Text>
+                  <Text style={[styles.optInfoText, { marginTop: 14 }]}>
+                    If you block and report, recent messages from this chat may
+                    also be sent to Luvstor.
+                  </Text>
+                </View>
+                <View style={styles.optActionCard}>
+                  <TouchableOpacity
+                    style={styles.optActionRow}
+                    activeOpacity={0.55}
+                    disabled={optionsActionBusy}
+                    onPress={() => openReasonPicker(true)}
+                  >
+                    <Ionicons
+                      name="warning-outline"
+                      size={22}
+                      color="#B3261E"
+                    />
+                    <Text style={styles.optActionText}>Block and report</Text>
+                  </TouchableOpacity>
+                  <View style={styles.optActionDivider} />
+                  <TouchableOpacity
+                    style={styles.optActionRow}
+                    activeOpacity={0.55}
+                    disabled={optionsActionBusy}
+                    onPress={() => void doBlockFromOptions()}
+                  >
+                    <Ionicons name="ban-outline" size={22} color="#B3261E" />
+                    <Text style={styles.optActionText}>Block</Text>
+                  </TouchableOpacity>
+                </View>
+              </Animated.View>
+            </View>
+          ) : null}
+
+          {/* Report sheet */}
+          {reportOpen ? (
+            <View style={styles.optSheetOverlay} pointerEvents="box-none">
+              <Pressable
+                style={styles.optBackdrop}
+                onPress={() => setReportOpen(false)}
+              />
+              <Animated.View
+                style={[
+                  styles.optSheet,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16),
+                    transform: [
+                      {
+                        translateY: optionsSheetAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [420, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.optSheetHeader}>
+                  <Text style={styles.optSheetTitle}>Report to Luvstor</Text>
+                  <TouchableOpacity
+                    style={styles.optCloseBtn}
+                    onPress={() => setReportOpen(false)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={20} color="#6750A4" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.optInfoCard}>
+                  <Text style={styles.optInfoText}>
+                    Recent messages from this chat may be sent to Luvstor. This
+                    person won’t know you blocked or reported them.
+                  </Text>
+                  <Text style={[styles.optInfoText, { marginTop: 14 }]}>
+                    If you report and block, this person won’t be able to
+                    message or call you.
+                  </Text>
+                </View>
+                <View style={styles.optActionCard}>
+                  <TouchableOpacity
+                    style={styles.optActionRow}
+                    activeOpacity={0.55}
+                    disabled={optionsActionBusy}
+                    onPress={() => openReasonPicker(true)}
+                  >
+                    <Ionicons name="ban-outline" size={22} color="#B3261E" />
+                    <Text style={styles.optActionText}>Report and block</Text>
+                  </TouchableOpacity>
+                  <View style={styles.optActionDivider} />
+                  <TouchableOpacity
+                    style={styles.optActionRow}
+                    activeOpacity={0.55}
+                    disabled={optionsActionBusy}
+                    onPress={() => openReasonPicker(false)}
+                  >
+                    <Ionicons
+                      name="warning-outline"
+                      size={22}
+                      color="#B3261E"
+                    />
+                    <Text style={styles.optActionText}>Report</Text>
+                  </TouchableOpacity>
+                </View>
+              </Animated.View>
+            </View>
+          ) : null}
+
+          {/* Report reasons */}
+          {reasonPickerOpen ? (
+            <View style={styles.optSheetOverlay} pointerEvents="box-none">
+              <Pressable
+                style={styles.optBackdrop}
+                onPress={() => setReasonPickerOpen(false)}
+              />
+              <Animated.View
+                style={[
+                  styles.optSheet,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16),
+                    transform: [
+                      {
+                        translateY: optionsSheetAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [520, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.optSheetHeader}>
+                  <Text style={styles.optSheetTitle}>
+                    {pendingAlsoBlock ? "Report and block" : "Report"}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.optCloseBtn}
+                    onPress={() => setReasonPickerOpen(false)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={20} color="#6750A4" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.optActionCard}>
+                  {(
+                    [
+                      { key: "spam", label: "Spam" },
+                      { key: "harassment", label: "Harassment or bullying" },
+                      {
+                        key: "inappropriate",
+                        label: "Inappropriate content",
+                      },
+                      { key: "fake_profile", label: "Fake profile" },
+                      { key: "underage", label: "Underage user" },
+                      { key: "other", label: "Other" },
+                    ] as { key: ReportReason; label: string }[]
+                  ).map((item, index) => (
+                    <React.Fragment key={item.key}>
+                      {index > 0 ? (
+                        <View style={styles.optReasonDivider} />
+                      ) : null}
+                      <TouchableOpacity
+                        style={styles.optReasonRow}
+                        activeOpacity={0.55}
+                        disabled={optionsActionBusy}
+                        onPress={() =>
+                          void submitReport(item.key, pendingAlsoBlock)
+                        }
+                      >
+                        <Text style={styles.optReasonText}>{item.label}</Text>
+                      </TouchableOpacity>
+                    </React.Fragment>
+                  ))}
+                </View>
+              </Animated.View>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1, backgroundColor: "#ECE5DD", position: "relative" },
   header: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 15,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
+    borderBottomColor: "#E7E0EC",
+    backgroundColor: "#FFFFFF",
   },
   backButton: { padding: 5 },
   userInfo: {
@@ -4796,8 +5407,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
-    backgroundColor: "#fff",
+    borderBottomColor: "#E7E0EC",
+    backgroundColor: "#FFFFFF",
   },
   selectionHeaderLeft: { flexDirection: "row", alignItems: "center" },
   selectionCountText: {
@@ -4813,51 +5424,256 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  chatMenuOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 1000,
-    elevation: 1000,
-  },
-  chatMenuBackdrop: {
+  optionsPage: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.18)",
-  },
-  chatMenuCard: {
-    position: "absolute",
-    width: 168,
     backgroundColor: "#FFFFFF",
-    borderRadius: 14,
-    paddingVertical: 4,
-    overflow: "hidden",
-    borderWidth: 0,
-    shadowColor: "#000",
-    shadowOpacity: 0.16,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 14,
+    position: "relative",
   },
-  chatMenuItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    minHeight: 46,
+  optionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#DBDBDB",
+    backgroundColor: "#FFFFFF",
+  },
+  optionsBackBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
     justifyContent: "center",
-    alignItems: "stretch",
+  },
+  optionsHeaderSpacer: {
+    width: 44,
+  },
+  optionsTitle: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#262626",
+    letterSpacing: 0.2,
+  },
+  optionsBody: {
+    flex: 1,
+    paddingTop: 28,
+    paddingHorizontal: 16,
+  },
+  optionsAvatarBlock: {
+    alignItems: "center",
+    marginBottom: 28,
+    gap: 12,
+  },
+  optionsUserName: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#262626",
+  },
+  optionsGroup: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#DBDBDB",
+  },
+  optionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 52,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     backgroundColor: "#FFFFFF",
   },
-  chatMenuDivider: {
-    height: StyleSheet.hairlineWidth,
-    alignSelf: "stretch",
-    backgroundColor: "#DBDBDB",
-  },
-  chatMenuText: {
-    fontSize: 15,
-    color: "#262626",
+  optionsRowText: {
+    flex: 1,
+    fontSize: 16,
     fontWeight: "400",
-    letterSpacing: 0,
-    textAlign: "left",
+    color: "#262626",
   },
-  chatMenuDanger: {
+  optionsDanger: {
     color: "#ED4956",
+  },
+  optionsDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#DBDBDB",
+    marginLeft: 16,
+  },
+  optOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 50,
+    elevation: 50,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 36,
+  },
+  optSheetOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 40,
+    elevation: 40,
+    justifyContent: "flex-end",
+  },
+  optBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  optAlertCard: {
+    width: "100%",
+    maxWidth: 300,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E7E0EC",
+    zIndex: 51,
+  },
+  optAlertTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1C1B1F",
+    textAlign: "center",
+    paddingTop: 18,
+    paddingHorizontal: 16,
+  },
+  optAlertMessage: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#49454F",
+    textAlign: "center",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 16,
+  },
+  optAlertActions: {
+    flexDirection: "row",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#E7E0EC",
+    minHeight: 52,
+  },
+  optAlertBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+  },
+  optAlertVDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: "#E7E0EC",
+  },
+  optAlertBtnCancel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#6750A4",
+  },
+  optAlertBtnConfirm: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#6750A4",
+  },
+  optAlertBtnDanger: {
+    color: "#B3261E",
+  },
+  optSheet: {
+    width: "100%",
+    backgroundColor: "#FDF8FF",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    gap: 10,
+    zIndex: 41,
+  },
+  optSheetHeader: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 44,
+  },
+  optSheetTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1C1B1F",
+    textAlign: "center",
+  },
+  optCloseBtn: {
+    position: "absolute",
+    right: 4,
+    top: 0,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#EADDFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optInfoCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E7E0EC",
+  },
+  optInfoText: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: "#1C1B1F",
+  },
+  optActionCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E7E0EC",
+  },
+  optActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    minHeight: 54,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  optActionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E7E0EC",
+    marginLeft: 52,
+  },
+  optActionText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#B3261E",
+  },
+  optReasonRow: {
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  optReasonDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E7E0EC",
+  },
+  optReasonText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#6750A4",
+    textAlign: "center",
   },
   reportBackdrop: {
     flex: 1,
@@ -4920,8 +5736,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#667781",
   },
-  chatContainer: { flex: 1 },
-  messagesFlatList: { flex: 1, minHeight: 0 },
+  chatContainer: { flex: 1, backgroundColor: "#ECE5DD" },
+  messagesFlatList: { flex: 1, minHeight: 0, backgroundColor: "#ECE5DD" },
   composerAccessoryDock: {
     width: "100%",
     backgroundColor: "#FFFFFF",

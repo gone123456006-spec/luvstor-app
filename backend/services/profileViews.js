@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const ProfileView = require('../models/ProfileView');
+const Friendship = require('../models/Friendship');
+const { getBlockState } = require('../utils/blockState');
 
 function toObjectId(id) {
   try {
@@ -9,13 +11,75 @@ function toObjectId(id) {
   }
 }
 
+/** UTC day key for once-per-day dedupe (YYYY-MM-DD). */
+function utcDayKey(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Notify the profile owner that someone viewed them.
+ * Rate-limited: one notification per viewer→target per calendar day.
+ * Skips self, blocks, and existing friends.
+ */
+async function notifyProfileViewed(io, viewerId, targetId) {
+  try {
+    if (!viewerId || !targetId) return null;
+    if (String(viewerId) === String(targetId)) return null;
+
+    const block = await getBlockState(viewerId, targetId);
+    if (block?.blocked || block?.iBlocked || block?.theyBlocked) return null;
+
+    // Friends already chat — skip noisy profile-view pings
+    try {
+      const { userA, userB } = Friendship.getSortedPair(viewerId, targetId);
+      const friendship = await Friendship.findOne({ userA, userB })
+        .select('status')
+        .lean();
+      if (
+        friendship &&
+        (friendship.status === 'friends' || friendship.status === 'mutual_match')
+      ) {
+        return null;
+      }
+    } catch {
+      /* friendship check is best-effort */
+    }
+
+    const { createNotification } = require('./notifications');
+    const day = utcDayKey();
+
+    return await createNotification(io, {
+      userId: String(targetId),
+      type: 'profile_view',
+      title: 'Someone viewed your profile.',
+      body: 'Like or message them back.',
+      actorId: String(viewerId),
+      data: {
+        userId: String(viewerId),
+        action: 'profile_view',
+      },
+      deepLink: `/(tabs)`,
+      groupKey: `profile_view:${viewerId}`,
+      // One alert per viewer per day — re-views same day are silent
+      dedupeKey: `profile_view:${viewerId}:${day}`,
+      priority: 'normal',
+      push: true,
+    });
+  } catch (err) {
+    console.warn('[profileViews] notify failed:', err?.message || err);
+    return null;
+  }
+}
+
 /**
  * Record that `viewerId` opened `targetId`'s profile.
  *
  * Best-effort and never awaited by the request path — a failure to log a view
  * must never turn into a failed profile load.
+ *
+ * @param {object} [io] Socket.io instance for realtime notification delivery
  */
-async function recordProfileView(viewerId, targetId, now = new Date()) {
+async function recordProfileView(viewerId, targetId, now = new Date(), io = null) {
   const viewerOid = toObjectId(viewerId);
   const targetOid = toObjectId(targetId);
   if (!viewerOid || !targetOid || String(viewerOid) === String(targetOid)) return false;
@@ -30,12 +94,21 @@ async function recordProfileView(viewerId, targetId, now = new Date()) {
       },
       { upsert: true },
     );
+
+    // Fire-and-forget notify — never block the profile response
+    if (io) {
+      void notifyProfileViewed(io, viewerId, targetId);
+    }
+
     return true;
   } catch (err) {
     // Racing upserts on the unique index surface as duplicate keys; the pair
     // already exists, which is all we cared about.
     if (err?.code !== 11000) {
       console.warn('[profileViews] record failed:', err?.message || err);
+    } else if (io) {
+      // Still try to notify on race — dedupeKey prevents duplicates
+      void notifyProfileViewed(io, viewerId, targetId);
     }
     return false;
   }
@@ -87,6 +160,7 @@ async function recentlyViewedByBulk(viewerIds, since, perViewer = 3) {
 
 module.exports = {
   recordProfileView,
+  notifyProfileViewed,
   countViewersSince,
   countViewersSinceBulk,
   recentlyViewedByBulk,

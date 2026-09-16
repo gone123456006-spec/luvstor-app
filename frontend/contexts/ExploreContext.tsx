@@ -6,9 +6,12 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCall } from './CallContext';
 import { useSocket } from './SocketContext';
-import { isWebRTCAvailable } from '../services/webrtc';
+import { apiRequest } from '../utils/api';
+import { getAuthToken } from '../utils/auth';
+import { canonicalShowMe, type ShowMeValue } from '../utils/showMe';
 
 export type ExploreCallMode = 'video' | 'voice';
 export type ExploreStatus = 'idle' | 'searching' | 'matched' | 'cooldown';
@@ -20,13 +23,27 @@ export type ExplorePeer = {
   gender?: string;
 };
 
+export type ExplorePrefs = {
+  showMe: ShowMeValue;
+  verifiedOnly: boolean;
+};
+
+const DEFAULT_PREFS: ExplorePrefs = {
+  showMe: 'All',
+  verifiedOnly: false,
+};
+
+const STORAGE_KEY = 'luvstor:explorePrefs';
+
 type ExploreContextValue = {
   mode: ExploreCallMode;
-  setMode: (mode: ExploreCallMode) => void;
   status: ExploreStatus;
   cooldownSec: number;
   matchedPeer: ExplorePeer | null;
-  joinQueue: () => void;
+  prefs: ExplorePrefs;
+  setPrefs: (next: ExplorePrefs) => void;
+  joinVideo: () => void;
+  joinVoice: () => void;
   skipWithCooldown: () => void;
   leaveQueue: () => void;
 };
@@ -34,6 +51,22 @@ type ExploreContextValue = {
 const ExploreContext = createContext<ExploreContextValue | null>(null);
 
 const SKIP_COOLDOWN_SEC = 3;
+
+function inActiveCall(call: {
+  phase: string;
+  isExplore: boolean;
+}): 'friend' | 'explore' | null {
+  if (call.phase === 'idle' || call.phase === 'ended') return null;
+  return call.isExplore ? 'explore' : 'friend';
+}
+
+function normalizePrefs(raw: Partial<ExplorePrefs> | null | undefined): ExplorePrefs {
+  const showMe = (canonicalShowMe(raw?.showMe) || 'All') as ShowMeValue;
+  return {
+    showMe,
+    verifiedOnly: !!raw?.verifiedOnly,
+  };
+}
 
 export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const { socket } = useSocket();
@@ -43,9 +76,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<ExploreStatus>('idle');
   const [cooldownSec, setCooldownSec] = useState(0);
   const [matchedPeer, setMatchedPeer] = useState<ExplorePeer | null>(null);
+  const [prefs, setPrefsState] = useState<ExplorePrefs>(DEFAULT_PREFS);
 
   const modeRef = useRef(mode);
   const statusRef = useRef(status);
+  const prefsRef = useRef(prefs);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -56,6 +91,59 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     statusRef.current = status;
   }, [status]);
 
+  useEffect(() => {
+    prefsRef.current = prefs;
+  }, [prefs]);
+
+  // Load prefs: local cache first, then server profile
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = await AsyncStorage.getItem(STORAGE_KEY);
+        if (cached && !cancelled) {
+          setPrefsState(normalizePrefs(JSON.parse(cached)));
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        const token = await getAuthToken();
+        if (!token || cancelled) return;
+        const me = await apiRequest('/api/users/me', token);
+        if (cancelled || !me?.explorePrefs) return;
+        const next = normalizePrefs(me.explorePrefs);
+        setPrefsState(next);
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* keep local */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setPrefs = useCallback((next: ExplorePrefs) => {
+    const normalized = normalizePrefs(next);
+    setPrefsState(normalized);
+    prefsRef.current = normalized;
+    void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    // Soft persist to server
+    void (async () => {
+      try {
+        const token = await getAuthToken();
+        if (!token) return;
+        await apiRequest('/api/users/me', token, {
+          method: 'PUT',
+          body: JSON.stringify({ explorePrefs: normalized }),
+        });
+      } catch {
+        /* local still works */
+      }
+    })();
+  }, []);
+
   const clearCooldownTimer = useCallback(() => {
     if (cooldownTimerRef.current) {
       clearInterval(cooldownTimerRef.current);
@@ -63,8 +151,33 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const emitJoin = useCallback(
+    (nextMode: ExploreCallMode) => {
+      if (!socket?.connected) return;
+
+      const busy = inActiveCall(call);
+      if (busy === 'friend') return;
+      if (busy === 'explore') return;
+      if (statusRef.current === 'cooldown') return;
+
+      setMode(nextMode);
+      modeRef.current = nextMode;
+      setStatus('searching');
+      setMatchedPeer(null);
+      socket.emit('explore:join', {
+        callType: nextMode,
+        prefs: prefsRef.current,
+      });
+    },
+    [call, socket],
+  );
+
+  const joinVideo = useCallback(() => emitJoin('video'), [emitJoin]);
+  const joinVoice = useCallback(() => emitJoin('voice'), [emitJoin]);
+
   const startCooldownAndRejoin = useCallback(() => {
     clearCooldownTimer();
+    const rejoinMode = modeRef.current;
     setStatus('cooldown');
     setCooldownSec(SKIP_COOLDOWN_SEC);
     setMatchedPeer(null);
@@ -76,29 +189,20 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       if (left <= 0) {
         clearCooldownTimer();
         setStatus('searching');
-        socket?.emit('explore:join', { callType: modeRef.current });
+        socket?.emit('explore:join', {
+          callType: rejoinMode,
+          prefs: prefsRef.current,
+        });
       }
     }, 1000);
   }, [clearCooldownTimer, socket]);
 
-  const joinQueue = useCallback(() => {
-    if (!socket?.connected) return;
-    if (!isWebRTCAvailable()) return;
-    if (call.phase !== 'idle' && call.phase !== 'ended') return;
-    if (statusRef.current === 'cooldown') return;
-    socket.emit('explore:join', { callType: modeRef.current });
-  }, [call.phase, socket]);
-
   const leaveQueue = useCallback(() => {
     clearCooldownTimer();
     setCooldownSec(0);
-    if (!socket?.connected) {
-      setStatus('idle');
-      setMatchedPeer(null);
-      return;
-    }
-    if (statusRef.current === 'searching') {
-      socket.emit('explore:leave');
+    const leaveType = modeRef.current;
+    if (socket?.connected && statusRef.current === 'searching') {
+      socket.emit('explore:leave', { callType: leaveType });
     }
     setStatus('idle');
     setMatchedPeer(null);
@@ -108,13 +212,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     if (!socket?.connected) return;
     if (statusRef.current === 'cooldown' || cooldownSec > 0) return;
 
-    const inCall =
-      call.phase !== 'idle' && call.phase !== 'ended';
-
-    if (inCall) {
+    const busy = inActiveCall(call);
+    if (busy === 'explore') {
       call.endCall();
     } else if (statusRef.current === 'searching') {
-      socket.emit('explore:skip');
+      socket.emit('explore:skip', { callType: modeRef.current });
     }
 
     startCooldownAndRejoin();
@@ -138,7 +240,13 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const onMatched = (payload: { peer?: ExplorePeer }) => {
+    const onMatched = (payload: {
+      peer?: ExplorePeer;
+      callType?: ExploreCallMode;
+    }) => {
+      if (payload?.callType === 'video' || payload?.callType === 'voice') {
+        setMode(payload.callType);
+      }
       setStatus('matched');
       if (payload?.peer) {
         setMatchedPeer({
@@ -185,11 +293,13 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
   const value: ExploreContextValue = {
     mode,
-    setMode,
     status,
     cooldownSec,
     matchedPeer,
-    joinQueue,
+    prefs,
+    setPrefs,
+    joinVideo,
+    joinVoice,
     skipWithCooldown,
     leaveQueue,
   };

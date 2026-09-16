@@ -421,8 +421,18 @@ test('integration: distance fields are populated for the served batch', async (t
 
   const { users } = await discovery.buildNearbyBatch(batchArgs(viewer));
   for (const u of users) {
-    assert.ok(Number.isFinite(u.distance), 'missing distance');
-    assert.ok(/^\d+\.\d$/.test(u.distanceKm), `unexpected distanceKm: ${u.distanceKm}`);
+    if (u.source === 'nearby') {
+      assert.ok(Number.isFinite(u.distance), 'missing distance');
+      assert.ok(
+        /^\d+(\.\d)?$/.test(String(u.distanceKm)),
+        `unexpected distanceKm: ${u.distanceKm}`,
+      );
+      const km = Number(u.distanceKm);
+      assert.ok(km >= 1 && km <= 100, `distanceKm out of 1–100 range: ${u.distanceKm}`);
+    } else {
+      assert.equal(u.distanceKm, null, 'non-nearby profiles must not show km');
+      assert.equal(u.distance, null, 'non-nearby profiles must not show distance');
+    }
     assert.equal(u.friendshipStatus, 'stranger');
     assert.equal(u.areFriends, false);
   }

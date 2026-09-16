@@ -1,12 +1,14 @@
 import {
   ChatListSnapshot,
   ConversationItem,
+  getChatListCache,
   setChatListCache,
 } from './chatListCache';
 
 export type ChatPreviewPatch = {
   otherUserId: string;
-  lastMessage: string;
+  /** Omit to leave the existing preview text unchanged (e.g. resetUnread only) */
+  lastMessage?: string;
   lastMessageAt?: number;
   incrementUnread?: boolean;
   resetUnread?: boolean;
@@ -50,6 +52,12 @@ function patchRows(
   return rows.map((r) => (r.otherId === otherId ? { ...r, ...update } : r));
 }
 
+/**
+ * WhatsApp keep-archived:
+ * - New messages stay in Archive (do not jump to All)
+ * - Archive row gets preview + unread badge
+ * - Main lists only update when the chat is not archived
+ */
 export function applyChatListPreviewPatch(
   snapshot: Pick<
     ChatListSnapshot,
@@ -62,13 +70,20 @@ export function applyChatListPreviewPatch(
 > {
   const otherId = String(patch.otherUserId);
   const at = patch.lastMessageAt ?? Date.now();
-  const lastMessage = previewLabel(patch);
+  const touchPreview = patch.lastMessage !== undefined;
+  const lastMessage = touchPreview
+    ? previewLabel({ ...patch, lastMessage: patch.lastMessage || '' })
+    : undefined;
+
+  const archivedExisting = (snapshot.archiveRows || []).find(
+    (r) => r.otherId === otherId,
+  );
 
   const existing =
     snapshot.conversations.find((r) => r.otherId === otherId) ||
     snapshot.friendRows.find((r) => r.otherId === otherId) ||
     snapshot.requestRows.find((r) => r.otherId === otherId) ||
-    snapshot.archiveRows.find((r) => r.otherId === otherId);
+    archivedExisting;
 
   const unreadFor = (prev: number) => {
     if (patch.resetUnread) return 0;
@@ -77,27 +92,57 @@ export function applyChatListPreviewPatch(
   };
 
   const rowUpdate: Partial<ConversationItem> = {
-    lastMessage,
-    lastMessageAt: at,
     unread: unreadFor(existing?.unread ?? 0),
+    ...(touchPreview && lastMessage != null
+      ? { lastMessage, lastMessageAt: at }
+      : null),
+    ...(patch.name ? { name: patch.name } : null),
+    ...(patch.photo ? { photo: patch.photo } : null),
+    ...(patch.gender ? { gender: patch.gender } : null),
   };
 
-  let conversations = snapshot.conversations;
-  if (existing) {
-    conversations = bumpRow(conversations, otherId, rowUpdate);
-  } else if (patch.name) {
-    const row: ConversationItem = {
-      otherId,
-      name: patch.name,
-      photo: patch.photo || '',
-      gender: patch.gender || '',
-      isOnline: false,
-      lastMessage,
-      lastMessageAt: at,
-      unread: patch.incrementUnread ? 1 : 0,
-      category: 'stranger',
+  // Keep archived — WhatsApp "Keep chats archived"
+  if (archivedExisting) {
+    return {
+      conversations: snapshot.conversations,
+      friendRows: snapshot.friendRows,
+      requestRows: snapshot.requestRows,
+      onlineRows: patchRows(snapshot.onlineRows, otherId, {
+        ...(touchPreview
+          ? {
+              lastMessage: patch.fromMe
+                ? 'You sent a message'
+                : lastMessage || archivedExisting.lastMessage,
+              lastMessageAt: at,
+            }
+          : null),
+        unread: unreadFor(
+          snapshot.onlineRows.find((r) => r.otherId === otherId)?.unread ??
+            archivedExisting.unread ??
+            0,
+        ),
+      }),
+      archiveRows: bumpRow(snapshot.archiveRows || [], otherId, rowUpdate),
     };
-    conversations = [row, ...conversations];
+  }
+
+  const baseRow: ConversationItem = existing
+    ? { ...existing, ...rowUpdate }
+    : {
+        otherId,
+        name: patch.name || 'User',
+        photo: patch.photo || '',
+        gender: patch.gender || '',
+        isOnline: false,
+        lastMessage: lastMessage || 'Message',
+        lastMessageAt: at,
+        unread: patch.incrementUnread ? 1 : 0,
+        category: 'stranger',
+      };
+
+  let conversations = bumpRow(snapshot.conversations, otherId, rowUpdate);
+  if (!conversations.some((r) => r.otherId === otherId)) {
+    conversations = [baseRow, ...conversations];
   }
 
   const syncLists = (rows: ConversationItem[]) => {
@@ -110,9 +155,23 @@ export function applyChatListPreviewPatch(
     friendRows: syncLists(snapshot.friendRows),
     requestRows: syncLists(snapshot.requestRows),
     onlineRows: patchRows(snapshot.onlineRows, otherId, {
-      lastMessage: patch.fromMe ? 'You sent a message' : lastMessage,
+      ...(touchPreview
+        ? {
+            lastMessage: patch.fromMe
+              ? 'You sent a message'
+              : lastMessage ||
+                existing?.lastMessage ||
+                'Message',
+            lastMessageAt: at,
+          }
+        : null),
+      unread: unreadFor(
+        snapshot.onlineRows.find((r) => r.otherId === otherId)?.unread ??
+          existing?.unread ??
+          0,
+      ),
     }),
-    archiveRows: syncLists(snapshot.archiveRows),
+    archiveRows: snapshot.archiveRows || [],
   };
 }
 
@@ -127,4 +186,15 @@ export function pushChatPreviewToCache(
   const next = applyChatListPreviewPatch(snapshot, patch);
   setChatListCache({ ...next, sessionVersion, loaded: true });
   return next;
+}
+
+/** True if this chat is currently in the Archive list cache */
+export function isArchivedInChatCache(
+  sessionVersion: number,
+  otherUserId: string,
+): boolean {
+  const id = String(otherUserId || '');
+  if (!id) return false;
+  const snap = getChatListCache(sessionVersion);
+  return (snap.archiveRows || []).some((r) => r.otherId === id);
 }

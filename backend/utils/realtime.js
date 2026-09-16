@@ -114,6 +114,7 @@ async function emitProfileUpdate(io, user) {
     name: user.name || '',
     bio: user.bio || '',
     photo: user.photo || '',
+    coverPhoto: user.coverPhoto || '',
     photos: user.photos || [],
     age: user.age ?? null,
     gender: user.gender || '',
@@ -126,6 +127,7 @@ async function emitProfileUpdate(io, user) {
   const redactedPayload = {
     ...fullPayload,
     photo: '',
+    coverPhoto: '',
     photos: [],
     isOnline: false,
     privacyHidden: true,

@@ -147,6 +147,15 @@ function ensureAndroidProject() {
     androidDir,
     process.platform === "win32" ? "gradlew.bat" : "gradlew",
   );
+
+  // Keep native google-services.json in sync with the Expo copy (OAuth SHA clients)
+  const gsSrc = path.join(root, "google-services.json");
+  const gsDest = path.join(androidDir, "app", "google-services.json");
+  if (fs.existsSync(gsSrc) && fs.existsSync(path.dirname(gsDest))) {
+    fs.copyFileSync(gsSrc, gsDest);
+    console.log("✔ Synced android/app/google-services.json");
+  }
+
   if (fs.existsSync(gradlew) && !wantClean) {
     console.log("✔ android/ project found");
     patchAndroidGradleConfig();

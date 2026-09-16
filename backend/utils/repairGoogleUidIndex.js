@@ -46,4 +46,50 @@ async function repairGoogleUidIndex() {
   }
 }
 
-module.exports = { repairGoogleUidIndex };
+/**
+ * Same pattern for referralCode — never store null; omit until assigned.
+ */
+async function repairReferralCodeIndex() {
+  const User = require('../models/User');
+  const collection = User.collection;
+
+  const unset = await User.updateMany(
+    {
+      $or: [
+        { referralCode: { $type: 'null' } },
+        { referralCode: '' },
+      ],
+    },
+    { $unset: { referralCode: 1 } },
+  );
+
+  if (unset.modifiedCount > 0) {
+    console.log(`🔧 Cleared empty referralCode on ${unset.modifiedCount} user(s)`);
+  }
+
+  try {
+    const indexes = await collection.indexes();
+    const idx = indexes.find((i) => i.name === 'referralCode_1');
+    if (idx && !idx.sparse) {
+      await collection.dropIndex('referralCode_1');
+      console.log('🔧 Dropped non-sparse referralCode_1 index');
+    }
+  } catch (err) {
+    if (err.code !== 27 && err.codeName !== 'IndexNotFound') {
+      console.warn('referralCode index drop warning:', err.message);
+    }
+  }
+
+  try {
+    await collection.createIndex(
+      { referralCode: 1 },
+      { unique: true, sparse: true, name: 'referralCode_1' },
+    );
+  } catch (err) {
+    if (err.code !== 85 && err.code !== 86) {
+      console.warn('referralCode index create warning:', err.message);
+    }
+  }
+}
+
+module.exports = { repairGoogleUidIndex, repairReferralCodeIndex };

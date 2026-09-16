@@ -8,7 +8,7 @@ const { getRedis } = require('./redis');
  */
 async function atomicOpenStreak(User, userId, today, yesterday) {
   const current = await User.findById(userId).select(
-    'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate',
+    'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate spinWindowStartedAt',
   );
   if (!current) return null;
 
@@ -40,7 +40,7 @@ async function atomicOpenStreak(User, userId, today, yesterday) {
     { $set: { openStreakDays: nextStreak, lastOpenDate: today } },
     { returnDocument: 'after' },
   ).select(
-    'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate',
+    'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate spinWindowStartedAt',
   );
 
   if (updated) {
@@ -55,7 +55,7 @@ async function atomicOpenStreak(User, userId, today, yesterday) {
   }
 
   const fresh = await User.findById(userId).select(
-    'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate',
+    'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate spinWindowStartedAt',
   );
   return {
     openStreakDays: Number(fresh?.openStreakDays) || 0,

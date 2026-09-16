@@ -19,7 +19,7 @@ import { getAuthToken } from '../utils/auth';
 import { listMySupportTickets, submitSupportTicket, SupportTicket } from '../utils/support';
 
 const WA = {
-  bg: '#FDF8FF',
+  bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
   secondary: '#49454F',
@@ -27,7 +27,7 @@ const WA = {
   primary: '#6750A4',
   primaryContainer: '#EADDFF',
   accent: '#FF4B6E',
-  header: '#FDF8FF',
+  header: '#F5F5F7',
 };
 
 const FAQS = [
@@ -296,14 +296,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: WA.primaryContainer,
+    backgroundColor: '#E4E6EB',
     borderRadius: 12,
     padding: 4,
   },
   tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
-  tabActive: { backgroundColor: WA.white },
-  tabText: { fontSize: 13, fontWeight: '600', color: WA.secondary },
-  tabTextActive: { color: WA.primary },
+  tabActive: { backgroundColor: '#FFFFFF' },
+  tabText: { fontSize: 13, fontWeight: '600', color: '#65676B' },
+  tabTextActive: { color: '#1C1B1F' },
   scroll: { padding: 16, paddingBottom: 40 },
   faqCard: {
     backgroundColor: WA.white,
@@ -328,13 +328,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: WA.white,
-    borderWidth: 1,
-    borderColor: WA.border,
+    backgroundColor: '#E4E6EB',
   },
-  chipActive: { backgroundColor: WA.primaryContainer, borderColor: WA.primary },
-  chipText: { fontSize: 13, color: WA.secondary, fontWeight: '600' },
-  chipTextActive: { color: WA.primary },
+  chipActive: { backgroundColor: '#1C1B1F' },
+  chipText: { fontSize: 13, color: '#1C1B1F', fontWeight: '600' },
+  chipTextActive: { color: '#FFFFFF' },
   input: {
     backgroundColor: WA.white,
     borderRadius: 12,

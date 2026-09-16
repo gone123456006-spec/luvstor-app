@@ -22,7 +22,12 @@ const { serializeUser } = require('../utils/userHelpers');
 const { generateUniquePublicId, ensureUserPublicId } = require('../utils/publicId');
 const { checkAndRestoreOnLogin } = require('../jobs/accountDeletion');
 const { verifyFirebaseIdToken, isFirebaseAdminReady } = require('../services/firebaseAdmin');
-const { verifyGoogleIdToken, isGoogleAuthConfigured } = require('../services/googleAuth');
+const { verifyGoogleIdToken, isGoogleAuthConfigured, getGoogleAuthStatus } = require('../services/googleAuth');
+const {
+  applyReferralOnSignup,
+  extractReferralCodeFromReferrer,
+  normalizeReferralCode,
+} = require('../services/referrals');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEVICE_IN_USE_MESSAGE =
@@ -30,6 +35,29 @@ const DEVICE_IN_USE_MESSAGE =
 
 function isValidDeviceId(deviceId) {
   return typeof deviceId === 'string' && deviceId.trim().length >= 8 && deviceId.trim().length <= 128;
+}
+
+/** Resolve invite code from body.referralCode or Play Install Referrer string. */
+function resolveReferralCodeFromBody(body = {}) {
+  const direct = normalizeReferralCode(body.referralCode);
+  if (direct) return direct;
+  return extractReferralCodeFromReferrer(body.installReferrer || body.referrer || '');
+}
+
+async function maybeApplyReferral(req, user, deviceId, isNewUser) {
+  if (!isNewUser || !user) return;
+  const referralCode = resolveReferralCodeFromBody(req.body);
+  if (!referralCode) return;
+  try {
+    await applyReferralOnSignup({
+      refereeUser: user,
+      referralCode,
+      deviceId,
+      io: req.app.get('io'),
+    });
+  } catch (err) {
+    console.warn('referral apply on signup failed:', err?.message || err);
+  }
 }
 
 function issueToken(user) {
@@ -90,6 +118,17 @@ router.get('/smtp-status', (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// GET /api/auth/google-status  (production readiness, no secrets)
+// ─────────────────────────────────────────────
+router.get('/google-status', (req, res) => {
+  res.json({
+    success: true,
+    google: getGoogleAuthStatus(),
+    firebaseAdmin: isFirebaseAdminReady(),
+  });
+});
+
+// ─────────────────────────────────────────────
 // POST /api/auth/google
 // Body: { idToken, deviceId, forceTransfer? }
 // ─────────────────────────────────────────────
@@ -109,13 +148,14 @@ router.post('/google', async (req, res) => {
 
     if (!isGoogleAuthConfigured()) {
       return res.status(503).json({
-        error: 'Google sign-in is not configured on the server. Set GOOGLE_WEB_CLIENT_ID in backend/.env',
+        error:
+          'Google sign-in is not configured on the server. Set GOOGLE_WEB_CLIENT_ID (and GOOGLE_ANDROID_CLIENT_ID) in production env.',
       });
     }
 
     let decoded;
     try {
-      // Prefer direct Google OAuth token (Expo auth-session)
+      // Prefer direct Google OAuth ID token (native Google Sign-In)
       decoded = await verifyGoogleIdToken(idToken);
     } catch (googleErr) {
       // Fallback: Firebase ID token if client still sends one
@@ -131,11 +171,21 @@ router.post('/google', async (req, res) => {
           };
         } catch {
           console.error('google auth verify error:', googleErr.message);
-          return res.status(401).json({ error: 'Invalid or expired Google sign-in. Please try again.' });
+          return res.status(401).json({
+            error:
+              googleErr.code === 'GOOGLE_TOKEN_INVALID'
+                ? googleErr.message
+                : 'Invalid or expired Google sign-in. Please try again.',
+          });
         }
       } else {
         console.error('google auth verify error:', googleErr.message);
-        return res.status(401).json({ error: 'Invalid or expired Google sign-in. Please try again.' });
+        return res.status(401).json({
+          error:
+            googleErr.code === 'GOOGLE_TOKEN_INVALID'
+              ? googleErr.message
+              : 'Invalid or expired Google sign-in. Please try again.',
+        });
       }
     }
 
@@ -148,6 +198,7 @@ router.post('/google', async (req, res) => {
     let user = await User.findOne({
       $or: [{ googleUid }, { email }],
     });
+    let isNewUser = false;
 
     if (!user) {
       const publicId = await generateUniquePublicId();
@@ -160,6 +211,7 @@ router.post('/google', async (req, res) => {
         publicId,
         authProvider: 'google',
       });
+      isNewUser = true;
     } else {
       if (!user.googleUid) user.googleUid = googleUid;
       if (!user.name && decoded.name) user.name = decoded.name;
@@ -188,6 +240,7 @@ router.post('/google', async (req, res) => {
       });
     }
 
+    await maybeApplyReferral(req, user, deviceId, isNewUser);
     await bindDeviceAndRespond(res, user, deviceId, req.app.get('io'));
   } catch (err) {
     console.error('google auth error:', err);
@@ -294,6 +347,7 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     let user = await User.findOne({ email });
+    let isNewUser = false;
     if (!user) {
       const publicId = await generateUniquePublicId();
       // Do not set googleUid — sparse unique index rejects multiple nulls
@@ -303,6 +357,7 @@ router.post('/verify-otp', async (req, res) => {
         publicId,
         authProvider: 'email',
       });
+      isNewUser = true;
     } else if (!user.isVerified) {
       user.isVerified = true;
       await user.save();
@@ -336,6 +391,7 @@ router.post('/verify-otp', async (req, res) => {
     await record.save();
     recordVerifyAttempt(email, true);
 
+    await maybeApplyReferral(req, user, deviceId, isNewUser);
     await bindDeviceAndRespond(res, user, deviceId, req.app.get('io'));
   } catch (err) {
     console.error('verify-otp error:', err);
@@ -351,6 +407,7 @@ router.post('/verify-otp', async (req, res) => {
         const email = normalizeEmail(req.body.email);
         const deviceId = String(req.body.deviceId || '').trim();
         let user = await User.findOne({ email });
+        let isNewUser = false;
         if (!user) {
           const publicId = await generateUniquePublicId();
           user = await User.create({
@@ -359,6 +416,7 @@ router.post('/verify-otp', async (req, res) => {
             publicId,
             authProvider: 'email',
           });
+          isNewUser = true;
         }
         const otp = String(req.body.otp || '').trim();
         const record = await OTP.findOne({
@@ -372,6 +430,7 @@ router.post('/verify-otp', async (req, res) => {
           await record.save();
         }
         recordVerifyAttempt(email, true);
+        await maybeApplyReferral(req, user, deviceId, isNewUser);
         return await bindDeviceAndRespond(res, user, deviceId, req.app.get('io'));
       } catch (retryErr) {
         console.error('verify-otp retry error:', retryErr);

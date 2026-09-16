@@ -1,6 +1,7 @@
 // Must stay first: registers LogBox filters before expo-notifications loads
 import '../utils/logbox';
-import { DarkTheme, DefaultTheme, ThemeProvider, Stack } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
+import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
@@ -21,6 +22,7 @@ import {
   instantScreenOptions,
   stackScreenOptions,
 } from '../utils/navigation';
+
 SplashScreen.preventAutoHideAsync().catch(() => {});
 enableFreeze(true);
 
@@ -59,11 +61,34 @@ function RootLayoutContent() {
         <Stack.Screen name="delete-account" options={stackScreenOptions} />
         <Stack.Screen name="help-support" options={stackScreenOptions} />
         <Stack.Screen name="photo-verify" options={stackScreenOptions} />
+        <Stack.Screen name="refer" options={stackScreenOptions} />
         <Stack.Screen name="safety-center" options={stackScreenOptions} />
         <Stack.Screen name="notifications" options={stackScreenOptions} />
         <Stack.Screen name="calls" options={stackScreenOptions} />
         <Stack.Screen name="subscription" options={stackScreenOptions} />
         <Stack.Screen name="subscription-terms" options={stackScreenOptions} />
+        <Stack.Screen
+          name="u/[publicId]"
+          options={{
+            ...fadeScreenOptions,
+            presentation: 'transparentModal',
+            animation: 'fade',
+          }}
+        />
+        <Stack.Screen
+          name="r/[code]"
+          options={{
+            ...fadeScreenOptions,
+            animation: 'fade',
+          }}
+        />
+        <Stack.Screen
+          name="go/[slug]"
+          options={{
+            ...fadeScreenOptions,
+            animation: 'fade',
+          }}
+        />
       </Stack>
       <CallOverlay />
       <ExploreCallOverlay />

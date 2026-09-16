@@ -25,7 +25,6 @@ import {
   addNotificationResponseReceivedListener,
   addPushTokenListener,
   configureForegroundHandler,
-  dismissAll,
   dismissForGroup,
   ensureChannels,
   getFcmToken,
@@ -58,7 +57,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const { refreshNotifUnread, notifUnreadCount } = useSocket();
+  const { refreshNotifUnread, unreadCount, refreshUnread } = useSocket();
 
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
   const [fcmToken, setFcmToken] = useState<string | null>(null);
@@ -177,11 +176,12 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const sub = addNotificationReceivedListener((notification) => {
       const data = (notification.request.content.data || {}) as Record<string, any>;
-      markHandled(String(data.notificationId || ''));
+      markHandled(String(data.notificationId || data.messageId || ''));
       refreshNotifUnread();
+      refreshUnread();
     });
     return () => sub.remove();
-  }, [markHandled, refreshNotifUnread]);
+  }, [markHandled, refreshNotifUnread, refreshUnread]);
 
   // Tapped — from foreground, background, or a cold start
   useEffect(() => {
@@ -227,16 +227,19 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     const onChange = (state: AppStateStatus) => {
       if (state !== 'active' || !userRef.current) return;
       refreshNotifUnread();
+      refreshUnread();
       if (Platform.OS === 'android') ensureChannels();
+      // Token may have rotated while backgrounded
+      register().catch(() => undefined);
     };
     const sub = AppState.addEventListener('change', onChange);
     return () => sub.remove();
-  }, [refreshNotifUnread]);
+  }, [refreshNotifUnread, refreshUnread, register]);
 
-  // Keep the launcher badge in step with the backend unread count
+  // Launcher badge = chat unread (WhatsApp). Notification-center unread is separate.
   useEffect(() => {
-    setBadge(notifUnreadCount);
-  }, [notifUnreadCount]);
+    setBadge(unreadCount);
+  }, [unreadCount]);
 
   // Opening a chat clears that conversation from the tray
   useEffect(() => {
@@ -256,11 +259,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     dismissForGroup(`chat:${roomId}`);
   }, []);
 
-  // Nothing unread → nothing should be left in the tray
-  useEffect(() => {
-    if (notifUnreadCount === 0) dismissAll();
-  }, [notifUnreadCount]);
-
+  // Do NOT dismissAll when notification-center unread is 0 — that wiped chat trays.
   const value = useMemo(
     () => ({
       permissionGranted,

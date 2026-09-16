@@ -1,10 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Platform, StyleSheet } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
 import { tabScreenOptions } from '../../utils/navigation';
-import { getAuthToken } from '../../utils/auth';
+import {
+  getAuthToken,
+  getLocalProfile,
+  isLocalProfileComplete,
+  normalizeEmail,
+  resolvePostLoginRoute,
+} from '../../utils/auth';
 import {
   clearTokenBalanceCache,
   preloadTokenBalance,
@@ -15,12 +23,25 @@ import {
 } from '../../utils/profileCache';
 import { pingAppOpen } from '../../utils/retention';
 
+/** Icon + label row height (above system nav inset) */
+const TAB_BAR_CONTENT_HEIGHT = 56;
+
 export default function TabLayout() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { sessionVersion, user } = useAuth();
   const { unreadCount, refreshUnread } = useSocket();
   const hadUserRef = useRef(false);
+  const [profileGate, setProfileGate] = useState<
+    'checking' | 'ok' | 'need-profile'
+  >('checking');
 
+  // WhatsApp-style: sit above 3-button / gesture nav on every device
+  const bottomInset = Math.max(
+    insets.bottom,
+    Platform.OS === 'android' ? 12 : 8,
+  );
+  const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomInset;
   // Kick to login only after a previously active session is revoked
   useEffect(() => {
     if (user) {
@@ -33,6 +54,39 @@ export default function TabLayout() {
     }
   }, [user, router]);
 
+  // New users must finish Create profile before Discover / home tabs
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!user?.email) {
+        if (!cancelled) setProfileGate('checking');
+        return;
+      }
+      try {
+        const route = await resolvePostLoginRoute(user);
+        if (cancelled) return;
+        if (route === '/create-profile') {
+          setProfileGate('need-profile');
+          router.replace('/create-profile');
+          return;
+        }
+        setProfileGate('ok');
+      } catch {
+        const local = await getLocalProfile(normalizeEmail(user.email));
+        if (cancelled) return;
+        if (!isLocalProfileComplete(local)) {
+          setProfileGate('need-profile');
+          router.replace('/create-profile');
+          return;
+        }
+        setProfileGate('ok');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, sessionVersion, router]);
+
   useEffect(() => {
     refreshUnread();
   }, [sessionVersion, refreshUnread]);
@@ -43,6 +97,7 @@ export default function TabLayout() {
       clearProfileCache();
       return;
     }
+    if (profileGate !== 'ok') return;
     (async () => {
       const token = await getAuthToken();
       if (token) {
@@ -51,30 +106,52 @@ export default function TabLayout() {
       }
       void preloadProfile();
     })();
-  }, [user, sessionVersion]);
+  }, [user, sessionVersion, profileGate]);
+
+  if (user && profileGate !== 'ok') {
+    return null;
+  }
 
   return (
     <Tabs
       key={`tabs-${sessionVersion}`}
       screenOptions={{
         ...tabScreenOptions,
-        tabBarActiveTintColor: '#8E2DE2',
+        tabBarActiveTintColor: '#370372',
         tabBarInactiveTintColor: '#999',
         tabBarStyle: {
           position: 'absolute',
-          borderTopWidth: 0,
-          elevation: 0,
-          height: 65,
-          paddingBottom: 10,
-          backgroundColor: '#fff',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: '#E5E5E5',
+          elevation: 8,
+          height: tabBarHeight,
+          paddingTop: 6,
+          paddingBottom: bottomInset,
+          backgroundColor: '#F5F5F7',
         },
-      }}>
+        tabBarItemStyle: {
+          paddingTop: 2,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '500',
+          marginBottom: 0,
+        },
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Discover',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'flame' : 'flame-outline'} size={28} color={color} />
+            <Ionicons
+              name={focused ? 'flame' : 'flame-outline'}
+              size={28}
+              color={color}
+            />
           ),
         }}
       />
@@ -84,9 +161,13 @@ export default function TabLayout() {
           title: 'Chat',
           freezeOnBlur: false,
           tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
-          tabBarBadgeStyle: { backgroundColor: '#111', color: '#fff' },
+          tabBarBadgeStyle: { backgroundColor: '#370372', color: '#fff' },
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} size={28} color={color} />
+            <Ionicons
+              name={focused ? 'chatbubbles' : 'chatbubbles-outline'}
+              size={28}
+              color={color}
+            />
           ),
         }}
       />
@@ -95,7 +176,11 @@ export default function TabLayout() {
         options={{
           title: 'Explore',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'compass' : 'compass-outline'} size={28} color={color} />
+            <Ionicons
+              name={focused ? 'compass' : 'compass-outline'}
+              size={28}
+              color={color}
+            />
           ),
         }}
       />
@@ -105,7 +190,11 @@ export default function TabLayout() {
           title: 'Tokens',
           lazy: false,
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'diamond' : 'diamond-outline'} size={28} color={color} />
+            <Ionicons
+              name={focused ? 'diamond' : 'diamond-outline'}
+              size={28}
+              color={color}
+            />
           ),
         }}
       />
@@ -115,7 +204,11 @@ export default function TabLayout() {
           title: 'Profile',
           lazy: false,
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={28} color={color} />
+            <Ionicons
+              name={focused ? 'person' : 'person-outline'}
+              size={28}
+              color={color}
+            />
           ),
         }}
       />

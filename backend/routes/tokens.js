@@ -16,13 +16,16 @@ const {
   syncExpiredSubscription,
   getPlanEntitlements,
   applyTokenBonus,
+  SPIN_WINDOW_MS,
+  resolveSpinWindowStart,
+  isSpinWindowActive,
 } = require('../services/subscriptions');
 const { createNotification } = require('../services/notifications');
 
 /**
  * Lucky-spin reward cycle.
- * Same 7-day wheel for every user (includes the 50-token jackpot).
- * Extra daily spins still come from the subscription plan.
+ * Same 7-step wheel for every user (includes the 50-token jackpot).
+ * Extra spins still come from the subscription plan within each 24h window.
  */
 const FREE_SPIN_CYCLE = [10, 10, 20, 10, 20, 10, 50];
 
@@ -30,15 +33,15 @@ function getSpinCycle() {
   return FREE_SPIN_CYCLE;
 }
 
-function resolveSpinCycleDay(user, today) {
+function resolveSpinCycleDay(user, now = new Date()) {
   const cycle = getSpinCycle();
   const len = cycle.length;
-  const last = user.spinCycleDate || null;
   const prev = Number(user.spinCycleDay) || 0;
-  if (last === today && prev >= 1) {
+  const windowStart = resolveSpinWindowStart(user);
+  if (isSpinWindowActive(windowStart, now) && prev >= 1) {
     return Math.min(prev, len);
   }
-  if (last && last !== today && prev >= 1) {
+  if (prev >= 1) {
     return prev >= len ? 1 : prev + 1;
   }
   return 1;
@@ -52,14 +55,16 @@ function endOfUtcDay(d = new Date()) {
 
 function spinPayload(user, now = new Date()) {
   const spin = getSpinStatus(user, now);
-  const today = todayKey(now);
   const cycle = getSpinCycle();
-  const spinCycleDay = resolveSpinCycleDay(user, today);
+  const spinCycleDay = resolveSpinCycleDay(user, now);
   return {
     canSpinToday: spin.canSpin,
     spinsPerDay: spin.spinsPerDay,
     spinsRemaining: spin.spinsRemaining,
     spinsUsedToday: spin.spinsUsedToday,
+    nextSpinAt: spin.nextSpinAt,
+    spinCooldownMs: spin.spinCooldownMs,
+    spinWindowStartedAt: spin.spinWindowStartedAt,
     spinCycleDay,
     spinCycleTokens: cycle[spinCycleDay - 1],
     spinCycle: cycle,
@@ -77,9 +82,12 @@ function spinPayload(user, now = new Date()) {
 router.get('/chat-access', auth, async (req, res) => {
   try {
     await syncExpiredSubscription(req.userId);
-    const status = await getChatAccessStatus(req.userId);
+    const otherUserId = req.query.otherUserId
+      ? String(req.query.otherUserId)
+      : null;
+    const status = await getChatAccessStatus(req.userId, otherUserId);
     const user = await User.findById(req.userId).select(
-      'subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday lastSpinDate spinCycleDay spinCycleDate',
+      'subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday lastSpinDate spinCycleDay spinCycleDate spinWindowStartedAt',
     );
     res.json({
       ...status,
@@ -99,7 +107,7 @@ router.get('/balance', auth, async (req, res) => {
   try {
     await syncExpiredSubscription(req.userId);
     const user = await User.findById(req.userId).select(
-      'tokenBalance lastSpinDate spinCycleDay spinCycleDate chatSessionExpiresAt chatSessionStartedAt subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday openStreakDays lastOpenDate',
+      'tokenBalance lastSpinDate spinCycleDay spinCycleDate spinWindowStartedAt chatSessionExpiresAt chatSessionStartedAt subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday openStreakDays lastOpenDate',
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     const access = serializeAccess(user);
@@ -107,20 +115,19 @@ router.get('/balance', auth, async (req, res) => {
 
     if (spin.canSpin) {
       const Notification = require('../models/Notification');
-      const today = todayKey();
-      const startOfDay = new Date(`${today}T00:00:00.000Z`);
+      const since = new Date(Date.now() - SPIN_WINDOW_MS);
       const existing = await Notification.findOne({
         userId: req.userId,
         type: 'spin',
         'data.code': 'SPIN_AVAILABLE',
-        createdAt: { $gte: startOfDay },
+        createdAt: { $gte: since },
       }).select('_id');
       if (!existing) {
         await createNotification(req.app.get('io'), {
           userId: req.userId,
           type: 'spin',
           title: 'Daily Lucky Spin',
-          body: 'Your free spin is ready. Open Tokens to claim today’s reward!',
+          body: 'Your free spin is ready. Open Tokens to claim your reward!',
           data: { screen: 'token', code: 'SPIN_AVAILABLE' },
         });
       }
@@ -148,7 +155,10 @@ router.get('/balance', auth, async (req, res) => {
 router.post('/ensure-session', auth, async (req, res) => {
   try {
     await syncExpiredSubscription(req.userId);
-    const result = await ensureChatSession(req.userId);
+    const otherUserId = req.body?.otherUserId
+      ? String(req.body.otherUserId)
+      : null;
+    const result = await ensureChatSession(req.userId, otherUserId);
     if (!result.ok) {
       if (result.code === 'INSUFFICIENT_TOKENS') {
         const Notification = require('../models/Notification');
@@ -184,18 +194,18 @@ router.post('/ensure-session', auth, async (req, res) => {
 // ─────────────────────────────────────────────
 router.post('/spin', auth, async (req, res) => {
   try {
-    const today = todayKey();
     const now = new Date();
+    const today = todayKey(now);
 
     const current = await User.findById(req.userId).select(
-      'tokenBalance subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday lastSpinDate spinCycleDay spinCycleDate chatSessionStartedAt chatSessionExpiresAt',
+      'tokenBalance subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday lastSpinDate spinCycleDay spinCycleDate spinWindowStartedAt chatSessionStartedAt chatSessionExpiresAt',
     );
     if (!current) return res.status(404).json({ error: 'User not found' });
 
     const spinStatus = getSpinStatus(current, now);
     if (!spinStatus.canSpin) {
       return res.status(429).json({
-        error: 'No spins remaining today',
+        error: 'No spins remaining. Come back after 24 hours from your first spin.',
         code: 'SPIN_LIMIT_REACHED',
         tokenBalance: current.tokenBalance ?? 0,
         ...spinPayload(current, now),
@@ -204,18 +214,19 @@ router.post('/spin', auth, async (req, res) => {
     }
 
     const cycle = getSpinCycle();
-    const cycleDay = resolveSpinCycleDay(current, today);
+    const cycleDay = resolveSpinCycleDay(current, now);
     const winIdx = Math.max(0, Math.min(cycle.length - 1, cycleDay - 1));
     let won = { label: String(cycle[winIdx]), tokens: cycle[winIdx] };
     const plan = getEffectivePlan(current, now);
     const planConfig = getPlanConfig(plan);
 
+    const existingWindowStart = resolveSpinWindowStart(current);
+    const windowActive = isSpinWindowActive(existingWindowStart, now);
+    const windowStart = windowActive && existingWindowStart ? existingWindowStart : now;
+
     let tokensToCredit = won.tokens > 0 ? won.tokens : 0;
     if (planConfig.spinTokensDailyCap) {
-      const wonSoFar =
-        current.subscriptionSpinsDate === today
-          ? current.spinTokensWonToday ?? 0
-          : 0;
+      const wonSoFar = windowActive ? current.spinTokensWonToday ?? 0 : 0;
       const room = planConfig.spinTokensDailyCap - wonSoFar;
       if (tokensToCredit > 0 && room <= 0) {
         tokensToCredit = 0;
@@ -226,22 +237,21 @@ router.post('/spin', auth, async (req, res) => {
       }
     }
 
-    const usedToday =
-      current.subscriptionSpinsDate === today
-        ? current.subscriptionSpinsUsedToday ?? 0
-        : 0;
+    const usedInWindow = windowActive ? current.subscriptionSpinsUsedToday ?? 0 : 0;
+    const windowCutoff = new Date(now.getTime() - SPIN_WINDOW_MS);
 
     const update = {
       $set: {
         subscriptionSpinsDate: today,
         lastSpinDate: today,
+        spinWindowStartedAt: windowStart,
         spinCycleDay: cycleDay,
         spinCycleDate: today,
-        subscriptionSpinsUsedToday: usedToday + 1,
+        subscriptionSpinsUsedToday: usedInWindow + 1,
       },
     };
 
-    if (current.subscriptionSpinsDate !== today) {
+    if (!windowActive) {
       update.$set.spinTokensWonToday = tokensToCredit;
     } else if (tokensToCredit > 0) {
       update.$inc = { spinTokensWonToday: tokensToCredit };
@@ -254,32 +264,45 @@ router.post('/spin', auth, async (req, res) => {
       update.$set.chatSessionExpiresAt = endOfUtcDay(now);
     }
 
-    const user = await User.findOneAndUpdate(
-      {
-        _id: req.userId,
-        $or: [
-          { subscriptionSpinsDate: { $ne: today } },
-          {
-            subscriptionSpinsDate: today,
-            subscriptionSpinsUsedToday: { $lt: spinStatus.spinsPerDay },
-          },
-          {
-            subscriptionSpinsDate: today,
-            subscriptionSpinsUsedToday: null,
-          },
-        ],
-      },
-      update,
-      {
-        new: true,
-        select:
-          'tokenBalance lastSpinDate spinCycleDay spinCycleDate chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday',
-      },
-    );
+    const updateFilter = windowActive
+      ? {
+          _id: req.userId,
+          $or: [
+            {
+              spinWindowStartedAt: { $gt: windowCutoff },
+              subscriptionSpinsUsedToday: { $lt: spinStatus.spinsPerDay },
+            },
+            // Legacy calendar window (no Date field yet)
+            {
+              spinWindowStartedAt: null,
+              subscriptionSpinsDate: today,
+              subscriptionSpinsUsedToday: { $lt: spinStatus.spinsPerDay },
+            },
+            {
+              spinWindowStartedAt: { $exists: false },
+              subscriptionSpinsDate: today,
+              subscriptionSpinsUsedToday: { $lt: spinStatus.spinsPerDay },
+            },
+          ],
+        }
+      : {
+          _id: req.userId,
+          $or: [
+            { spinWindowStartedAt: { $lte: windowCutoff } },
+            { spinWindowStartedAt: null },
+            { spinWindowStartedAt: { $exists: false } },
+          ],
+        };
+
+    const user = await User.findOneAndUpdate(updateFilter, update, {
+      new: true,
+      select:
+        'tokenBalance lastSpinDate spinCycleDay spinCycleDate spinWindowStartedAt chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt subscriptionSpinsUsedToday subscriptionSpinsDate spinTokensWonToday',
+    });
 
     if (!user) {
       return res.status(429).json({
-        error: 'No spins remaining today',
+        error: 'No spins remaining. Come back after 24 hours from your first spin.',
         code: 'SPIN_LIMIT_REACHED',
         ...spinPayload(current, now),
         ...serializeAccess(current, now),
@@ -290,7 +313,7 @@ router.post('/spin', auth, async (req, res) => {
     const rewardText =
       tokensToCredit > 0
         ? `You won ${tokensToCredit} tokens from Daily Lucky Spin (Day ${cycleDay} of ${cycle.length})!`
-        : 'Spin complete — daily token cap reached.';
+        : 'Spin complete — token cap reached for this 24h window.';
     createNotification(io, {
       userId: req.userId,
       type: 'spin',

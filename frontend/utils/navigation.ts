@@ -3,7 +3,7 @@
  * Target: 260 ms ease-out slide, no white flashes, previous screen frozen until transition ends.
  */
 
-export const SCREEN_BG = '#FFFFFF';
+export const SCREEN_BG = '#F5F5F7';
 
 /** Primary push navigation (chat, settings, profile sub-screens) */
 export const stackScreenOptions = {

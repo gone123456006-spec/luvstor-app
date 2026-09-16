@@ -95,8 +95,34 @@ if (bAndroid) {
 } else {
   fail('GOOGLE_ANDROID_CLIENT_ID (backend)', 'Set for Android token verification');
 }
+if (process.env.GOOGLE_CLIENT_IDS?.trim()) {
+  pass('GOOGLE_CLIENT_IDS (backend)', 'Extra audiences set');
+}
 if (isGoogleAuthConfigured()) {
   pass('Google token verify audiences', `${getAudiences().length} client ID(s)`);
+}
+
+// Warn if google-services is missing the app debug.keystore SHA
+try {
+  const gs = JSON.parse(fs.readFileSync(googleServices, 'utf8'));
+  const hashes = new Set();
+  for (const c of gs.client || []) {
+    for (const oc of c.oauth_client || []) {
+      const h = oc.android_info?.certificate_hash;
+      if (h) hashes.add(String(h).toLowerCase());
+    }
+  }
+  const appDebugSha = '5e8f16062ea3cd2c4a0d547876baa6f38cabf625';
+  if (hashes.has(appDebugSha)) {
+    pass('APK signing SHA in google-services.json', appDebugSha);
+  } else if (hashes.size) {
+    fail(
+      'APK signing SHA in google-services.json',
+      `Missing ${appDebugSha} (causes DEVELOPER_ERROR). Add SHA-1 from: cd frontend && npm run android:sha`,
+    );
+  }
+} catch {
+  /* ignore */
 }
 
 console.log('\n=== Google Login + Render Production Readiness ===\n');

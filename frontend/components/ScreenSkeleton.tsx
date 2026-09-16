@@ -29,7 +29,7 @@ function Bone({
   );
 }
 
-/** Chat list rows (Chats tab, notifications) */
+/** Nearby / Discover horizontal list rows (avatar + text + like chip) */
 export function ListRowSkeleton({ count = 8 }: { count?: number }) {
   return (
     <View style={styles.listWrap}>
@@ -37,9 +37,13 @@ export function ListRowSkeleton({ count = 8 }: { count?: number }) {
         <View key={i} style={styles.listRow}>
           <View style={styles.avatar} />
           <View style={styles.listRowText}>
-            <Bone width="42%" height={14} radius={6} />
-            <Bone width="72%" height={12} radius={6} style={{ marginTop: 8 }} />
+            <View style={styles.listRowTop}>
+              <Bone width="48%" height={14} radius={6} />
+              <Bone width={44} height={12} radius={6} />
+            </View>
+            <Bone width="62%" height={12} radius={6} style={{ marginTop: 8 }} />
           </View>
+          <Bone width={52} height={28} radius={7} style={{ marginLeft: 8 }} />
         </View>
       ))}
     </View>
@@ -95,15 +99,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: BONE,
-    marginRight: 14,
-  },
   listRowText: {
     flex: 1,
+    minWidth: 0,
+  },
+  listRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: BONE,
+    marginRight: 12,
   },
   gridWrap: {
     flexDirection: 'row',

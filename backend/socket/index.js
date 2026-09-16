@@ -12,6 +12,7 @@ const { createNotification } = require('../services/notifications');
 const { getBlockState } = require('../utils/blockState');
 const {
   markViewing,
+  touchViewing,
   clearViewing,
   isViewingChat,
   getViewingSet,
@@ -21,8 +22,9 @@ const { notifyUser } = require('../utils/realtime');
 const { isReady: redisReady } = require('../utils/redis');
 const calls = require('../services/calls');
 const exploreMatchmaking = require('../services/exploreMatchmaking');
+const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
 
-// Helper: mutual like / friends (media + calls unlock)
+// Helper: mutual like / friends (calls unlock)
 async function areFriends(userId1, userId2) {
   const { userA, userB } = Friendship.getSortedPair(userId1, userId2);
   const friendship = await Friendship.findOne({
@@ -99,12 +101,17 @@ module.exports = function initSocket(io) {
       if (!decoded.userId || !decoded.deviceId) {
         return next(new Error('Authentication error: Invalid token'));
       }
-      const user = await User.findById(decoded.userId).select('activeDeviceId');
+      const user = await User.findById(decoded.userId).select(
+        'activeDeviceId name photo gender',
+      );
       if (!user || !user.activeDeviceId || user.activeDeviceId !== decoded.deviceId) {
         return next(new Error('Authentication error: Device mismatch'));
       }
       socket.userId = String(decoded.userId);
       socket.deviceId = String(decoded.deviceId);
+      socket.userName = String(user.name || '').trim() || 'Someone';
+      socket.userPhoto = String(user.photo || '');
+      socket.userGender = String(user.gender || '');
       next();
     } catch {
       next(new Error('Authentication error: Invalid token'));
@@ -238,6 +245,16 @@ module.exports = function initSocket(io) {
       }
     });
 
+    // Keep push-suppress alive while chat stays open
+    socket.on('chat:heartbeat', async ({ otherUserId } = {}) => {
+      try {
+        if (!otherUserId) return;
+        await touchViewing(uid, otherUserId);
+      } catch (err) {
+        console.error('chat:heartbeat error:', err.message);
+      }
+    });
+
     // ── Send a message ────────────────────────────────
     socket.on('chat:message', async (data) => {
       try {
@@ -267,9 +284,9 @@ module.exports = function initSocket(io) {
         }
         const undelivered = !!block.theyBlocked;
 
-        // Session + anti-spam in parallel
+        // Session + anti-spam in parallel (free users: per-conversation 2h / 10 tokens for start OR reply)
         const [access, canSend] = await Promise.all([
-          ensureChatSession(uid),
+          ensureChatSession(uid, receiverId),
           undelivered
             ? Promise.resolve({ ok: true })
             : canSendMessage(uid, receiverId, type),
@@ -292,13 +309,27 @@ module.exports = function initSocket(io) {
               code: 'BLOCKED_MEDIA',
             });
           }
-          const friendsStatus = await areFriends(uid, receiverId);
-          if (!friendsStatus) {
-            return socket.emit('chat:error', {
-              error: 'Only friends can send images, voice messages, and files. Send a like and become friends first!',
-              code: 'NOT_FRIENDS',
-              requiresFriendship: true,
-            });
+          // Image / voice unlock only after both users have sent a DM
+          if (type === 'image' || type === 'audio') {
+            const bothMessaged = await hasBidirectionalChat(uid, receiverId);
+            if (!bothMessaged) {
+              return socket.emit('chat:error', {
+                error:
+                  'Photos and voice unlock when they reply to your message.',
+                code: 'MEDIA_LOCKED',
+                requiresReply: true,
+              });
+            }
+          } else {
+            const friendsStatus = await areFriends(uid, receiverId);
+            if (!friendsStatus) {
+              return socket.emit('chat:error', {
+                error:
+                  'Only friends can send files. Send a like and become friends first!',
+                code: 'NOT_FRIENDS',
+                requiresFriendship: true,
+              });
+            }
           }
         }
 
@@ -371,17 +402,43 @@ module.exports = function initSocket(io) {
           viewOnce: !!message.viewOnce,
           viewOnceOpened: !!message.viewOnceOpened,
           mediaThumb: liveThumb || undefined,
+          // Instant list/toast enrichment (no extra DB round-trip)
+          fromName: socket.userName || 'Someone',
+          fromPhoto: socket.userPhoto || '',
+          fromGender: socket.userGender || '',
+          senderName: socket.userName || 'Someone',
+          senderPhoto: socket.userPhoto || '',
+          senderGender: socket.userGender || '',
         };
         const receiverPayload = message.viewOnce
           ? { ...payload, mediaUrl: null, mediaThumb: undefined }
           : payload;
 
-        // WhatsApp-feel: ack + deliver FIRST, side-effects after
+        const preview =
+          message.viewOnce
+            ? '📷 View once photo'
+            : message.type === 'image'
+              ? '📷 Photo'
+              : message.type === 'audio'
+                ? '🎵 Voice message'
+                : message.text || 'New message';
+
+        // WhatsApp-instant: single fan-out via user rooms (no room+user double delivery)
         socket.emit('chat:message', payload);
 
         if (!undelivered) {
-          socket.to(room).emit('chat:message', receiverPayload);
           notifyUser(io, receiverId, 'chat:message', receiverPayload);
+          // Toast + chat-list name/photo on the same tick (don't wait for setImmediate)
+          notifyUser(io, receiverId, 'chat:notification', {
+            from: uid,
+            roomId: room,
+            text: message.text,
+            type: message.type,
+            messageId: String(message._id),
+            fromName: socket.userName || 'Someone',
+            fromPhoto: socket.userPhoto || '',
+            fromGender: socket.userGender || '',
+          });
           if (message.delivered) {
             socket.emit('chat:delivered', {
               by: String(receiverId),
@@ -390,12 +447,42 @@ module.exports = function initSocket(io) {
           }
         }
 
-        // Heavy work off the critical path
+        // Push + counters off the critical path (must not delay realtime)
         setImmediate(() => {
           (async () => {
             try {
               if (!undelivered) {
                 const ConversationState = require('../models/ConversationState');
+                const { createNotification } = require('../services/notifications');
+
+                // Offline → always push. Online → push unless actively viewing this chat.
+                let push = true;
+                if (receiverOnline) {
+                  push = !(await isViewingChat(receiverId, uid));
+                }
+
+                // Mute/archive checked inside queuePush — don't block here
+                void createNotification(io, {
+                  userId: receiverId,
+                  type: 'chat',
+                  title: socket.userName || 'New message',
+                  body: preview,
+                  actorId: uid,
+                  actorName: socket.userName || 'Someone',
+                  actorPhoto: socket.userPhoto || '',
+                  actorGender: socket.userGender || '',
+                  imageUrl: socket.userPhoto || '',
+                  groupKey: `chat:${room}`,
+                  deepLink: `/messages/${uid}`,
+                  push,
+                  data: {
+                    screen: 'messages',
+                    userId: String(uid),
+                    roomId: room,
+                    messageId: String(message._id),
+                  },
+                });
+
                 await Promise.all([
                   incrementMessageCount(uid, receiverId),
                   resetMessageCount(uid, receiverId),
@@ -404,39 +491,11 @@ module.exports = function initSocket(io) {
                     {
                       $set: {
                         clearedAt: null,
-                        archived: false,
-                        archivedAt: null,
                         roomId: room,
                       },
                     },
                   ),
                 ]);
-
-                const preview =
-                  message.viewOnce
-                    ? '📷 View once photo'
-                    : message.type === 'image'
-                      ? '📷 Photo'
-                      : message.type === 'audio'
-                        ? '🎵 Voice message'
-                        : message.text || 'New message';
-                const recipientInChat = await isViewingChat(receiverId, uid);
-
-                await createNotification(io, {
-                  userId: receiverId,
-                  type: 'chat',
-                  title: 'New message',
-                  body: preview,
-                  actorId: uid,
-                  groupKey: `chat:${room}`,
-                  deepLink: `/messages/${uid}`,
-                  push: !recipientInChat,
-                  data: {
-                    screen: 'messages',
-                    userId: String(uid),
-                    roomId: room,
-                  },
-                });
               }
             } catch (err) {
               console.error('chat:message side-effects error:', err.message);
@@ -459,7 +518,7 @@ module.exports = function initSocket(io) {
 
         const block = await getBlockState(uid, receiverId);
         if (block.iBlocked || block.theyBlocked) return;
-        if (!(await areFriends(uid, receiverId))) return;
+        if (!(await hasBidirectionalChat(uid, receiverId))) return;
 
         const room = String([String(uid), String(receiverId)].sort().join('_'));
         if (data.cancelled) {
@@ -905,28 +964,94 @@ module.exports = function initSocket(io) {
       });
     });
 
-    // ── Anonymous Explore (random voice / video) ───────
-    socket.on('explore:join', async ({ callType = 'voice' } = {}) => {
+    // ── Anonymous Explore (independent video / voice queues) ───────
+    socket.on('explore:join', async (payload = {}) => {
       try {
+        const { callType = 'voice', prefs: clientPrefs } = payload;
         const type = callType === 'video' ? 'video' : 'voice';
 
-        if (calls.getActiveCallForUser(uid)) {
+        // Only block on a real active call (friend or explore) — not leftover UI state
+        const active = calls.getActiveCallForUser(uid);
+        if (active) {
           socket.emit('explore:error', {
-            error: 'You are already in a call',
+            error: active.explore
+              ? 'You are already in an Explore call'
+              : 'Finish your current call before joining Explore',
             code: 'BUSY',
           });
           return;
         }
 
-        exploreMatchmaking.joinQueue(uid, type);
-        socket.emit('explore:searching', { callType: type });
+        const profile = await exploreMatchmaking.loadJoinProfile(uid);
+        if (!profile) {
+          socket.emit('explore:error', {
+            error: 'Account not found',
+            code: 'NOT_FOUND',
+          });
+          return;
+        }
+
+        // Explore filters require Explore Plus (₹99) or a higher plan
+        let canUseExplorePrefs = false;
+        try {
+          const {
+            getPlanEntitlements,
+          } = require('../services/subscriptions');
+          const User = require('../models/User');
+          const subUser = await User.findById(uid).select(
+            'subscriptionPlan subscriptionExpiresAt',
+          );
+          canUseExplorePrefs = !!getPlanEntitlements(subUser).explorePrefs;
+        } catch {
+          canUseExplorePrefs = false;
+        }
+
+        const requestedShowMe =
+          clientPrefs?.showMe !== undefined
+            ? clientPrefs.showMe
+            : profile.showMe;
+        const requestedVerified =
+          clientPrefs?.verifiedOnly !== undefined
+            ? !!clientPrefs.verifiedOnly
+            : profile.verifiedOnly;
+
+        const normalized = exploreMatchmaking.normalizePrefs({
+          showMe: canUseExplorePrefs ? requestedShowMe : 'All',
+          verifiedOnly: canUseExplorePrefs ? requestedVerified : false,
+        });
+
+        // Persist latest Explore prefs (best-effort)
+        try {
+          const User = require('../models/User');
+          await User.findByIdAndUpdate(uid, {
+            $set: {
+              'explorePrefs.showMe': normalized.showMe,
+              'explorePrefs.verifiedOnly': normalized.verifiedOnly,
+              'explorePrefs.updatedAt': new Date(),
+            },
+          });
+        } catch {
+          /* ignore */
+        }
+
+        exploreMatchmaking.joinQueue(uid, type, {
+          gender: profile.gender,
+          photoVerified: profile.photoVerified,
+          showMe: normalized.showMe,
+          verifiedOnly: normalized.verifiedOnly,
+        });
+        socket.emit('explore:searching', {
+          callType: type,
+          prefs: normalized,
+        });
 
         const result = await exploreMatchmaking.tryMatch(io, notifyUser, type);
         if (result && !result.ok) {
-          exploreMatchmaking.leaveQueue(uid);
+          exploreMatchmaking.leaveQueue(uid, type);
           socket.emit('explore:error', {
-            error: result.error || 'Could not start call',
+            error: result.error || 'Could not start Explore call',
             code: result.code || 'ERROR',
+            callType: type,
           });
         }
       } catch (err) {
@@ -939,14 +1064,16 @@ module.exports = function initSocket(io) {
       }
     });
 
-    socket.on('explore:skip', () => {
-      exploreMatchmaking.leaveQueue(uid);
-      socket.emit('explore:idle');
+    socket.on('explore:skip', ({ callType } = {}) => {
+      const type = callType === 'video' || callType === 'voice' ? callType : undefined;
+      exploreMatchmaking.leaveQueue(uid, type);
+      socket.emit('explore:idle', { callType: type || null });
     });
 
-    socket.on('explore:leave', () => {
-      exploreMatchmaking.leaveQueue(uid);
-      socket.emit('explore:idle');
+    socket.on('explore:leave', ({ callType } = {}) => {
+      const type = callType === 'video' || callType === 'voice' ? callType : undefined;
+      exploreMatchmaking.leaveQueue(uid, type);
+      socket.emit('explore:idle', { callType: type || null });
     });
 
     // ── Typing indicator ──────────────────────────────
@@ -997,16 +1124,8 @@ module.exports = function initSocket(io) {
           );
 
           const payload = { by: uid, messageIds, roomId: room };
-          socket.to(room).emit('chat:read', payload);
-          const otherSet = onlineSockets.get(String(otherUserId));
-          if (otherSet && otherSet.size) {
-            for (const sockId of otherSet) {
-              io.to(sockId).emit('chat:read', payload);
-            }
-          } else {
-            const otherSock = onlineUsers.get(String(otherUserId));
-            if (otherSock) io.to(otherSock).emit('chat:read', payload);
-          }
+          // Multi-node safe (Redis adapter) — same as history markRead path
+          notifyUser(io, otherUserId, 'chat:read', payload);
         }
 
         // Keep the notification badge in sync with what the user has seen

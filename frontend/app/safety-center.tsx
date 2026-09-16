@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const WA = {
-  bg: '#FDF8FF',
+  bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
   secondary: '#49454F',
@@ -21,7 +21,7 @@ const WA = {
   primary: '#6750A4',
   primaryContainer: '#EADDFF',
   accent: '#FF4B6E',
-  header: '#FDF8FF',
+  header: '#F5F5F7',
 };
 
 const SAFETY_RULES = [

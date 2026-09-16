@@ -40,7 +40,7 @@ router.post('/open', auth, redisPingGuard, pingLimiter, async (req, res) => {
     } catch (err) {
       // Fallback to in-memory helper + save if aggregation path fails
       const user = await User.findById(req.userId).select(
-        'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate',
+      'openStreakDays lastOpenDate spinCycleDay subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt lastSpinDate spinWindowStartedAt',
       );
       if (!user) return res.status(404).json({ error: 'User not found' });
       const applied = applyOpenStreak(user);
@@ -62,6 +62,7 @@ router.post('/open', auth, redisPingGuard, pingLimiter, async (req, res) => {
       spinStreakDays: streak.spinCycleDay || Number(streak.user.spinCycleDay) || 0,
       canSpinToday: spin.canSpin,
       spinsRemaining: spin.spinsRemaining,
+      nextSpinAt: spin.nextSpinAt,
       today,
     });
   } catch (err) {
@@ -76,7 +77,7 @@ router.post('/open', auth, redisPingGuard, pingLimiter, async (req, res) => {
 router.get('/streak', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId).select(
-      'openStreakDays lastOpenDate spinCycleDay lastSpinDate subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt',
+      'openStreakDays lastOpenDate spinCycleDay lastSpinDate spinWindowStartedAt subscriptionSpinsUsedToday subscriptionSpinsDate subscriptionPlan subscriptionExpiresAt',
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     const spin = getSpinStatus(user);
@@ -86,6 +87,7 @@ router.get('/streak', auth, async (req, res) => {
       spinStreakDays: Number(user.spinCycleDay) || 0,
       canSpinToday: spin.canSpin,
       spinsRemaining: spin.spinsRemaining,
+      nextSpinAt: spin.nextSpinAt,
       today: todayKey(),
     });
   } catch (err) {

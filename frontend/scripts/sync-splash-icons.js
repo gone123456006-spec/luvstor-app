@@ -13,11 +13,12 @@ const {
 const root = path.join(__dirname, "..");
 const resRoot = path.join(root, "android", "app", "src", "main", "res");
 
-const LOGO = path.join(root, "assets", "images", "luvstoer logo.png");
-const ICON = path.join(root, "assets", "images", "icon.png");
+const SPLASH = path.join(root, "assets", "images", "spashscreen.png");
+const ICON = path.join(root, "assets", "images", "app-icon.png");
 const MONO = path.join(root, "assets", "images", "android-icon-monochrome.png");
-const PURPLE = "#8E2DE2";
-const IMAGE_WIDTH = 120;
+const PURPLE = "#370372";
+const SPLASH_BG = "#FFFFFF";
+const IMAGE_WIDTH = 160;
 
 const SPLASH_DPI = {
   mdpi: 1,
@@ -42,12 +43,12 @@ async function writeSplash() {
     const background = await generateImageBackgroundAsync({
       width: canvasSize,
       height: canvasSize,
-      backgroundColor: PURPLE,
+      backgroundColor: SPLASH_BG,
       resizeMode: "cover",
     });
     const { source: foreground } = await generateImageAsync(
       { projectRoot: root, cacheType: "luvstor-splash" },
-      { src: LOGO, resizeMode: "contain", width: size, height: size },
+      { src: SPLASH, resizeMode: "contain", width: size, height: size },
     );
     const composed = await compositeImagesAsync({
       background,
@@ -107,11 +108,6 @@ async function writeIcons() {
       radius: undefined,
     });
 
-    // Expo writes .webp; generateImageAsync returns PNG. Android aapt accepts PNG
-    // bytes in .webp-named files poorly — write .png and also .webp with PNG payload
-    // is bad. Convert by keeping Expo's convention: many Expo projects write PNG
-    // content with .webp extension when sharp is unavailable; Gradle still packages them.
-    // Prefer writing real files that match existing names.
     fs.writeFileSync(path.join(outDir, "ic_launcher.webp"), legacy);
     fs.writeFileSync(path.join(outDir, "ic_launcher_round.webp"), legacyRound);
     fs.writeFileSync(path.join(outDir, "ic_launcher_foreground.webp"), foreground);
@@ -121,7 +117,7 @@ async function writeIcons() {
 }
 
 async function main() {
-  if (!fs.existsSync(LOGO)) throw new Error(`Missing ${LOGO}`);
+  if (!fs.existsSync(SPLASH)) throw new Error(`Missing ${SPLASH}`);
   if (!fs.existsSync(ICON)) throw new Error(`Missing ${ICON}`);
   if (!fs.existsSync(resRoot)) {
     console.warn("android/ res missing — skip native sync (run expo prebuild later)");

@@ -1,6 +1,29 @@
-import { API_BASE } from './api';
+import { getApiBase } from './api';
 
-/** Turn relative /uploads/... or wrong-host absolute URLs into a loadable API_BASE URL */
+/**
+ * Google / Firebase profile pics often ship as tiny thumbs (s96-c).
+ * Bump to a high-res variant so DP looks sharp when viewed full-size.
+ */
+export function upgradeRemotePhotoUrl(url: string): string {
+  if (!url) return url;
+  try {
+    if (/googleusercontent\.com/i.test(url)) {
+      let next = url
+        .replace(/=s\d+-c\b/gi, '=s1024-c')
+        .replace(/=s\d+\b/gi, '=s1024')
+        .replace(/=w\d+-h\d+(-[a-z]+)?\b/gi, '=s1024');
+      if (next === url && !/[=&]s=\d+/i.test(url) && !/=s\d+/i.test(url)) {
+        next = url.includes('?') ? `${url}&sz=1024` : `${url}?sz=1024`;
+      }
+      return next;
+    }
+  } catch {
+    /* keep original */
+  }
+  return url;
+}
+
+/** Turn relative /uploads/... or wrong-host absolute URLs into a loadable API URL */
 export function resolveMediaUrl(url?: string | null): string | null {
   if (!url) return null;
   if (
@@ -10,16 +33,17 @@ export function resolveMediaUrl(url?: string | null): string | null {
   ) {
     return url;
   }
+  const base = getApiBase();
   if (url.startsWith('/')) {
-    return `${API_BASE}${url}`;
+    return `${base}${url}`;
   }
   try {
     const parsed = new URL(url);
     if (parsed.pathname.startsWith('/uploads/')) {
-      return `${API_BASE}${parsed.pathname}`;
+      return `${base}${parsed.pathname}`;
     }
   } catch {
     /* ignore */
   }
-  return url;
+  return upgradeRemotePhotoUrl(url);
 }

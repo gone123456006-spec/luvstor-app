@@ -15,7 +15,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { io, Socket } from 'socket.io-client';
@@ -24,7 +23,16 @@ import { useAuth } from './AuthContext';
 import { API_BASE, apiRequest } from '../utils/api';
 import { getAuthToken } from '../utils/auth';
 import { fetchNotificationUnread } from '../utils/notifications';
-import { messagePreviewText } from '../utils/chatListPreviewPatch';
+import {
+  getChatListCache,
+  setChatListCache,
+} from '../utils/chatListCache';
+import {
+  applyChatListPreviewPatch,
+  isArchivedInChatCache,
+  messagePreviewText,
+} from '../utils/chatListPreviewPatch';
+import WhatsAppAvatar from '../components/WhatsAppAvatar';
 
 type ToastKind = 'message' | 'like' | 'unlike' | 'friends';
 
@@ -44,6 +52,7 @@ type ProfileUpdatePayload = {
   name?: string;
   bio?: string;
   photo?: string;
+  coverPhoto?: string;
   photos?: string[];
   age?: number | null;
   gender?: string;
@@ -82,7 +91,7 @@ export type ConversationDeletedPayload = {
 
 export type ChatListPreviewPayload = {
   otherUserId: string;
-  lastMessage: string;
+  lastMessage?: string;
   lastMessageAt?: number;
   incrementUnread?: boolean;
   resetUnread?: boolean;
@@ -112,12 +121,11 @@ type SocketContextValue = {
   lastPresence: PresenceUpdatePayload | null;
   bumpProfileLocal: (payload: ProfileUpdatePayload) => void;
   bumpChatPreview: (payload: ChatListPreviewPayload) => void;
+  /** WhatsApp: clear row + tab badge the moment a chat is opened / read */
+  markChatAsRead: (otherUserId: string) => void;
 };
 
 const SocketContext = createContext<SocketContextValue | null>(null);
-
-const FALLBACK_BOY = require('../assets/images/boy-image.png');
-const FALLBACK_GIRL = require('../assets/images/girls-image.png');
 
 function socketBaseUrl() {
   return API_BASE.replace(/\/api\/?$/, '') || API_BASE;
@@ -160,10 +168,49 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     setChatListTick((n) => n + 1);
   }, []);
 
-  const bumpChatPreview = useCallback((payload: ChatListPreviewPayload) => {
-    setLastChatListPreview(payload);
-    setChatPreviewTick((n) => n + 1);
-  }, []);
+  const bumpChatPreview = useCallback(
+    (payload: ChatListPreviewPayload) => {
+      // Persist into chat cache immediately (even if Chat tab is not focused)
+      try {
+        const current = getChatListCache(sessionVersion);
+        const next = applyChatListPreviewPatch(current, payload);
+        setChatListCache({ ...next, sessionVersion, loaded: true });
+      } catch {
+        /* ignore cache write errors */
+      }
+      setLastChatListPreview(payload);
+      setChatPreviewTick((n) => n + 1);
+    },
+    [sessionVersion],
+  );
+
+  const markChatAsRead = useCallback(
+    (otherUserId: string) => {
+      const id = String(otherUserId || '');
+      if (!id) return;
+      const snap = getChatListCache(sessionVersion);
+      const row =
+        snap.conversations.find((r) => r.otherId === id) ||
+        snap.friendRows.find((r) => r.otherId === id) ||
+        snap.requestRows.find((r) => r.otherId === id) ||
+        (snap.archiveRows || []).find((r) => r.otherId === id) ||
+        snap.onlineRows.find((r) => r.otherId === id);
+      const cleared = Math.max(0, Number(row?.unread) || 0);
+
+      bumpChatPreview({
+        otherUserId: id,
+        resetUnread: true,
+        name: row?.name,
+        photo: row?.photo,
+        gender: row?.gender,
+      });
+
+      if (cleared > 0) {
+        setUnreadCount((n) => Math.max(0, n - cleared));
+      }
+    },
+    [sessionVersion, bumpChatPreview],
+  );
 
   const bumpFriends = useCallback(() => {
     setFriendTick((n) => n + 1);
@@ -173,8 +220,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     if (!payload?.userId) return;
     setLastProfileUpdate(payload);
     setProfileTick((n) => n + 1);
-    bumpChatList();
-  }, [bumpChatList]);
+    // Chat list patches locally from profileTick — no full reload
+  }, []);
 
   const bumpProfileLocal = useCallback(
     (payload: ProfileUpdatePayload) => {
@@ -285,23 +332,25 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         const onThatChat =
           pathnameRef.current === `/messages/${fromId}` ||
           pathnameRef.current?.includes(`/messages/${fromId}`);
-        bumpChatPreview({
-          otherUserId: fromId,
-          lastMessage: preview,
-          lastMessageAt: Date.now(),
-          incrementUnread: !onThatChat,
-          fromMe: false,
-          name: payload.fromName,
-          photo: payload.fromPhoto,
-          gender: payload.fromGender,
-        });
-        bumpChatList();
-        setUnreadCount((n) => n + 1);
 
-        if (onThatChat) {
-          refreshUnread();
+        // Archived: message may not be in main lists — patch archive unread here
+        if (isArchivedInChatCache(sessionVersion, fromId)) {
+          bumpChatPreview({
+            otherUserId: fromId,
+            lastMessage: preview,
+            lastMessageAt: Date.now(),
+            incrementUnread: !onThatChat,
+            fromMe: false,
+            name: payload.fromName,
+            photo: payload.fromPhoto,
+            gender: payload.fromGender,
+          });
           return;
         }
+
+        // Main chats: chat:message owns preview + unread badge (avoids race that
+        // wiped badges when this event arrived last with incrementUnread:false)
+        if (onThatChat) return;
 
         showToast({
           kind: 'message',
@@ -326,6 +375,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         const onThatChat =
           pathnameRef.current === `/messages/${otherId}` ||
           pathnameRef.current?.includes(`/messages/${otherId}`);
+        const archived = isArchivedInChatCache(sessionVersion, otherId);
         bumpChatPreview({
           otherUserId: otherId,
           lastMessage: messagePreviewText(msg),
@@ -335,17 +385,25 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           incrementUnread: !fromMe && !onThatChat,
           resetUnread: fromMe || onThatChat,
           fromMe,
+          name: msg.fromName || msg.senderName,
+          photo: msg.fromPhoto || msg.senderPhoto,
+          gender: msg.fromGender || msg.senderGender,
         });
-        bumpChatList();
-        if (String(msg.receiverId) === myId) {
-          refreshUnread();
+        // Archived unread stays under Archive badge — not the main chat badge
+        if (
+          !archived &&
+          !fromMe &&
+          String(msg.receiverId) === myId &&
+          !onThatChat
+        ) {
+          setUnreadCount((n) => n + 1);
         }
       });
 
       active.on('friend:update', (payload: FriendUpdatePayload) => {
         setLastFriendUpdate(payload);
         bumpFriends();
-        bumpChatList();
+        // Instant friend/request patch via friendTick — skip full chatList reload
 
         if (payload.silent || payload.action === 'sync') {
           return;
@@ -480,6 +538,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       if (state === 'active') {
         refreshUnread();
         refreshNotifUnread();
+        // Bump chat list so Chat tab reloads even if it stayed focused
+        setChatListTick((n) => n + 1);
         start();
       } else {
         stop();
@@ -502,6 +562,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const photo = toast.photo || '';
     const gender = toast.gender || '';
     hideToast();
+    markChatAsRead(id);
     router.push({
       pathname: '/messages/[id]',
       params: {
@@ -535,6 +596,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       lastPresence,
       bumpProfileLocal,
       bumpChatPreview,
+      markChatAsRead,
     }),
     [
       socket,
@@ -556,6 +618,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       lastPresence,
       bumpProfileLocal,
       bumpChatPreview,
+      markChatAsRead,
     ],
   );
 
@@ -572,15 +635,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         >
           <Pressable style={styles.toastCard} onPress={openToast}>
             <View style={styles.toastAvatarWrap}>
-              {toast.photo ? (
-                <Image source={{ uri: toast.photo }} style={styles.toastAvatar} contentFit="cover" />
-              ) : (
-                <Image
-                  source={toast.gender === 'Female' ? FALLBACK_GIRL : FALLBACK_BOY}
-                  style={styles.toastAvatar}
-                  contentFit="cover"
-                />
-              )}
+              <WhatsAppAvatar
+                photo={toast.photo}
+                name={toast.title}
+                gender={toast.gender}
+                size={44}
+              />
               {toast.kind === 'like' || toast.kind === 'friends' ? (
                 <View style={styles.toastBadge}>
                   <Ionicons name="heart" size={10} color="#fff" />
@@ -639,12 +699,6 @@ const styles = StyleSheet.create({
     borderColor: '#EEE',
   },
   toastAvatarWrap: { position: 'relative' },
-  toastAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#F0F0F0',
-  },
   toastBadge: {
     position: 'absolute',
     right: -2,

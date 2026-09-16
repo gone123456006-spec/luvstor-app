@@ -1,11 +1,18 @@
-import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import React from "react";
-import { StyleSheet, Text, View, ViewStyle } from "react-native";
+import React, { useEffect, useState } from "react";
+import { StyleSheet, View, ViewStyle } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { useLiveSubscriptionBadge } from "../utils/subscriptions";
+import { resolveMediaUrl } from "../utils/media";
+import { Ionicons } from "@expo/vector-icons";
 
 const IG_BLUE = "#0095F6";
+/** Photo verification shield — green (separate from subscription blue tick) */
+export const PHOTO_VERIFIED_GREEN = "#22C55E";
+
+/** WhatsApp default DP — light gray circle + white person silhouette */
+export const WA_DEFAULT_BG = "#DFE5E7";
+export const WA_DEFAULT_ICON = "#FFFFFF";
 
 function smoothSealPath(size: number, petals = 14) {
   const cx = size / 2;
@@ -71,7 +78,69 @@ export function VerifiedTick({
   );
 }
 
-/** WhatsApp-like avatar palette */
+/** Dating photo-verified shield (separate from subscription blue tick). */
+export function PhotoVerifiedBadge({
+  avatarSize,
+  inline = false,
+}: {
+  avatarSize: number;
+  inline?: boolean;
+}) {
+  const dim = Math.max(16, Math.round(avatarSize * 0.32));
+  return (
+    <View
+      pointerEvents="none"
+      style={
+        inline
+          ? { marginLeft: 4 }
+          : {
+              position: "absolute",
+              bottom: -1,
+              left: -1,
+              zIndex: 4,
+            }
+      }
+    >
+      <Ionicons name="shield-checkmark" size={dim} color={PHOTO_VERIFIED_GREEN} />
+    </View>
+  );
+}
+
+/** True when the user has no usable profile photo (never set or removed). */
+export function hasProfilePhoto(photo?: string | null): boolean {
+  const raw = String(photo || "").trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  if (
+    lower === "null" ||
+    lower === "undefined" ||
+    lower === "none" ||
+    lower === "default"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * WhatsApp-style default DP (no custom photo).
+ * Gender assets are optional decorative fallbacks for toasts / marketing;
+ * chat/profile avatars use the gray silhouette via WhatsAppAvatar.
+ */
+export function getGenderFallbackSource(gender?: string | null) {
+  const g = String(gender || "")
+    .trim()
+    .toLowerCase();
+  if (g === "female" || g === "woman" || g === "girl" || g === "f") {
+    return require("../assets/images/girls-image.png");
+  }
+  if (g === "male" || g === "man" || g === "boy" || g === "m") {
+    return require("../assets/images/boy-image.png");
+  }
+  return null;
+}
+
+/** WhatsApp-like avatar palette (used by getAvatarColor for non-avatar UI) */
 const AVATAR_COLORS = [
   "#00A884",
   "#53BDEB",
@@ -132,6 +201,29 @@ export function getDisplayName(
   return "Luvstor User";
 }
 
+/** Gray person silhouette — same look WhatsApp uses with no DP */
+export function WhatsAppDefaultDp({ size }: { size: number }) {
+  return (
+    <View
+      style={[
+        styles.initialsCircle,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: WA_DEFAULT_BG,
+        },
+      ]}
+    >
+      <Ionicons
+        name="person"
+        size={Math.round(size * 0.55)}
+        color={WA_DEFAULT_ICON}
+      />
+    </View>
+  );
+}
+
 type Props = {
   photo?: string | null;
   name?: string | null;
@@ -147,16 +239,18 @@ type Props = {
   badgeExpiresAt?: string | Date | null;
   /**
    * WhatsApp privacy mode — when someone blocked you, show the universal
-   * gray silhouette instead of their real DP / initials color.
+   * gray silhouette instead of their real DP.
    */
   privacyHidden?: boolean;
+  /** Dating photo-verified shield */
+  photoVerified?: boolean;
 };
 
 /**
  * WhatsApp-style avatar:
  * - Photo when set
- * - Colored circle + initials when profile photo is missing
- * - Gray silhouette when privacyHidden (blocked-you case)
+ * - Gray default person DP when no photo / photo removed / load failed
+ * - Same gray silhouette when privacyHidden (blocked-you case)
  */
 export default function WhatsAppAvatar({
   photo,
@@ -168,68 +262,39 @@ export default function WhatsAppAvatar({
   badge = null,
   badgeExpiresAt = null,
   privacyHidden = false,
+  photoVerified: _photoVerified = false,
 }: Props) {
-  const displayName = getDisplayName(name, publicId);
-  const seed = publicId || name || displayName;
-  const bg = getAvatarColor(seed);
-  const initials = getInitials(name, publicId);
-  const fontSize = Math.max(12, Math.round(size * 0.38));
-  const hasPhoto = !privacyHidden && !!(photo && String(photo).trim());
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const photoKey = String(photo || "").trim();
+
+  useEffect(() => {
+    setPhotoFailed(false);
+  }, [photoKey]);
+
   const liveBadge = useLiveSubscriptionBadge(badge, badgeExpiresAt);
   const hasPlanBadge = !privacyHidden && !!liveBadge;
-  // Subscribed users use "Online now" text instead of the green DP dot.
   const showOnline = online && !privacyHidden && !hasPlanBadge;
+
+  const hasPhoto =
+    !privacyHidden && !photoFailed && hasProfilePhoto(photoKey);
+  const photoUri = hasPhoto
+    ? resolveMediaUrl(photoKey) || photoKey
+    : "";
 
   return (
     <View style={[{ width: size, height: size, overflow: "visible" }, style]}>
-      {privacyHidden ? (
-        <View
-          style={[
-            styles.initialsCircle,
-            {
-              width: size,
-              height: size,
-              borderRadius: size / 2,
-              backgroundColor: "#DFE5E7",
-            },
-          ]}
-        >
-          <Ionicons
-            name="person"
-            size={Math.round(size * 0.55)}
-            color="#FFFFFF"
-          />
-        </View>
-      ) : hasPhoto ? (
+      {privacyHidden || !hasPhoto ? (
+        <WhatsAppDefaultDp size={size} />
+      ) : (
         <Image
-          source={{ uri: String(photo) }}
+          source={{ uri: photoUri }}
           style={{ width: size, height: size, borderRadius: size / 2 }}
           contentFit="cover"
           cachePolicy="memory-disk"
           transition={0}
-          recyclingKey={String(photo)}
+          recyclingKey={`avatar-${photoUri}`}
+          onError={() => setPhotoFailed(true)}
         />
-      ) : (
-        <View
-          style={[
-            styles.initialsCircle,
-            {
-              width: size,
-              height: size,
-              borderRadius: size / 2,
-              backgroundColor: bg,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.initialsText,
-              { fontSize, lineHeight: fontSize + 2 },
-            ]}
-          >
-            {initials}
-          </Text>
-        </View>
       )}
       {showOnline ? (
         <View
@@ -245,6 +310,7 @@ export default function WhatsAppAvatar({
           ]}
         />
       ) : null}
+      {/* Photo verification is shown next to the name — not on the DP */}
       {hasPlanBadge ? <VerifiedTick avatarSize={size} /> : null}
     </View>
   );
@@ -254,11 +320,6 @@ const styles = StyleSheet.create({
   initialsCircle: {
     alignItems: "center",
     justifyContent: "center",
-  },
-  initialsText: {
-    color: "#FFF",
-    fontWeight: "700",
-    letterSpacing: 0.5,
   },
   onlineDot: {
     position: "absolute",

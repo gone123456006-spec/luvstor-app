@@ -5,49 +5,58 @@ const auth = require('../middleware/auth');
 const User = require('../models/User');
 const { serializeAccess } = require('../services/chatTokens');
 const { createNotification } = require('../services/notifications');
+const {
+  TOKEN_PACKS,
+  PACK_10_ID,
+  getPackPriceInr,
+  serializePacksForUser,
+} = require('../services/tokenPacks');
 const { resolvePaidPackFromOrder } = require('../utils/paidPackFromOrder');
 const { getRazorpay, paymentUnavailable } = require('../utils/razorpayClient');
 
-// Token pack prices in INR (paise for Razorpay)
-const TOKEN_PACKS = {
-  '10': { tokens: 10, price: 10 },
-  '100': { tokens: 100, price: 80 },
-  '500': { tokens: 500, price: 350 },
-  '1000': { tokens: 1000, price: 600 },
-  '5000': { tokens: 5000, price: 2000 },
-  '10000': { tokens: 10000, price: 3000 },
-  '50000': { tokens: 50000, price: 10000 },
-  '100000': { tokens: 100000, price: 15000 },
-};
+// GET /api/payment/packs — personalized prices (pack 10 ladder)
+router.get('/packs', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('tokenPack10PurchaseCount');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+      packs: serializePacksForUser(user),
+      tokenPack10PurchaseCount: user.tokenPack10PurchaseCount || 0,
+    });
+  } catch (err) {
+    console.error('Payment packs error:', err);
+    res.status(500).json({ error: 'Failed to load packs' });
+  }
+});
 
-function getPackPriceInr(packId) {
-  const pack = TOKEN_PACKS[packId];
-  return pack ? pack.price : null;
-}
-
-// ─────────────────────────────────────────────
 // POST /api/payment/create-order
-// Create a Razorpay order for token purchase
-// ─────────────────────────────────────────────
 router.post('/create-order', auth, async (req, res) => {
   try {
     const razorpay = getRazorpay();
     const { packId } = req.body;
     const pack = TOKEN_PACKS[packId];
-
     if (!pack) {
       return res.status(400).json({ error: 'Invalid token pack' });
     }
 
+    const user = await User.findById(req.userId).select('tokenPack10PurchaseCount');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const priceInr = getPackPriceInr(packId, user);
+    if (priceInr == null || priceInr < 1) {
+      return res.status(400).json({ error: 'Invalid pack price' });
+    }
+
     const options = {
-      amount: pack.price * 100, // Amount in paise (e.g., ₹10 = 1000 paise)
+      amount: priceInr * 100,
       currency: 'INR',
-      receipt: `token_${req.userId}_${Date.now()}`,
+      receipt: `token_${req.userId}_${Date.now()}`.slice(0, 40),
       notes: {
-        userId: req.userId.toString(),
+        userId: String(req.userId),
         packId: String(packId),
         tokens: String(pack.tokens),
-        priceInr: String(pack.price),
+        priceInr: String(priceInr),
+        pack10Count: String(user.tokenPack10PurchaseCount || 0),
       },
     };
 
@@ -59,8 +68,10 @@ router.post('/create-order', auth, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       keyId: process.env.RAZORPAY_KEY_ID,
-      packId: packId,
+      packId,
       tokens: pack.tokens,
+      priceInr,
+      listPriceInr: pack.listPriceInr,
     });
   } catch (err) {
     if (paymentUnavailable(res, err)) return;
@@ -69,10 +80,7 @@ router.post('/create-order', auth, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
 // POST /api/payment/verify
-// Verify Razorpay payment signature and credit tokens
-// ─────────────────────────────────────────────
 router.post('/verify', auth, async (req, res) => {
   try {
     if (!process.env.RAZORPAY_KEY_SECRET) {
@@ -91,7 +99,6 @@ router.post('/verify', auth, async (req, res) => {
       packId: clientPackId,
     } = req.body;
 
-    // Verify signature
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -105,13 +112,31 @@ router.post('/verify', auth, async (req, res) => {
     }
 
     const existingUser = await User.findById(req.userId).select(
-      'tokenBalance lastSpinDate chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
+      'tokenBalance tokenPack10PurchaseCount lastTokenPaymentId chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
     );
     if (!existingUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Authoritative pack/amount come from Razorpay order notes set at create-order.
+    // Idempotency: same payment must not credit twice
+    if (
+      existingUser.lastTokenPaymentId &&
+      existingUser.lastTokenPaymentId === razorpay_payment_id
+    ) {
+      return res.json({
+        success: true,
+        verified: true,
+        credited: 0,
+        alreadyCredited: true,
+        tokenBalance: existingUser.tokenBalance ?? 0,
+        paymentId: razorpay_payment_id,
+        orderId: razorpay_order_id,
+        packs: serializePacksForUser(existingUser),
+        ...serializeAccess(existingUser),
+      });
+    }
+
+    // Authoritative pack/amount come from the Razorpay order notes set at create-order.
     // Never credit from client-supplied packId (cheap-pay / large-credit attack).
     let order;
     try {
@@ -140,16 +165,47 @@ router.post('/verify', auth, async (req, res) => {
     }
 
     const { packId, credited } = resolved;
+    const inc = { tokenBalance: credited };
+    if (String(packId) === PACK_10_ID) {
+      inc.tokenPack10PurchaseCount = 1;
+    }
 
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { $inc: { tokenBalance: credited } },
+    const user = await User.findOneAndUpdate(
       {
-        new: true,
+        _id: req.userId,
+        $or: [
+          { lastTokenPaymentId: null },
+          { lastTokenPaymentId: { $ne: razorpay_payment_id } },
+          { lastTokenPaymentId: { $exists: false } },
+        ],
+      },
+      {
+        $inc: inc,
+        $set: { lastTokenPaymentId: razorpay_payment_id },
+      },
+      {
+        returnDocument: 'after',
         select:
-          'tokenBalance lastSpinDate chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
+          'tokenBalance tokenPack10PurchaseCount lastSpinDate chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
       },
     );
+
+    if (!user) {
+      const again = await User.findById(req.userId).select(
+        'tokenBalance tokenPack10PurchaseCount chatSessionStartedAt chatSessionExpiresAt subscriptionPlan subscriptionExpiresAt',
+      );
+      return res.json({
+        success: true,
+        verified: true,
+        credited: 0,
+        alreadyCredited: true,
+        tokenBalance: again?.tokenBalance ?? 0,
+        paymentId: razorpay_payment_id,
+        orderId: razorpay_order_id,
+        packs: serializePacksForUser(again),
+        ...serializeAccess(again),
+      });
+    }
 
     const io = req.app.get('io');
     await createNotification(io, {
@@ -172,6 +228,8 @@ router.post('/verify', auth, async (req, res) => {
       tokenBalance: user.tokenBalance ?? 0,
       paymentId: razorpay_payment_id,
       orderId: razorpay_order_id,
+      packs: serializePacksForUser(user),
+      tokenPack10PurchaseCount: user.tokenPack10PurchaseCount || 0,
       ...serializeAccess(user),
     });
   } catch (err) {
@@ -181,17 +239,12 @@ router.post('/verify', auth, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-// GET /api/payment/razorpay-key
-// Get Razorpay key for frontend (public key only)
-// ─────────────────────────────────────────────
 router.get('/razorpay-key', (req, res) => {
   const keyId = process.env.RAZORPAY_KEY_ID || null;
   if (!keyId) {
     return res.status(503).json({
       error: 'Razorpay is not configured',
       code: 'RAZORPAY_NOT_CONFIGURED',
-      keyId: null,
     });
   }
   res.json({ keyId });

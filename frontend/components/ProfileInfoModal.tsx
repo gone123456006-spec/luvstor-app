@@ -11,7 +11,11 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import WhatsAppAvatar, { getDisplayName, VerifiedTick } from "./WhatsAppAvatar";
+import CopyablePublicId from "./CopyablePublicId";
+import WhatsAppAvatar, {
+  getDisplayName,
+  PhotoVerifiedBadge,
+} from "./WhatsAppAvatar";
 import { isValidPublicId } from "../utils/auth";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -63,6 +67,7 @@ export type ProfileInfoData = {
   interests?: string[];
   subscriptionBadge?: string | null;
   subscriptionExpiresAt?: string | null;
+  photoVerified?: boolean;
 };
 
 type Props = {
@@ -70,6 +75,8 @@ type Props = {
   onClose: () => void;
   info: ProfileInfoData;
   onEditPress?: () => void;
+  /** Show Share next to ID (own profile). Off when viewing someone else. */
+  showShareId?: boolean;
 };
 
 function InfoRow({
@@ -107,10 +114,11 @@ export default function ProfileInfoModal({
   onClose,
   info,
   onEditPress,
+  showShareId = true,
 }: Props) {
   const insets = useSafeAreaInsets();
   const displayName = getDisplayName(info.name, info.publicId);
-  const hasVerified = !!info.subscriptionBadge;
+  const hasPhotoVerified = !!info.photoVerified;
   const interests = info.interests?.filter(Boolean) ?? [];
 
   const rows = [
@@ -194,18 +202,24 @@ export default function ProfileInfoModal({
                 size={88}
                 badge={info.subscriptionBadge}
                 badgeExpiresAt={info.subscriptionExpiresAt}
+                photoVerified={hasPhotoVerified}
               />
               <View style={styles.nameRow}>
                 <Text style={styles.heroName}>
                   {displayName}
                   {info.age ? `, ${info.age}` : ""}
                 </Text>
-                {hasVerified ? <VerifiedTick avatarSize={52} inline /> : null}
+                {hasPhotoVerified ? (
+                  <PhotoVerifiedBadge avatarSize={52} inline />
+                ) : null}
               </View>
               {isValidPublicId(info.publicId) ? (
-                <Text style={styles.heroId}>
-                  ID: {String(info.publicId).toUpperCase()}
-                </Text>
+                <CopyablePublicId
+                  publicId={info.publicId}
+                  name={displayName}
+                  textStyle={styles.heroId}
+                  showShare={showShareId}
+                />
               ) : null}
               <Text style={styles.heroHint}>
                 Profile details help others learn more about you on Luvstor.

@@ -12,9 +12,9 @@ const {
 } = require('../services/chatTokens');
 const { getBlockState } = require('../utils/blockState');
 const { applyBlockPrivacy } = require('../utils/blockPrivacy');
+const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
 
-// Helper: Check if two users are friends
-// Helper: mutual like / friends (media + calls unlock)
+// Helper: mutual like / friends (calls unlock)
 async function areFriends(userId1, userId2) {
   const { userA, userB } = Friendship.getSortedPair(userId1, userId2);
   const friendship = await Friendship.findOne({
@@ -61,7 +61,7 @@ async function getConversationVisibility(userId) {
   return { archived, cleared };
 }
 
-/** New message restores deleted/archived chat for the recipient (WhatsApp-style). */
+/** New message restores a deleted chat. Archived chats stay archived (WhatsApp keep-archived). */
 async function reopenConversationForReceiver(receiverId, senderId) {
   const ConversationState = require('../models/ConversationState');
   const room = roomId(receiverId, senderId);
@@ -70,12 +70,34 @@ async function reopenConversationForReceiver(receiverId, senderId) {
     {
       $set: {
         clearedAt: null,
-        archived: false,
-        archivedAt: null,
         roomId: room,
       },
     },
   );
+}
+
+async function isConversationArchived(userId, otherUserId) {
+  const ConversationState = require('../models/ConversationState');
+  const row = await ConversationState.exists({
+    userId,
+    otherUserId,
+    archived: true,
+  });
+  return !!row;
+}
+
+async function countUnreadForPair(userId, otherUserId) {
+  const mongoose = require('mongoose');
+  const myObjId = new mongoose.Types.ObjectId(userId);
+  const room = roomId(userId, otherUserId);
+  return Message.countDocuments({
+    roomId: room,
+    receiverId: myObjId,
+    read: false,
+    isDeleted: { $ne: true },
+    undelivered: { $ne: true },
+    deletedFor: { $nin: [myObjId] },
+  });
 }
 
 async function enrichConversationRow(reqUserId, c) {
@@ -132,6 +154,8 @@ async function enrichConversationRow(reqUserId, c) {
     privacyHidden: !!safeOther?.privacyHidden,
     blockedAt: block.blockedAt,
     canCall: friendsStatus && !block.blocked,
+    canSendMedia:
+      !block.blocked && (await hasBidirectionalChat(reqUserId, otherId)),
   };
 }
 
@@ -226,44 +250,48 @@ router.get('/history/:otherUserId', auth, async (req, res) => {
       })
       .lean();
 
-    // Mark as read + notify sender for blue ticks
-    const now = new Date();
-    const unread = await Message.find({
-      roomId: room,
-      receiverId: myObjId,
-      read: false,
-      undelivered: { $ne: true },
-      deletedFor: { $nin: [myObjId] },
-    })
-      .select('_id senderId')
-      .lean();
+    // Only mark read when the user actually opens the thread (not chat-list preload)
+    const markRead =
+      req.query.markRead === '1' || req.query.markRead === 'true';
+    if (markRead) {
+      const now = new Date();
+      const unread = await Message.find({
+        roomId: room,
+        receiverId: myObjId,
+        read: false,
+        undelivered: { $ne: true },
+        deletedFor: { $nin: [myObjId] },
+      })
+        .select('_id senderId')
+        .lean();
 
-    if (unread.length) {
-      const messageIds = unread.map((m) => String(m._id));
-      await Message.updateMany(
-        { _id: { $in: unread.map((m) => m._id) } },
-        {
-          $set: {
-            read: true,
-            readAt: now,
-            delivered: true,
-            deliveredAt: now,
+      if (unread.length) {
+        const messageIds = unread.map((m) => String(m._id));
+        await Message.updateMany(
+          { _id: { $in: unread.map((m) => m._id) } },
+          {
+            $set: {
+              read: true,
+              readAt: now,
+              delivered: true,
+              deliveredAt: now,
+            },
           },
-        },
-      );
+        );
 
-      const io = req.app.get('io');
-      if (io) {
-        const { notifyUser } = require('../utils/realtime');
-        const payload = {
-          by: String(req.userId),
-          messageIds,
-          roomId: room,
-        };
-        io.to(room).emit('chat:read', payload);
-        const senders = new Set(unread.map((m) => String(m.senderId)));
-        for (const sid of senders) {
-          if (sid !== String(req.userId)) notifyUser(io, sid, 'chat:read', payload);
+        const io = req.app.get('io');
+        if (io) {
+          const { notifyUser } = require('../utils/realtime');
+          const payload = {
+            by: String(req.userId),
+            messageIds,
+            roomId: room,
+          };
+          io.to(room).emit('chat:read', payload);
+          const senders = new Set(unread.map((m) => String(m.senderId)));
+          for (const sid of senders) {
+            if (sid !== String(req.userId)) notifyUser(io, sid, 'chat:read', payload);
+          }
         }
       }
     }
@@ -404,13 +432,13 @@ router.post('/send', auth, async (req, res) => {
     const receiverView = await getBlockState(receiverId, req.userId);
     const undelivered = !!block.theyBlocked || !!receiverView.iBlocked;
 
-    // Token session gate (independent of other monetization)
-    const access = await ensureChatSession(req.userId);
+    // Token session gate — free users pay 10 tokens per conversation (start or reply)
+    const access = await ensureChatSession(req.userId, receiverId);
     if (!access.ok) {
       return res.status(402).json(access);
     }
 
-    // Check friendship status for non-text messages (Friends & Match feature)
+    // Image / voice unlock only after both users have sent a DM
     if (type !== 'text') {
       if (undelivered) {
         return res.status(403).json({
@@ -418,13 +446,29 @@ router.post('/send', auth, async (req, res) => {
           code: 'BLOCKED_MEDIA',
         });
       }
-      const friendsStatus = await areFriends(req.userId, receiverId);
-      if (!friendsStatus) {
-        return res.status(403).json({
-          error: 'Only friends can send images, voice messages, and files. Send a like and become friends first!',
-          code: 'NOT_FRIENDS',
-          requiresFriendship: true,
-        });
+      if (type === 'image' || type === 'audio') {
+        const bothMessaged = await hasBidirectionalChat(
+          req.userId,
+          receiverId,
+        );
+        if (!bothMessaged) {
+          return res.status(403).json({
+            error:
+              'Photos and voice unlock when they reply to your message.',
+            code: 'MEDIA_LOCKED',
+            requiresReply: true,
+          });
+        }
+      } else {
+        const friendsStatus = await areFriends(req.userId, receiverId);
+        if (!friendsStatus) {
+          return res.status(403).json({
+            error:
+              'Only friends can send files. Send a like and become friends first!',
+            code: 'NOT_FRIENDS',
+            requiresFriendship: true,
+          });
+        }
       }
     }
 
@@ -442,11 +486,24 @@ router.post('/send', auth, async (req, res) => {
 
     const room = roomId(req.userId, receiverId);
     const io = req.app.get('io');
-    const onlineUsers = io?.onlineUsers;
-    const receiverOnline =
-      !undelivered &&
-      onlineUsers instanceof Map &&
-      onlineUsers.has(String(receiverId));
+    let receiverOnline = false;
+    if (!undelivered) {
+      try {
+        const presence = require('../utils/presence');
+        const redisOnline = await presence.isUserOnline(receiverId);
+        if (redisOnline !== null) {
+          receiverOnline = redisOnline;
+        } else {
+          const onlineUsers = io?.onlineUsers;
+          receiverOnline =
+            onlineUsers instanceof Map && onlineUsers.has(String(receiverId));
+        }
+      } catch {
+        const onlineUsers = io?.onlineUsers;
+        receiverOnline =
+          onlineUsers instanceof Map && onlineUsers.has(String(receiverId));
+      }
+    }
     const now = new Date();
 
     let replyToId = null;
@@ -479,13 +536,35 @@ router.post('/send', auth, async (req, res) => {
     });
 
     if (!undelivered) {
-      await incrementMessageCount(req.userId, receiverId);
-      await resetMessageCount(req.userId, receiverId);
-      await reopenConversationForReceiver(receiverId, req.userId);
+      // Counters off the hot path — respond + socket first
+      setImmediate(() => {
+        Promise.all([
+          incrementMessageCount(req.userId, receiverId),
+          resetMessageCount(req.userId, receiverId),
+          reopenConversationForReceiver(receiverId, req.userId),
+        ]).catch((err) =>
+          console.error('chat/send counters error:', err.message),
+        );
+      });
     }
 
     // Also emit via Socket.IO so the other user gets it in real time if online
     if (io) {
+      const User = require('../models/User');
+      const { notifyUser, actorPayload } = require('../utils/realtime');
+
+      // Prefer request user cache if present; else one lean read
+      let actor = {
+        fromName: 'Someone',
+        fromPhoto: '',
+        fromGender: '',
+      };
+      try {
+        actor = await actorPayload(User, req.userId);
+      } catch {
+        /* keep defaults */
+      }
+
       const payload = {
         _id: message._id,
         roomId: room,
@@ -501,19 +580,21 @@ router.post('/send', auth, async (req, res) => {
         replyTo: replyToPayload,
         viewOnce: !!message.viewOnce,
         viewOnceOpened: !!message.viewOnceOpened,
+        fromName: actor.fromName,
+        fromPhoto: actor.fromPhoto,
+        fromGender: actor.fromGender,
+        senderName: actor.fromName,
+        senderPhoto: actor.fromPhoto,
+        senderGender: actor.fromGender,
       };
       const receiverPayload = message.viewOnce
         ? { ...payload, mediaUrl: null }
         : payload;
 
-      const { notifyUser, actorPayload } = require('../utils/realtime');
+      // Instant ack to sender
       notifyUser(io, req.userId, 'chat:message', payload);
 
       if (!undelivered) {
-        const User = require('../models/User');
-        const { createNotification } = require('../services/notifications');
-        io.to(room).emit('chat:message', receiverPayload);
-        const actor = await actorPayload(User, req.userId);
         notifyUser(io, receiverId, 'chat:message', receiverPayload);
         if (message.delivered) {
           notifyUser(io, req.userId, 'chat:delivered', {
@@ -526,29 +607,53 @@ router.post('/send', auth, async (req, res) => {
           roomId: room,
           text: message.text,
           type: message.type,
+          messageId: String(message._id),
           fromName: actor.fromName,
           fromPhoto: actor.fromPhoto,
           fromGender: actor.fromGender,
         });
-        const preview =
-          message.type === 'image'
-            ? '📷 Photo'
-            : message.type === 'audio'
-              ? '🎵 Voice message'
-              : message.text || 'New message';
-        await createNotification(io, {
-          userId: receiverId,
-          type: 'chat',
-          title: 'New message',
-          body: preview,
-          actorId: req.userId,
-          groupKey: `chat:${room}`,
-          deepLink: `/messages/${req.userId}`,
-          data: {
-            screen: 'messages',
-            userId: String(req.userId),
-            roomId: room,
-          },
+
+        // Push after response (don't block HTTP)
+        setImmediate(() => {
+          (async () => {
+            try {
+              const { createNotification } = require('../services/notifications');
+              const { isViewingChat } = require('../utils/activeChat');
+              const recipientInChat = receiverOnline
+                ? await isViewingChat(receiverId, req.userId)
+                : false;
+              const preview =
+                message.viewOnce
+                  ? '📷 View once photo'
+                  : message.type === 'image'
+                    ? '📷 Photo'
+                    : message.type === 'audio'
+                      ? '🎵 Voice message'
+                      : message.text || 'New message';
+              void createNotification(io, {
+                userId: receiverId,
+                type: 'chat',
+                title: actor.fromName || 'New message',
+                body: preview,
+                actorId: req.userId,
+                actorName: actor.fromName,
+                actorPhoto: actor.fromPhoto,
+                actorGender: actor.fromGender,
+                imageUrl: actor.fromPhoto || '',
+                groupKey: `chat:${room}`,
+                deepLink: `/messages/${req.userId}`,
+                push: !recipientInChat,
+                data: {
+                  screen: 'messages',
+                  userId: String(req.userId),
+                  roomId: room,
+                  messageId: String(message._id),
+                },
+              });
+            } catch (err) {
+              console.error('chat/send push error:', err.message);
+            }
+          })();
         });
       }
     }
@@ -594,44 +699,48 @@ router.get('/poll/:otherUserId', auth, async (req, res) => {
       })
       .lean();
 
-    // Mark incoming messages as read + notify sender for blue ticks
-    const now = new Date();
-    const unread = await Message.find({
-      roomId: room,
-      receiverId: myObjId,
-      read: false,
-      undelivered: { $ne: true },
-      deletedFor: { $nin: [myObjId] },
-    })
-      .select('_id senderId')
-      .lean();
+    // Mark read only when the open chat thread polls (not background list sync)
+    const markRead =
+      req.query.markRead === '1' || req.query.markRead === 'true';
+    if (markRead) {
+      const now = new Date();
+      const unread = await Message.find({
+        roomId: room,
+        receiverId: myObjId,
+        read: false,
+        undelivered: { $ne: true },
+        deletedFor: { $nin: [myObjId] },
+      })
+        .select('_id senderId')
+        .lean();
 
-    if (unread.length) {
-      const messageIds = unread.map((m) => String(m._id));
-      await Message.updateMany(
-        { _id: { $in: unread.map((m) => m._id) } },
-        {
-          $set: {
-            read: true,
-            readAt: now,
-            delivered: true,
-            deliveredAt: now,
+      if (unread.length) {
+        const messageIds = unread.map((m) => String(m._id));
+        await Message.updateMany(
+          { _id: { $in: unread.map((m) => m._id) } },
+          {
+            $set: {
+              read: true,
+              readAt: now,
+              delivered: true,
+              deliveredAt: now,
+            },
           },
-        },
-      );
+        );
 
-      const io = req.app.get('io');
-      if (io) {
-        const { notifyUser } = require('../utils/realtime');
-        const payload = {
-          by: String(req.userId),
-          messageIds,
-          roomId: room,
-        };
-        io.to(room).emit('chat:read', payload);
-        const senders = new Set(unread.map((m) => String(m.senderId)));
-        for (const sid of senders) {
-          if (sid !== String(req.userId)) notifyUser(io, sid, 'chat:read', payload);
+        const io = req.app.get('io');
+        if (io) {
+          const { notifyUser } = require('../utils/realtime');
+          const payload = {
+            by: String(req.userId),
+            messageIds,
+            roomId: room,
+          };
+          io.to(room).emit('chat:read', payload);
+          const senders = new Set(unread.map((m) => String(m.senderId)));
+          for (const sid of senders) {
+            if (sid !== String(req.userId)) notifyUser(io, sid, 'chat:read', payload);
+          }
         }
       }
     }
@@ -836,14 +945,32 @@ router.post('/delete', auth, async (req, res) => {
 router.get('/unread-count', auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
+    const ConversationState = require('../models/ConversationState');
     const myObjId = new mongoose.Types.ObjectId(req.userId);
-    const count = await Message.countDocuments({
+
+    // WhatsApp: archived unread lives under Archive, not the main badge
+    const archived = await ConversationState.find({
+      userId: req.userId,
+      archived: true,
+    })
+      .select('otherUserId')
+      .lean();
+    const archivedIds = archived.map((s) => String(s.otherUserId));
+
+    const match = {
       receiverId: myObjId,
       read: false,
       isDeleted: { $ne: true },
       undelivered: { $ne: true },
       deletedFor: { $nin: [myObjId] },
-    });
+    };
+    if (archivedIds.length) {
+      match.senderId = {
+        $nin: archivedIds.map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
+
+    const count = await Message.countDocuments(match);
     res.json({ unread: count });
   } catch (err) {
     console.error('chat/unread-count error:', err);
@@ -993,7 +1120,7 @@ router.get('/archived', auth, async (req, res) => {
               type: 'text',
               createdAt: state.archivedAt || state.updatedAt,
             },
-            unreadCount: 0,
+            unreadCount: await countUnreadForPair(req.userId, otherUserId),
             otherUser: safeOther
               ? {
                   ...safeOther,
@@ -1004,10 +1131,11 @@ router.get('/archived', auth, async (req, res) => {
           };
         }
 
+        const unreadCount = await countUnreadForPair(req.userId, otherUserId);
         const enriched = await enrichConversationRow(req.userId, {
           _id: room,
           lastMessage,
-          unreadCount: 0,
+          unreadCount,
         });
         return { ...enriched, archivedAt: state.archivedAt };
       }),
@@ -1131,4 +1259,6 @@ router.delete('/conversation/:otherUserId', auth, async (req, res) => {
 
 module.exports = router;
 module.exports.roomId = roomId;
+module.exports.isConversationArchived = isConversationArchived;
+module.exports.reopenConversationForReceiver = reopenConversationForReceiver;
 

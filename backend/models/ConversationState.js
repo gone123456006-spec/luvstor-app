@@ -72,6 +72,24 @@ const conversationStateSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  /**
+   * Free-tier: per-conversation 2h chat session (10 tokens).
+   * Both the initiator AND the replier pay for their own window with this person.
+   */
+  chatSessionStartedAt: {
+    type: Date,
+    default: null,
+  },
+  chatSessionExpiresAt: {
+    type: Date,
+    default: null,
+    index: true,
+  },
+  /** Race-safe claim marker when opening a paid conversation session */
+  sessionClaimId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null,
+  },
 }, { timestamps: true });
 
 // Compound index for efficient lookups by user and conversation

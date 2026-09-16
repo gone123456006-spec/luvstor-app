@@ -45,6 +45,8 @@ function ensureGoogleSignInConfigured(mod: GoogleSigninModule) {
   mod.GoogleSignin.configure({
     webClientId: googleOAuthConfig.webClientId,
     offlineAccess: false,
+    forceCodeForRefreshToken: false,
+    scopes: ['openid', 'profile', 'email'],
   });
   configured = true;
 }
@@ -153,6 +155,23 @@ export async function signOutGoogle(): Promise<void> {
 
 export function mapGoogleSignInError(err: unknown): string {
   const mod = loadGoogleSignInModule();
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  const upper = raw.toUpperCase();
+
+  if (
+    upper.includes('DEVELOPER_ERROR') ||
+    upper.includes('CODE: 10') ||
+    upper.includes('ERROR_CODE: 10') ||
+    upper.includes('10:')
+  ) {
+    return (
+      'Google Sign-In is misconfigured for this APK (DEVELOPER_ERROR).\n' +
+      'Add this app’s signing SHA-1 in Firebase → Project settings → Your apps, ' +
+      're-download google-services.json, then rebuild the APK.\n' +
+      'Run: cd frontend && node ./scripts/print-android-sha.js'
+    );
+  }
+
   if (mod?.isErrorWithCode(err)) {
     switch (err.code) {
       case mod.statusCodes.SIGN_IN_CANCELLED:

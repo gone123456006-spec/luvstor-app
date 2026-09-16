@@ -30,7 +30,9 @@ const userSchema = new mongoose.Schema({
   interests: { type: [String], default: [] },
   relationshipGoal: { type: String, default: '' },
   photo: { type: String, default: '' },
-  /** Profile gallery — up to 6 images */
+  /** Banner / cover image — independent from DP and posts gallery */
+  coverPhoto: { type: String, default: '' },
+  /** Profile posts gallery — up to 6 images (independent from cover + DP) */
   photos: {
     type: [String],
     default: [],
@@ -61,6 +63,11 @@ const userSchema = new mongoose.Schema({
     submittedAt: { type: Date, default: null },
     reviewedAt: { type: Date, default: null },
     reviewNote: { type: String, default: '', maxlength: 500 },
+    /** smile | turn_left | turn_right */
+    pose: { type: String, default: '' },
+    matchScore: { type: Number, default: null },
+    /** Main profile photo URL at approval — used to force re-verify on change */
+    verifiedMainPhoto: { type: String, default: '' },
   },
   /** Daily open streak (UTC date key) — retention, does not gate features */
   openStreakDays: { type: Number, default: 0, min: 0 },
@@ -70,26 +77,62 @@ const userSchema = new mongoose.Schema({
   activeDeviceBoundAt: { type: Date, default: null },
   /** Chat access tokens (independent of offers / premiums / trials) */
   tokenBalance: { type: Number, default: 0, min: 0 },
+  /**
+   * How many times the user bought the 10-token pack.
+   * Drives ₹4 → ₹7 → ₹9 progressive pricing (list ₹10).
+   */
+  tokenPack10PurchaseCount: { type: Number, default: 0, min: 0 },
+  /** Last credited Razorpay payment id for token packs (idempotency) */
+  lastTokenPaymentId: { type: String, default: null, index: true },
+  /**
+   * One-time welcome tokens after first profile completion.
+   * Null until granted — never grant again.
+   */
+  welcomeTokensGrantedAt: { type: Date, default: null },
+  /**
+   * One-time tokens after photo verification is approved.
+   * Null until granted — never grant again.
+   */
+  photoVerificationTokensGrantedAt: { type: Date, default: null },
+  /**
+   * Post-gallery first-add tokens (5 each). Count never decreases on remove.
+   * New users only — existing galleries are locked out on first init.
+   */
+  galleryPostRewardCount: { type: Number, default: 0, min: 0 },
+  galleryPostRewardInitialized: { type: Boolean, default: false },
+  /** Unique invite code for Refer & Earn (e.g. K7M2PQ). Omit until assigned. */
+  referralCode: { type: String, sparse: true, unique: true },
+  /** Who referred this user (set once on first login) */
+  referredBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true,
+  },
+  referredAt: { type: Date, default: null },
+  referralCodeUsed: { type: String, default: null },
   lastSpinDate: { type: String, default: null },
+  /** Rolling 24h spin window starts at first spin in the period */
+  spinWindowStartedAt: { type: Date, default: null },
   /** 1–7 daily spin reward cycle; wraps back to 1 after day 7 */
   spinCycleDay: { type: Number, default: 0, min: 0, max: 7 },
   spinCycleDate: { type: String, default: null },
   /** Active chat session (server time; duration depends on subscription tier) */
   chatSessionStartedAt: { type: Date, default: null },
   chatSessionExpiresAt: { type: Date, default: null, index: true },
-  /** Subscription: free | gold | platinum | black */
+  /** Subscription: free | explore | gold | platinum | black */
   subscriptionPlan: {
     type: String,
-    enum: ['free', 'gold', 'platinum', 'black'],
+    enum: ['free', 'explore', 'gold', 'platinum', 'black'],
     default: 'free',
   },
   subscriptionExpiresAt: { type: Date, default: null, index: true },
   /** Last processed Razorpay payment for subscription (idempotency) */
   lastSubscriptionPaymentId: { type: String, default: null, index: true },
-  /** Daily spin allowance (resets by UTC date key) */
+  /** Spin allowance within the current 24h window (from first spin) */
   subscriptionSpinsUsedToday: { type: Number, default: 0, min: 0 },
   subscriptionSpinsDate: { type: String, default: null },
-  /** Black tier: cap spin token wins per day */
+  /** Black tier: cap spin token wins per 24h window */
   spinTokensWonToday: { type: Number, default: 0, min: 0 },
   /** Black: daily 40-min discover top spot window */
   discoverTopSpotUntil: { type: Date, default: null },
@@ -110,6 +153,15 @@ const userSchema = new mongoose.Schema({
     gender: { type: String, default: '' },
     radiusKm: { type: Number, default: null },
     activeWithinMinutes: { type: Number, default: 0 },
+    updatedAt: { type: Date, default: null },
+  },
+  /**
+   * Explore (random video/voice) match preferences.
+   * Independent from Discover filters so Explore can stay dating-focused.
+   */
+  explorePrefs: {
+    showMe: { type: String, default: 'All' },
+    verifiedOnly: { type: Boolean, default: false },
     updatedAt: { type: Date, default: null },
   },
   isOnline: { type: Boolean, default: false },
@@ -133,6 +185,14 @@ const userSchema = new mongoose.Schema({
     /** WhatsApp-style: show message text in the tray, or only "New message" */
     showMessagePreview: { type: Boolean, default: true },
   },
+  /** View engagement nudges tracking (rate limiting) */
+  engagementNudges: {
+    type: [{
+      targetId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      sentAt: { type: Date, default: Date.now },
+    }],
+    default: [],
+  },
 }, { timestamps: true });
 
 // Geospatial index for nearby queries
@@ -150,5 +210,7 @@ userSchema.index({ isDeactivated: 1, deletionScheduledAt: 1, lastSeen: -1 });
 userSchema.index({ 'photoVerification.status': 1, 'photoVerification.submittedAt': 1 });
 // Retention streak lookups
 userSchema.index({ lastOpenDate: 1 });
+// View engagement rate limiting
+userSchema.index({ 'engagementNudges.sentAt': 1 });
 
 module.exports = mongoose.model('User', userSchema);

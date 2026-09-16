@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
     Keyboard,
     KeyboardAvoidingView,
     Platform,
@@ -33,6 +34,7 @@ import {
     syncProfileToServer,
     userToLocalProfile,
 } from "../utils/auth";
+import { useAuth } from "../contexts/AuthContext";
 import {
     followGenderChange,
     oppositeShowMe,
@@ -159,8 +161,21 @@ const fieldStyles = StyleSheet.create({
 export default function CreateProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { refreshSession } = useAuth();
   const [step, setStep] = useState(0);
   const [checkingSession, setCheckingSession] = useState(true);
+
+  // Form States
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [age, setAge] = useState("");
+  const [gender, setGender] = useState("");
+  const [showMe, setShowMe] = useState<ShowMeValue>("All");
+  const [height, setHeight] = useState("");
+  const [tagline, setTagline] = useState("");
+  const [bio, setBio] = useState("");
+  const [interests, setInterests] = useState<string[]>([]);
+  const [relationshipGoal, setRelationshipGoal] = useState("");
 
   React.useEffect(() => {
     (async () => {
@@ -182,10 +197,31 @@ export default function CreateProfileScreen() {
         if (token) {
           const { apiRequest } = await import("../utils/api");
           const user = await apiRequest("/api/users/me", token);
-          if (user?.name && String(user.name).trim()) {
-            await saveLocalProfile(accountEmail, userToLocalProfile(user));
+          const mapped = userToLocalProfile(user as Record<string, unknown>);
+          if (isLocalProfileComplete(mapped)) {
+            await saveLocalProfile(accountEmail, mapped);
             router.replace("/(tabs)");
+            return;
           }
+          // Prefill Google / partial account data into the form
+          if (mapped.photo) setPhoto(String(mapped.photo));
+          if (mapped.name) setName(String(mapped.name));
+          if (mapped.age != null && mapped.age !== "")
+            setAge(String(mapped.age));
+          if (mapped.gender) setGender(String(mapped.gender));
+          if (mapped.showMe) setShowMe(mapped.showMe as ShowMeValue);
+          if (mapped.height) setHeight(String(mapped.height));
+          if (mapped.tagline) setTagline(String(mapped.tagline));
+          if (mapped.bio) setBio(String(mapped.bio));
+          if (Array.isArray(mapped.interests) && mapped.interests.length) {
+            setInterests(mapped.interests.map(String));
+          }
+          if (mapped.relationshipGoal) {
+            setRelationshipGoal(String(mapped.relationshipGoal));
+          }
+        } else if (local) {
+          if (local.photo) setPhoto(String(local.photo));
+          if (local.name) setName(String(local.name));
         }
       } catch {
         /* new account — show create profile */
@@ -194,18 +230,6 @@ export default function CreateProfileScreen() {
       }
     })();
   }, []);
-
-  // Form States
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [age, setAge] = useState("");
-  const [gender, setGender] = useState("");
-  const [showMe, setShowMe] = useState<ShowMeValue>("All");
-  const [height, setHeight] = useState("");
-  const [tagline, setTagline] = useState("");
-  const [bio, setBio] = useState("");
-  const [interests, setInterests] = useState<string[]>([]);
-  const [relationshipGoal, setRelationshipGoal] = useState("");
 
   const handleNext = () => {
     if (step < STEPS.length - 1) {
@@ -250,26 +274,40 @@ export default function CreateProfileScreen() {
       await saveLocalProfile(accountEmail, profileData);
       const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
       if (token) {
-        const serverUser = await syncProfileToServer(token, profileData);
+        const syncRes: any = await syncProfileToServer(token, profileData);
+        const profile = syncRes?.profile || syncRes || {};
+        const welcomeTokens = Number(syncRes?.welcomeTokensGranted || 0);
         // Also fetch /me so we get the unique publicId (ABCD1234)
-        let publicId = "";
+        let publicId = String(syncRes?.publicId || profile?.publicId || "");
         try {
           const me: any = await apiRequest("/api/users/me", token);
-          publicId = String(me?.publicId || "");
+          publicId = String(me?.publicId || publicId || "");
         } catch {
           /* ignore */
         }
         await saveLocalProfile(accountEmail, {
           ...profileData,
-          photo: serverUser?.photo
-            ? String(serverUser.photo)
+          photo: profile?.photo
+            ? String(profile.photo)
             : profileData.photo,
           publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : "",
         });
+        if (welcomeTokens > 0) {
+          Alert.alert(
+            "Welcome bonus!",
+            `You received ${welcomeTokens} free tokens for completing your profile.`,
+          );
+        }
       }
     } catch (e) {
       console.error("Failed to save profile", e);
     }
+    try {
+      await refreshSession();
+    } catch {
+      /* ignore */
+    }
+    // After profile creation → Discover (home)
     router.replace("/(tabs)");
   };
 
@@ -333,7 +371,7 @@ export default function CreateProfileScreen() {
             />
           ) : (
             <View style={s.avatarPlaceholder}>
-              <Ionicons name="person" size={72} color="#D1D5DB" />
+              <Ionicons name="person" size={72} color="#FFFFFF" />
             </View>
           )}
           <View style={s.cameraBadge}>
@@ -691,7 +729,7 @@ const s = StyleSheet.create({
     width: "100%",
     height: "100%",
     borderRadius: 74,
-    backgroundColor: "#E5E7EB",
+    backgroundColor: "#DFE5E7",
     justifyContent: "center",
     alignItems: "center",
   },

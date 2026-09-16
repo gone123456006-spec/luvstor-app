@@ -228,7 +228,12 @@ export default function CallOverlay() {
             <View style={styles.dimOverlay} />
           </>
         ) : (
-          <View style={StyleSheet.absoluteFill} />
+          <View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center' },
+            ]}
+          />
         )}
 
         {showVideo && RTCView && call.localStream && !call.cameraOff ? (

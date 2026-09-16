@@ -150,3 +150,24 @@ export async function getRazorpayKey(
     return null;
   }
 }
+
+export type TokenPackOffer = {
+  id: string;
+  tokens: number;
+  listPriceInr: number;
+  priceInr: number;
+  pricePaise: number;
+  isOffer?: boolean;
+  offerLabel?: string;
+};
+
+/** Personalized pack prices (10-token ladder: ₹4 → ₹7 → ₹9). */
+export async function fetchTokenPacks(
+  token: string,
+): Promise<{ packs: TokenPackOffer[]; tokenPack10PurchaseCount: number }> {
+  const data = await apiRequest('/api/payment/packs', token);
+  return {
+    packs: Array.isArray(data?.packs) ? data.packs : [],
+    tokenPack10PurchaseCount: Number(data?.tokenPack10PurchaseCount) || 0,
+  };
+}

@@ -23,7 +23,13 @@ const {
 } = require('./jobs/accountDeletion');
 const { pruneStaleTokens } = require('./jobs/deviceTokenCleanup');
 const { runDailySuggestionsIfDue } = require('./jobs/dailySuggestions');
-const { expireDueSubscriptions } = require('./services/subscriptions');
+const { runEngagingNotifications } = require('./jobs/engagingNotificationScheduler');
+const {
+  expireDueSubscriptions,
+} = require('./services/subscriptions');
+const {
+  approveDuePhotoVerifications,
+} = require('./routes/verification');
 const fcm = require('./services/fcm');
 const pushQueue = require('./services/pushQueue');
 const {
@@ -130,6 +136,22 @@ app.use('/api/admin', require('./routes/adminModeration'));
 app.use('/api/verification', require('./routes/verification'));
 app.use('/api/recommendations', require('./routes/recommendations'));
 app.use('/api/retention', require('./routes/retention'));
+app.use('/api/referrals', require('./routes/referrals'));
+app.use('/api/share', require('./routes/share'));
+app.use('/api/engagement', require('./routes/engagement'));
+app.use('/u', require('./routes/profileLink'));
+app.use('/r', require('./routes/referralLink'));
+app.use('/go', require('./routes/shortLink'));
+
+// OneLink-style path: /luvstor/:slug (template from ONELINK_TEMPLATE_PATH)
+{
+  const { getOnelinkTemplatePath } = require('./services/shareLinks');
+  const { resolveSlug } = require('./routes/shortLink');
+  const tpl = getOnelinkTemplatePath();
+  app.get(`/${tpl}/:slug`, (req, res, next) => {
+    resolveSlug(req, res).catch(next);
+  });
+}
 
 app.get('/', (req, res) => {
   res.json({
@@ -241,10 +263,17 @@ function mongoOptions() {
 mongoose.connection.on('connected', () => {
   console.log('✅ MongoDB connected:', mongoUriForLog());
   console.log(`   pool max=${MONGO_POOL}`);
-  const { repairGoogleUidIndex } = require('./utils/repairGoogleUidIndex');
-  repairGoogleUidIndex().catch((err) =>
-    console.warn('googleUid index repair failed:', err.message),
-  );
+  const repairMod = require('./utils/repairGoogleUidIndex');
+  if (typeof repairMod.repairGoogleUidIndex === 'function') {
+    repairMod.repairGoogleUidIndex().catch((err) =>
+      console.warn('googleUid index repair failed:', err.message),
+    );
+  }
+  if (typeof repairMod.repairReferralCodeIndex === 'function') {
+    repairMod.repairReferralCodeIndex().catch((err) =>
+      console.warn('referralCode index repair failed:', err.message),
+    );
+  }
 });
 mongoose.connection.on('disconnected', () => {
   console.warn('⚠️  MongoDB disconnected — retrying, API stays up');
@@ -393,8 +422,11 @@ async function startHttp() {
     console.log(`🔌 WebSocket: ${host.replace(/^http/, 'ws')}`);
     console.log(`📧 Auth: POST /api/auth/send-otp  |  POST /api/auth/google`);
     console.log(`🔔 Push: ${fcm.isEnabled() ? 'FCM ready' : 'FCM disabled (no credentials)'}`);
-    const { isGoogleAuthConfigured } = require('./services/googleAuth');
-    console.log(`🔐 Google login: ${isGoogleAuthConfigured() ? 'ready' : 'disabled (set GOOGLE_WEB_CLIENT_ID)'}`);
+    const { isGoogleAuthConfigured, getGoogleAuthStatus } = require('./services/googleAuth');
+    const gStatus = getGoogleAuthStatus();
+    console.log(
+      `🔐 Google login: ${isGoogleAuthConfigured() ? 'ready' : 'disabled (set GOOGLE_WEB_CLIENT_ID)'} (${gStatus.audienceCount} audience(s))`,
+    );
     console.log(`📈 Health: GET /health  |  Ping: GET /ping  |  Ready: GET /ready`);
 
     setInterval(async () => {
@@ -434,6 +466,38 @@ async function startHttp() {
 
     setInterval(runExpireSubscriptions, 5 * 60 * 1000);
 
+    const runPhotoVerificationAnalysis = () => {
+      if (mongoose.connection.readyState !== 1) return Promise.resolve();
+      return runScheduledJob('photo-verification-analysis', () =>
+        approveDuePhotoVerifications(io).then((n) => {
+          if (n) {
+            console.log(
+              `[Scheduled Job] Finished photo analysis for ${n} user(s)`,
+            );
+          }
+        }),
+      ).catch((err) =>
+        console.error(
+          '[Scheduled Job] photo verification analysis failed:',
+          err?.message || err,
+        ),
+      );
+    };
+
+    // Every minute: analyse pending selfies past the 30-minute window
+    setInterval(runPhotoVerificationAnalysis, 60 * 1000);
+
+    // Engaging notifications: nearby users, active now, conversation starters, etc.
+    // Run every 10 minutes for timely, relevant notifications
+    setInterval(() => {
+      if (mongoose.connection.readyState !== 1) return;
+      runScheduledJob('engaging-notifications', () =>
+        runEngagingNotifications(io),
+      ).catch((err) =>
+        console.error('[Scheduled Job] engaging notifications failed:', err?.message || err),
+      );
+    }, 10 * 60 * 1000);
+
     setTimeout(async () => {
       if (mongoose.connection.readyState !== 1) return;
       await runScheduledJob('startup-jobs', async () => {
@@ -444,6 +508,7 @@ async function startHttp() {
           await pruneStaleTokens();
           await runDailySuggestionsIfDue(io);
           await runExpireSubscriptions();
+          await runPhotoVerificationAnalysis();
         } catch (err) {
           console.error('[Startup] jobs failed:', err?.message || err);
         }

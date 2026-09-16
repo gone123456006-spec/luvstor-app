@@ -52,6 +52,15 @@ function validateProductionEnv() {
     warnings.push('GOOGLE_WEB_CLIENT_ID not set — Google Sign-In disabled');
   }
 
+  if (
+    !process.env.RAZORPAY_KEY_ID?.trim() ||
+    !process.env.RAZORPAY_KEY_SECRET?.trim()
+  ) {
+    warnings.push(
+      'RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET missing — subscriptions & token packs disabled',
+    );
+  }
+
   if (!process.env.HEARTBEAT_SECRET?.trim()) {
     warnings.push(
       'HEARTBEAT_SECRET not set — /ping is open in production (Render blueprint auto-generates this)',

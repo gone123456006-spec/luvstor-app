@@ -4,7 +4,8 @@
  * Expo Go cannot load native WebRTC — isWebRTCAvailable() returns false there.
  */
 
-import { Platform } from 'react-native';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
 export type CallMediaType = 'voice' | 'video';
 
@@ -21,20 +22,59 @@ type PeerHandlers = {
 };
 
 let WebRTC: any = null;
-let loadAttempted = false;
+let loadError: string | null = null;
+
+/** True only inside the real Expo Go client (not standalone / APK / dev-client). */
+function isExpoGoRuntime(): boolean {
+  if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
+    return true;
+  }
+  // Fallback for older Constants shapes
+  return Constants.appOwnership === 'expo';
+}
+
+/** Resolve native WebRTC under bridgeless / New Architecture. */
+function probeNativeWebRTCModule(): any {
+  const fromNative = (NativeModules as any)?.WebRTCModule;
+  if (fromNative != null) return fromNative;
+  try {
+    return TurboModuleRegistry.get('WebRTCModule');
+  } catch {
+    return null;
+  }
+}
 
 function loadWebRTC() {
-  if (loadAttempted) return WebRTC;
-  loadAttempted = true;
+  if (WebRTC) return WebRTC;
+
+  if (Platform.OS === 'web') {
+    return null;
+  }
+
+  const nativeMod = probeNativeWebRTCModule();
+
+  // Real Expo Go has no WebRTC native module — stop early with a clear reason.
+  // Standalone APKs must never be treated as Expo Go just because of Constants quirks.
+  if (isExpoGoRuntime() && nativeMod == null) {
+    loadError = 'expo-go';
+    return null;
+  }
+
+  if (nativeMod != null && (NativeModules as any).WebRTCModule == null) {
+    try {
+      (NativeModules as any).WebRTCModule = nativeMod;
+    } catch {
+      /* Proxy NativeModules may ignore assignment — library patch covers that */
+    }
+  }
+
   try {
-    // Native module — fails in Expo Go
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     WebRTC = require('react-native-webrtc');
+    loadError = null;
   } catch (err) {
-    console.warn(
-      '[WebRTC] Native module unavailable (use a development build for calls):',
-      (err as Error)?.message
-    );
+    loadError = (err as Error)?.message || 'load-failed';
+    console.warn('[WebRTC] Native module failed to load:', loadError);
     WebRTC = null;
   }
   return WebRTC;
@@ -44,7 +84,22 @@ export function isWebRTCAvailable(): boolean {
   if (Platform.OS === 'web') {
     return typeof (globalThis as any).RTCPeerConnection === 'function';
   }
+  // Retry on each check until success — native modules can be late on cold start
   return !!loadWebRTC();
+}
+
+/** User-facing reason when calls cannot start. */
+export function getWebRTCUnavailableMessage(): string {
+  if (loadError === 'expo-go' || (isExpoGoRuntime() && !probeNativeWebRTCModule())) {
+    return 'Voice/video calls need the Luvstor APK (Expo Go does not include WebRTC).';
+  }
+  if (loadError) {
+    return (
+      'Voice/video calls could not start (WebRTC failed to load). ' +
+      'Install the latest Luvstor APK rebuild.'
+    );
+  }
+  return 'Voice/video calls are not available on this install. Update to the latest APK.';
 }
 
 function getRTC() {
@@ -58,7 +113,7 @@ function getRTC() {
     };
   }
   const mod = loadWebRTC();
-  if (!mod) throw new Error('WebRTC is not available on this build');
+  if (!mod) throw new Error(getWebRTCUnavailableMessage());
   return mod;
 }
 

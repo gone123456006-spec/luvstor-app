@@ -5,6 +5,7 @@ const User = require('../models/User');
 const auth = require('../middleware/auth');
 const { emitFriendUpdate, emitFriendSync } = require('../utils/realtime');
 const { createNotification } = require('../services/notifications');
+const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
 
 // ─────────────────────────────────────────────
 // POST /api/friends/like
@@ -461,11 +462,13 @@ router.get('/status/:userId', auth, async (req, res) => {
 
     const friendship = await Friendship.findOne({ userA, userB }).lean();
 
+    const canSendMedia = await hasBidirectionalChat(req.userId, targetUserId);
+
     if (!friendship) {
-      return res.json({ 
-        status: 'stranger', 
+      return res.json({
+        status: 'stranger',
         areFriends: false,
-        canSendMedia: false,
+        canSendMedia,
         canCall: false,
         iLiked: false,
         theyLiked: false,
@@ -479,10 +482,10 @@ router.get('/status/:userId', auth, async (req, res) => {
     const theyLiked =
       matched || String(friendship.initiatedBy) === targetUserId;
 
-    res.json({ 
+    res.json({
       status: friendship.status,
       areFriends: matched,
-      canSendMedia: matched,
+      canSendMedia,
       canCall: matched,
       iLiked,
       theyLiked,

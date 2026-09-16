@@ -97,17 +97,25 @@ async function tokenFetch(
 
 export async function fetchChatAccess(
   token: string,
+  otherUserId?: string | null,
 ): Promise<ChatAccessStatus> {
-  return tokenFetch('/api/tokens/chat-access', token);
+  const q =
+    otherUserId && String(otherUserId)
+      ? `?otherUserId=${encodeURIComponent(String(otherUserId))}`
+      : '';
+  return tokenFetch(`/api/tokens/chat-access${q}`, token);
 }
 
-/** Deduct 10 tokens only when starting/renewing a 2h session (idempotent). */
+/** Deduct 10 tokens when starting/renewing a 2h session (per conversation for free users). */
 export async function ensureChatSession(
   token: string,
+  otherUserId?: string | null,
 ): Promise<ChatAccessStatus> {
   return tokenFetch('/api/tokens/ensure-session', token, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(
+      otherUserId ? { otherUserId: String(otherUserId) } : {},
+    ),
   });
 }
 
@@ -117,6 +125,8 @@ export async function fetchTokenBalance(token: string): Promise<{
   canSpinToday: boolean;
   spinsRemaining: number;
   spinsPerDay: number;
+  nextSpinAt?: string | null;
+  spinCooldownMs?: number;
   spinCycleDay?: number;
   spinCycleTokens?: number;
   spinCycle?: number[];
@@ -136,6 +146,8 @@ export async function fetchTokenBalance(token: string): Promise<{
     canSpinToday: boolean;
     spinsRemaining: number;
     spinsPerDay: number;
+    nextSpinAt?: string | null;
+    spinCooldownMs?: number;
     spinCycleDay?: number;
     spinCycleTokens?: number;
     spinCycle?: number[];
@@ -149,7 +161,7 @@ export async function fetchTokenBalance(token: string): Promise<{
   }>;
 }
 
-/** Claim daily spin — server chooses reward and updates tokenBalance. */
+/** Claim lucky spin — server chooses reward and updates tokenBalance. */
 export async function claimDailySpin(authToken: string): Promise<{
   success: boolean;
   winIndex: number;
@@ -158,6 +170,7 @@ export async function claimDailySpin(authToken: string): Promise<{
   canSpinToday: boolean;
   spinsRemaining?: number;
   spinsPerDay?: number;
+  nextSpinAt?: string | null;
   code?: string;
   error?: string;
 }> {
@@ -179,6 +192,7 @@ export async function claimDailySpin(authToken: string): Promise<{
         tokenBalance: data.tokenBalance ?? 0,
         canSpinToday: false,
         spinsRemaining: data.spinsRemaining ?? 0,
+        nextSpinAt: data.nextSpinAt ?? null,
         code: data.code,
         error: data.error || 'Spin failed',
       };

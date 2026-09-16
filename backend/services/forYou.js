@@ -24,7 +24,7 @@ const {
 const { getRedis } = require("../utils/redis");
 
 const FOR_YOU_SELECT =
-  "publicId name age bio photo photos gender interests height relationshipGoal " +
+  "publicId name age bio photo coverPhoto photos gender interests height relationshipGoal " +
   "isOnline lastSeen location createdAt subscriptionPlan subscriptionExpiresAt " +
   "photoVerification discoveryPrefs showMe";
 
@@ -36,6 +36,9 @@ const MAX_RANKED = 200;
 const MAX_PAGE = 40;
 const CACHE_TTL_SEC = 600;
 const MAX_EXCLUDE = 100;
+/** In-process fallback when Redis is down (local / single instance) */
+const memoryRanked = new Map();
+const MEMORY_CACHE_MAX = 500;
 
 function toObjectId(id) {
   try {
@@ -129,31 +132,56 @@ function cacheKey(viewerId, dayKey) {
   return `foryou:v1:${viewerId}:${dayKey}`;
 }
 
-async function readRankedCache(viewerId) {
-  try {
-    const r = await getRedis();
-    if (!r) return null;
-    const raw = await r.get(cacheKey(viewerId, todayKey()));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
+function readMemoryCache(key) {
+  const hit = memoryRanked.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    memoryRanked.delete(key);
     return null;
+  }
+  return Array.isArray(hit.ranked) ? hit.ranked : null;
+}
+
+function writeMemoryCache(key, ranked) {
+  memoryRanked.set(key, {
+    ranked,
+    expiresAt: Date.now() + CACHE_TTL_SEC * 1000,
+  });
+  if (memoryRanked.size > MEMORY_CACHE_MAX) {
+    const first = memoryRanked.keys().next().value;
+    if (first) memoryRanked.delete(first);
   }
 }
 
+async function readRankedCache(viewerId) {
+  const key = cacheKey(viewerId, todayKey());
+  try {
+    const r = await getRedis();
+    if (r) {
+      const raw = await r.get(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          writeMemoryCache(key, parsed);
+          return parsed;
+        }
+      }
+    }
+  } catch {
+    /* fall through to memory */
+  }
+  return readMemoryCache(key);
+}
+
 async function writeRankedCache(viewerId, ranked) {
+  const key = cacheKey(viewerId, todayKey());
+  writeMemoryCache(key, ranked);
   try {
     const r = await getRedis();
     if (!r) return;
-    await r.set(
-      cacheKey(viewerId, todayKey()),
-      JSON.stringify(ranked),
-      "EX",
-      CACHE_TTL_SEC,
-    );
+    await r.set(key, JSON.stringify(ranked), "EX", CACHE_TTL_SEC);
   } catch {
-    /* cache is optional */
+    /* memory cache still covers this process */
   }
 }
 
@@ -256,6 +284,7 @@ async function hydrateUsers(viewer, rankedSlice, now) {
         age: doc.age,
         bio: doc.bio,
         photo: doc.photo,
+        coverPhoto: doc.coverPhoto || "",
         photos: doc.photos || [],
         gender: doc.gender,
         interests: doc.interests,

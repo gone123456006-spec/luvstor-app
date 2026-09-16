@@ -143,6 +143,11 @@ export async function apiGoogleLogin(
   options?: { forceTransfer?: boolean }
 ): Promise<{ success: boolean; token: string; user: any }> {
   const deviceId = await getOrCreateDeviceId();
+  const { peekPendingReferralCode, captureInstallReferrerOnce } = await import(
+    './pendingReferral'
+  );
+  await captureInstallReferrerOnce();
+  const referralCode = await peekPendingReferralCode();
   return apiFetch('/api/auth/google', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -150,6 +155,7 @@ export async function apiGoogleLogin(
       idToken,
       deviceId,
       forceTransfer: Boolean(options?.forceTransfer),
+      ...(referralCode ? { referralCode } : {}),
     }),
   }) as Promise<{ success: boolean; token: string; user: any }>;
 }
@@ -178,6 +184,11 @@ export async function apiVerifyOTP(
   options?: { forceTransfer?: boolean }
 ): Promise<{ success: boolean; token: string; user: any }> {
   const deviceId = await getOrCreateDeviceId();
+  const { peekPendingReferralCode, captureInstallReferrerOnce } = await import(
+    './pendingReferral'
+  );
+  await captureInstallReferrerOnce();
+  const referralCode = await peekPendingReferralCode();
   return apiFetch('/api/auth/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -186,6 +197,7 @@ export async function apiVerifyOTP(
       otp,
       deviceId,
       forceTransfer: Boolean(options?.forceTransfer),
+      ...(referralCode ? { referralCode } : {}),
     }),
   }) as Promise<{ success: boolean; token: string; user: any }>;
 }

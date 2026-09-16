@@ -1,6 +1,21 @@
-/** True when the user finished onboarding (has a display name). */
+/** True when the user finished in-app profile creation (not just Google name/photo). */
 function isProfileComplete(user) {
-  return Boolean(user?.name && String(user.name).trim().length > 0);
+  if (!user) return false;
+  const name = String(user.name || '').trim();
+  const gender = String(user.gender || '').trim();
+  const photo = String(
+    user.photo || (Array.isArray(user.photos) && user.photos[0]) || '',
+  ).trim();
+  const age = Number(user.age);
+  const ageOk = Number.isFinite(age) && age >= 18;
+  const bio = String(user.bio || '').trim();
+  const interests = Array.isArray(user.interests)
+    ? user.interests.filter((i) => String(i || '').trim())
+    : [];
+  const goal = String(user.relationshipGoal || '').trim();
+  return Boolean(
+    name && ageOk && gender && photo && bio && interests.length > 0 && goal,
+  );
 }
 
 function serializeUser(user) {
@@ -9,6 +24,7 @@ function serializeUser(user) {
     publicId: user.publicId || '',
     email: user.email,
     name: user.name || '',
+    authProvider: user.authProvider || 'email',
     age: user.age,
     bio: user.bio || '',
     gender: user.gender || '',

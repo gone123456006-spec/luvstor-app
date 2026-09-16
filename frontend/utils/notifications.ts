@@ -15,7 +15,8 @@ export type NotificationType =
   | 'security'
   | 'system'
   | 'promo'
-  | 'suggestion';
+  | 'suggestion'
+  | 'profile_view';
 
 export type AppNotification = {
   _id: string;
@@ -33,6 +34,8 @@ export type AppNotification = {
   actorGender?: string;
   read: boolean;
   createdAt: string;
+  /** True when Profile View identity is locked behind subscription */
+  locked?: boolean;
 };
 
 export type NotificationPage = {
@@ -40,6 +43,7 @@ export type NotificationPage = {
   nextCursor: string | null;
   hasMore: boolean;
   unread: number;
+  profileViewsUnlocked?: boolean;
 };
 
 /**
@@ -68,6 +72,7 @@ export async function fetchNotifications(
     nextCursor: data?.nextCursor ?? null,
     hasMore: !!data?.hasMore,
     unread: typeof data?.unread === 'number' ? data.unread : 0,
+    profileViewsUnlocked: !!data?.profileViewsUnlocked,
   };
 }
 

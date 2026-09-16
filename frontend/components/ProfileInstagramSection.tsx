@@ -2,12 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import React from "react";
 import {
-  ActivityIndicator,
-  Dimensions,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Dimensions,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
 import { MAX_PROFILE_GALLERY } from "../constants/profile";
@@ -168,10 +168,8 @@ export default function ProfileInstagramSection({
         {manageGallery
           ? slots.map((uri, index) => {
               const busy = gallerySlotBusy === index;
-              const canAdd =
-                !uri && index === gallery.filter(Boolean).length;
-              const locked =
-                !uri && index > gallery.filter(Boolean).length;
+              const canAdd = !uri && index === gallery.filter(Boolean).length;
+              const locked = !uri && index > gallery.filter(Boolean).length;
 
               if (locked) {
                 return (

@@ -10,7 +10,7 @@ export default function BonusCoin({
   iconSize?: number;
 }) {
   const flash = iconSize ?? Math.round(size * 0.48);
-  const border = size >= 44 ? 3 : Math.max(1.5, size * 0.08);
+  const border = size >= 44 ? 2 : Math.max(1, size * 0.06);
   return (
     <View
       style={[
@@ -20,20 +20,20 @@ export default function BonusCoin({
           height: size,
           borderRadius: size / 2,
           borderWidth: border,
-          elevation: size >= 44 ? 14 : 2,
+          elevation: size >= 44 ? 4 : 1,
         },
       ]}
     >
-      <Ionicons name="flash" size={flash} color="#fff" />
+      <Ionicons name="flash" size={flash} color="#FFFFFF" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   coin: {
-    backgroundColor: "#F4C430",
+    backgroundColor: "#EAB308",
     alignItems: "center",
     justifyContent: "center",
-    borderColor: "#F7E08A",
+    borderColor: "#FDE68A",
   },
 });

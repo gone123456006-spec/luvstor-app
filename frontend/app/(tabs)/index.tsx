@@ -4,54 +4,78 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
 import React from "react";
 import {
-  ActivityIndicator,
-  Animated,
-  FlatList,
-  Modal,
-  PanResponder,
-  Platform,
-  Pressable,
-  RefreshControl,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Animated,
+    FlatList,
+    Keyboard,
+    Modal,
+    PanResponder,
+    Platform,
+    Pressable,
+    RefreshControl,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    TouchableWithoutFeedback,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAppAlert } from "../../components/AppAlert";
-import { CardGridSkeleton } from "../../components/ScreenSkeleton";
+import { ListRowSkeleton } from "../../components/ScreenSkeleton";
+import SearchModeOverlay from "../../components/SearchModeOverlay";
 import UserProfileModal from "../../components/UserProfileModal";
 import WhatsAppAvatar, {
-  getDisplayName,
+    getDisplayName,
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { API_BASE } from "../../utils/api";
 import {
-  getAuthToken,
-  getCurrentAuthUser,
-  getLocalProfile,
+    getAuthToken,
+    getCurrentAuthUser,
+    getLocalProfile,
 } from "../../utils/auth";
-import { fetchForYouPage } from "../../utils/forYou";
+import { fetchForYouPage, loadForYouFeed } from "../../utils/forYou";
 import {
-  FriendshipStatus,
-  getFriendshipStatus,
-  sendLike,
-  unlikeUser,
+    FriendshipStatus,
+    getFriendshipStatus,
+    sendLike,
+    unlikeUser,
 } from "../../utils/friends";
 import {
-  fetchNearbyUsersPage,
-  fetchSavedDiscoveryPrefs,
-  fetchUserProfile,
-  loadNearbyFeed,
-  NEARBY_PAGE_SIZE,
-  NearbyUser,
-  searchUserByPublicId,
+    fetchNearbyUsersPage,
+    fetchSavedDiscoveryPrefs,
+    fetchUserProfile,
+    loadNearbyFeed,
+    NEARBY_PAGE_SIZE,
+    NearbyUser,
+    searchUserByPublicId,
+    uploadMyLocation,
 } from "../../utils/nearby";
+import {
+    addRecentSearch,
+    clearRecentSearches,
+    getRecentSearches,
+    RECENT_SEARCH_HOME,
+    type RecentSearchPerson,
+} from "../../utils/recentSearches";
 
 const FALLBACK_AVATAR = require("../../assets/images/boy-image.png");
+
+/** Discover theme — deep purple + black */
+const D = {
+  purple: "#370372",
+  purpleSoft: "#EFE8F8",
+  purpleTrack: "#E8E0F2",
+  black: "#1C1B1F",
+  bg: "#F5F5F7",
+  surface: "#FFFFFF",
+  muted: "#79747E",
+  border: "#E7E0EC",
+  danger: "#ED4956",
+};
 
 const GENDER_OPTIONS = ["All", "Man", "Woman", "Other"];
 const DISTANCE_OPTIONS = [
@@ -120,6 +144,140 @@ function appendNewUsers(
   return newOnes.length ? [...prev, ...newOnes] : prev;
 }
 
+const STAGGER_SLOW_MS = 380;
+const STAGGER_STEP_MS = 48;
+
+/** Horizontal Nearby row — slides up from bottom when staggered. */
+function NearbyListRow({
+  item,
+  index,
+  stagger,
+  liked,
+  liking,
+  feedTab,
+  onOpenChat,
+  onOpenProfile,
+  onToggleLike,
+}: {
+  item: NearbyUser;
+  index: number;
+  stagger: boolean;
+  liked: boolean;
+  liking: boolean;
+  feedTab: "nearby" | "for_you";
+  onOpenChat: () => void;
+  onOpenProfile: () => void;
+  onToggleLike: () => void;
+}) {
+  const anim = React.useRef(new Animated.Value(stagger ? 0 : 1)).current;
+
+  React.useEffect(() => {
+    if (!stagger) {
+      anim.setValue(1);
+      return;
+    }
+    anim.setValue(0);
+    const delay = Math.min(index, 18) * STAGGER_STEP_MS;
+    const t = setTimeout(() => {
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: true,
+      }).start();
+    }, delay);
+    return () => clearTimeout(t);
+  }, [stagger, index, item.id, anim]);
+
+  return (
+    <Animated.View
+      style={{
+        opacity: anim,
+        transform: [
+          {
+            translateY: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [28, 0],
+            }),
+          },
+        ],
+      }}
+    >
+      <TouchableOpacity
+        style={styles.listItem}
+        activeOpacity={0.7}
+        onPress={onOpenChat}
+      >
+        <TouchableOpacity
+          style={styles.imageContainer}
+          activeOpacity={0.8}
+          onPress={onOpenProfile}
+        >
+          <WhatsAppAvatar
+            photo={item.photo}
+            name={item.name}
+            publicId={item.publicId}
+            gender={item.gender}
+            size={56}
+            online={!!item.isOnline}
+            badge={item.subscriptionBadge}
+            badgeExpiresAt={item.subscriptionExpiresAt}
+            photoVerified={!!(item as any).photoVerified}
+          />
+        </TouchableOpacity>
+
+        <View style={styles.textContainer}>
+          <View style={styles.nameRow}>
+            <Text style={styles.nameText} numberOfLines={1}>
+              {getDisplayName(item.name, item.publicId)}
+              {item.age ? `, ${item.age}` : ""}
+            </Text>
+            {(item as any).photoVerified ? (
+              <Ionicons
+                name="shield-checkmark"
+                size={16}
+                color="#22C55E"
+                style={{ marginLeft: 4 }}
+              />
+            ) : null}
+            <Text style={styles.metaText}>
+              {item.distanceKm && item.distanceKm !== "?"
+                ? `${item.distanceKm} km`
+                : ""}
+            </Text>
+          </View>
+          <Text style={styles.subtitleText} numberOfLines={1}>
+            {item.isOnline
+              ? "Active now"
+              : feedTab === "for_you"
+                ? "Suggested for you"
+                : "Nearby"}
+            {(item as any).photoVerified ? " · Photo verified" : ""}
+            {item.relationshipGoal ? ` · ${item.relationshipGoal}` : ""}
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.matchBtn, liked && styles.matchBtnLiked]}
+          onPress={onToggleLike}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          activeOpacity={0.7}
+          disabled={liking}
+        >
+          {liking ? (
+            <ActivityIndicator size="small" color={liked ? D.black : "#fff"} />
+          ) : (
+            <Text
+              style={[styles.matchBtnText, liked && styles.matchBtnTextLiked]}
+            >
+              {liked ? "Liked" : "Like"}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
 export default function DiscoverScreen() {
   const router = useRouter();
   const { showAlert } = useAppAlert();
@@ -144,6 +302,7 @@ export default function DiscoverScreen() {
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [hasMore, setHasMore] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [staggerReveal, setStaggerReveal] = React.useState(false);
   const [locationError, setLocationError] = React.useState<string | null>(null);
   const [relationshipById, setRelationshipById] = React.useState<
     Record<string, FriendshipStatus>
@@ -151,6 +310,12 @@ export default function DiscoverScreen() {
   const [likingId, setLikingId] = React.useState<string | null>(null);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
+  const [searchMode, setSearchMode] = React.useState(false);
+  const [searchBarY, setSearchBarY] = React.useState(0);
+  const searchBarRef = React.useRef<View>(null);
+  const [recentSearches, setRecentSearches] = React.useState<
+    RecentSearchPerson[]
+  >([]);
   const [prefs, setPrefs] = React.useState<DiscoveryPrefs>(DEFAULT_PREFS);
   const [prefsVisible, setPrefsVisible] = React.useState(false);
   // The first feed request waits for the saved filters so a restart doesn't
@@ -167,18 +332,49 @@ export default function DiscoverScreen() {
     null,
   );
   const [profileModalVisible, setProfileModalVisible] = React.useState(false);
+  const searchInputRef = React.useRef<TextInput>(null);
+
+  /** Reliable on all Android OEMs — Keyboard.dismiss alone sometimes no-ops */
+  const dismissSearchKeyboard = React.useCallback(() => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+  }, []);
+
+  const closeSearchMode = React.useCallback(() => {
+    setSearchMode(false);
+    setSearchQuery("");
+    setDebouncedSearch("");
+    Keyboard.dismiss();
+  }, []);
+
+  const rememberPerson = React.useCallback(
+    async (person: RecentSearchPerson) => {
+      const next = await addRecentSearch(RECENT_SEARCH_HOME, person);
+      setRecentSearches(next);
+    },
+    [],
+  );
+
+  React.useEffect(() => {
+    void getRecentSearches(RECENT_SEARCH_HOME).then(setRecentSearches);
+  }, []);
 
   const searchTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
   const fetchLockRef = React.useRef(false);
   const nearbyUsersRef = React.useRef<NearbyUser[]>([]);
+  const forYouUsersRef = React.useRef<NearbyUser[]>([]);
   const prefsKeyRef = React.useRef("");
   const initialLoadedRef = React.useRef(false);
 
   React.useEffect(() => {
     nearbyUsersRef.current = nearbyUsers;
   }, [nearbyUsers]);
+
+  React.useEffect(() => {
+    forYouUsersRef.current = forYouUsers;
+  }, [forYouUsers]);
 
   const prefsKey = `${prefs.gender}|${prefs.radiusKm}|${prefs.activeWithinMinutes}`;
 
@@ -259,6 +455,13 @@ export default function DiscoverScreen() {
           setSearchByIdError(error);
         } else if (user) {
           setSearchedUser(user);
+          void rememberPerson({
+            id: user.id,
+            name:
+              getDisplayName(user.name, user.publicId) || user.name || query,
+            photo: user.photo || "",
+            query,
+          });
           // Also fetch relationship status for the searched user
           try {
             const status = await getFriendshipStatus(token, user.id);
@@ -304,23 +507,73 @@ export default function DiscoverScreen() {
   const reloadForYou = React.useCallback(async (forceRefresh = false) => {
     const token = await getAuthToken();
     if (!token) return;
-    setLoading(true);
+    const hadRows = forYouUsersRef.current.length > 0;
+    // WhatsApp: keep list on screen — spinner only when empty
+    if (!hadRows) setLoading(true);
+    else if (forceRefresh) setRefreshing(true);
     setLocationError(null);
     try {
-      const { users, hasMore } = await fetchForYouPage(token, {
-        page: 1,
-        forceRefresh: !!forceRefresh,
+      // GPS in parallel; feed never waits on a Redis reconnect hang
+      void uploadMyLocation(token, {
+        preferCached: true,
+        timeoutMs: 3500,
       });
+
+      const { users, hasMore } = await loadForYouFeed(token, {
+        page: 1,
+        refreshFast: !!forceRefresh,
+        forceRefresh: false,
+      });
+      // Instant in-place update (no blank / no stagger)
+      setStaggerReveal(false);
       setForYouUsers(users);
       setForYouPage(1);
       setForYouHasMore(hasMore);
       applyRelationships(setRelationshipById, users);
+
+      // After spinner ends, rebuild rankings in background and swap
+      if (forceRefresh) {
+        void (async () => {
+          try {
+            const fresh = await fetchForYouPage(token, {
+              page: 1,
+              forceRefresh: true,
+            });
+            setForYouUsers(fresh.users);
+            setForYouPage(1);
+            setForYouHasMore(fresh.hasMore);
+            applyRelationships(setRelationshipById, fresh.users);
+          } catch {
+            /* keep fast-path list */
+          }
+        })();
+      }
     } catch (err: any) {
       if (
         err?.code === "LOCATION_REQUIRED" ||
         /location/i.test(err?.message || "")
       ) {
-        setLocationError(err?.message || "Location needed for For You");
+        // Retry once after a quick location push
+        try {
+          await uploadMyLocation(token, {
+            preferCached: true,
+            timeoutMs: 4500,
+          });
+          const { users, hasMore } = await loadForYouFeed(token, {
+            page: 1,
+            refreshFast: true,
+          });
+          setForYouUsers(users);
+          setForYouPage(1);
+          setForYouHasMore(hasMore);
+          applyRelationships(setRelationshipById, users);
+          setLocationError(null);
+          return;
+        } catch {
+          setLocationError(err?.message || "Location needed for For You");
+        }
+      } else {
+        setLocationError(err?.message || "Could not load For You suggestions.");
       }
     } finally {
       setLoading(false);
@@ -350,8 +603,12 @@ export default function DiscoverScreen() {
   }, [forYouHasMore, loadingMore, forYouPage]);
 
   const reloadNearby = React.useCallback(async () => {
+    if (fetchLockRef.current) return;
     fetchLockRef.current = true;
-    setLoading(true);
+    const hadRows = nearbyUsersRef.current.length > 0;
+    // WhatsApp: keep list on screen — only spinner, never blank
+    if (!hadRows) setLoading(true);
+    else setRefreshing(true);
     setLocationError(null);
     setHasMore(true);
     try {
@@ -370,15 +627,19 @@ export default function DiscoverScreen() {
         gender: prefs.gender,
         activeWithinMinutes: prefs.activeWithinMinutes,
         mode: "initial",
+        preferCachedLocation: true,
+        refreshFast: true,
       });
 
       if (error) {
         setLocationError(error);
-        if (!users.length) setNearbyUsers([]);
+        if (!users.length && !hadRows) setNearbyUsers([]);
         return;
       }
 
       setLocationError(null);
+      // Instant in-place update (no clear / no stagger on refresh)
+      setStaggerReveal(false);
       setNearbyUsers(users);
       setHasMore(more && users.length > 0);
       initialLoadedRef.current = true;
@@ -392,7 +653,7 @@ export default function DiscoverScreen() {
     }
   }, [prefs]);
 
-  // ── Initial load: 25 nearby + 25 random. Never reload already-shown list. ──
+  // ── Initial load: 25 nearby. Never reload already-shown list. ──
   useFocusEffect(
     React.useCallback(() => {
       let cancelled = false;
@@ -483,6 +744,10 @@ export default function DiscoverScreen() {
         name: u.name != null && u.name !== "" ? u.name : user.name,
         bio: u.bio != null ? u.bio : user.bio,
         photo: u.photo ? resolve(u.photo) : user.photo,
+        coverPhoto:
+          u.coverPhoto !== undefined
+            ? resolve(u.coverPhoto) || ""
+            : user.coverPhoto,
         photos: Array.isArray(u.photos)
           ? u.photos.map(resolve).filter(Boolean)
           : user.photos,
@@ -809,10 +1074,10 @@ export default function DiscoverScreen() {
     }
   };
 
-  // ── Pull to refresh ─────────────────────────────────────────────
+  // ── Pull to refresh — WhatsApp same technique ───────────────────
   const onRefresh = React.useCallback(async () => {
+    // Spinner only; list stays mounted with previous data
     setRefreshing(true);
-    initialLoadedRef.current = false;
     try {
       if (feedTab === "for_you") {
         await reloadForYou(true);
@@ -826,6 +1091,13 @@ export default function DiscoverScreen() {
 
   // ── Open profile modal ─────────────────────────────────────────
   const openProfile = async (user: NearbyUser) => {
+    dismissSearchKeyboard();
+    if (searchMode) closeSearchMode();
+    void rememberPerson({
+      id: user.id,
+      name: getDisplayName(user.name, user.publicId) || user.name || "User",
+      photo: user.photo || "",
+    });
     const rel = relationshipById[user.id];
     setSelectedUser({
       ...user,
@@ -845,16 +1117,21 @@ export default function DiscoverScreen() {
         setSelectedUser({
           ...user,
           ...full,
-          // Prefer real distance from list or refreshed profile — never keep "?"
+          // Prefer list distance; never invent km for non-nearby (random) rows
           distanceKm:
-            (user.distanceKm && user.distanceKm !== "?"
-              ? user.distanceKm
-              : null) ||
-            (full.distanceKm && full.distanceKm !== "?"
-              ? full.distanceKm
-              : null) ||
-            undefined,
-          distance: user.distance ?? full.distance,
+            user.source === "random"
+              ? undefined
+              : (user.distanceKm && user.distanceKm !== "?"
+                  ? user.distanceKm
+                  : null) ||
+                (full.distanceKm && full.distanceKm !== "?"
+                  ? full.distanceKm
+                  : null) ||
+                undefined,
+          distance:
+            user.source === "random"
+              ? undefined
+              : (user.distance ?? full.distance),
           friendshipStatus: latestRel?.status || full.friendshipStatus,
           areFriends: latestRel?.areFriends ?? full.areFriends,
           iLiked: latestRel?.iLiked ?? full.iLiked,
@@ -879,6 +1156,14 @@ export default function DiscoverScreen() {
   const handleProfileMessage = () => {
     if (!selectedUser) return;
     setProfileModalVisible(false);
+    const rel = relationshipById[selectedUser.id];
+    const matched =
+      !!rel?.areFriends ||
+      !!selectedUser.areFriends ||
+      rel?.status === "friends" ||
+      rel?.status === "mutual_match" ||
+      selectedUser.friendshipStatus === "friends" ||
+      selectedUser.friendshipStatus === "mutual_match";
     router.push({
       pathname: "/messages/[id]",
       params: {
@@ -887,20 +1172,41 @@ export default function DiscoverScreen() {
         photo: selectedUser.photo,
         gender: selectedUser.gender,
         isOnline: selectedUser.isOnline ? "true" : "false",
+        areFriends: matched ? "true" : "false",
+        iLiked: rel?.iLiked || selectedUser.iLiked || matched ? "true" : "false",
+        theyLiked:
+          rel?.theyLiked || selectedUser.theyLiked || matched ? "true" : "false",
+        friendshipStatus:
+          rel?.status ||
+          selectedUser.friendshipStatus ||
+          (matched ? "friends" : ""),
       },
     });
   };
 
-  // ── Render a compact WhatsApp-style row ─────────────────────────
-  const renderItem = ({ item }: { item: NearbyUser }) => {
+  // ── Render horizontal WhatsApp-style row ───────────────────────
+  const renderItem = ({ item, index }: { item: NearbyUser; index: number }) => {
     const liked =
       relationshipById[item.id]?.iLiked ||
       relationshipById[item.id]?.areFriends;
     return (
-      <TouchableOpacity
-        style={styles.listItem}
-        activeOpacity={0.7}
-        onPress={() =>
+      <NearbyListRow
+        item={item}
+        index={index}
+        stagger={staggerReveal}
+        liked={!!liked}
+        liking={likingId === item.id}
+        feedTab={feedTab}
+        onOpenChat={() => {
+          dismissSearchKeyboard();
+          const rel = relationshipById[item.id];
+          const matched =
+            !!rel?.areFriends ||
+            !!item.areFriends ||
+            rel?.status === "friends" ||
+            rel?.status === "mutual_match" ||
+            item.friendshipStatus === "friends" ||
+            item.friendshipStatus === "mutual_match";
           router.push({
             pathname: "/messages/[id]",
             params: {
@@ -909,70 +1215,23 @@ export default function DiscoverScreen() {
               photo: item.photo,
               gender: item.gender,
               isOnline: item.isOnline ? "true" : "false",
+              areFriends: matched ? "true" : "false",
+              iLiked: rel?.iLiked || item.iLiked || matched ? "true" : "false",
+              theyLiked:
+                rel?.theyLiked || item.theyLiked || matched ? "true" : "false",
+              friendshipStatus:
+                rel?.status ||
+                item.friendshipStatus ||
+                (matched ? "friends" : ""),
             },
-          })
-        }
-      >
-        <TouchableOpacity
-          style={styles.imageContainer}
-          activeOpacity={0.8}
-          onPress={() => openProfile(item)}
-        >
-          <WhatsAppAvatar
-            photo={item.photo}
-            name={item.name}
-            publicId={item.publicId}
-            size={56}
-            online={!!item.isOnline}
-            badge={item.subscriptionBadge}
-            badgeExpiresAt={item.subscriptionExpiresAt}
-          />
-        </TouchableOpacity>
-
-        <View style={styles.textContainer}>
-          <View style={styles.nameRow}>
-            <Text style={styles.nameText} numberOfLines={1}>
-              {getDisplayName(item.name, item.publicId)}
-              {item.age ? `, ${item.age}` : ""}
-            </Text>
-            <Text style={styles.metaText}>
-              {item.distanceKm && item.distanceKm !== "?"
-                ? `${item.distanceKm} km`
-                : ""}
-            </Text>
-          </View>
-          <Text style={styles.subtitleText} numberOfLines={1}>
-            {item.isOnline
-              ? "Active now"
-              : feedTab === "for_you"
-                ? "Suggested for you"
-                : "Nearby"}
-            {(item as any).photoVerified ? " · Verified" : ""}
-            {item.relationshipGoal ? ` · ${item.relationshipGoal}` : ""}
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.matchBtn, liked && styles.matchBtnLiked]}
-          onPress={() => toggleLike(item.id)}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          activeOpacity={0.7}
-          disabled={likingId === item.id}
-        >
-          {likingId === item.id ? (
-            <ActivityIndicator
-              size="small"
-              color={liked ? "#262626" : "#fff"}
-            />
-          ) : (
-            <Text
-              style={[styles.matchBtnText, liked && styles.matchBtnTextLiked]}
-            >
-              {liked ? "Liked" : "Like"}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </TouchableOpacity>
+          });
+        }}
+        onOpenProfile={() => openProfile(item)}
+        onToggleLike={() => {
+          dismissSearchKeyboard();
+          toggleLike(item.id);
+        }}
+      />
     );
   };
 
@@ -1011,12 +1270,12 @@ export default function DiscoverScreen() {
 
   const ListEmpty = () => {
     if (loading && activeUsers.length === 0) {
-      return <CardGridSkeleton count={6} />;
+      return <ListRowSkeleton count={8} />;
     }
     if (searchByIdLoading) {
       return (
         <View style={styles.emptyContainer}>
-          <ActivityIndicator size="large" color="#262626" />
+          <ActivityIndicator size="large" color={D.purple} />
           <Text style={styles.emptyTitle}>Searching…</Text>
           <Text style={styles.emptyText}>
             Looking for user ID: {searchQuery.trim()}
@@ -1036,14 +1295,15 @@ export default function DiscoverScreen() {
     if (locationError) {
       return (
         <View style={styles.emptyContainer}>
-          <Ionicons name="location-outline" size={48} color="#CCC" />
+          <Ionicons name="location-outline" size={48} color={D.muted} />
           <Text style={styles.emptyTitle}>Location Needed</Text>
           <Text style={styles.emptyText}>{locationError}</Text>
           <TouchableOpacity
             style={styles.retryBtn}
             onPress={() => {
               initialLoadedRef.current = false;
-              void reloadNearby();
+              if (feedTab === "for_you") void reloadForYou(true);
+              else void reloadNearby();
             }}
             activeOpacity={0.85}
           >
@@ -1055,7 +1315,7 @@ export default function DiscoverScreen() {
     if (searchQuery.trim()) {
       return (
         <View style={styles.emptyContainer}>
-          <Ionicons name="search-outline" size={48} color="#CCC" />
+          <Ionicons name="search-outline" size={48} color={D.muted} />
           <Text style={styles.emptyTitle}>No results</Text>
           <Text style={styles.emptyText}>
             No nearby people match “{searchQuery.trim()}”
@@ -1065,7 +1325,7 @@ export default function DiscoverScreen() {
     }
     return (
       <View style={styles.emptyContainer}>
-        <Ionicons name="people-outline" size={48} color="#CCC" />
+        <Ionicons name="people-outline" size={48} color={D.muted} />
         <Text style={styles.emptyTitle}>
           {feedTab === "for_you" ? "No suggestions yet" : "No One Nearby"}
         </Text>
@@ -1095,7 +1355,8 @@ export default function DiscoverScreen() {
             activeOpacity={0.85}
             onPress={() => {
               initialLoadedRef.current = false;
-              void reloadNearby();
+              if (feedTab === "for_you") void reloadForYou(true);
+              else void reloadNearby();
             }}
           >
             <Text style={styles.retryBtnText}>Refresh</Text>
@@ -1107,15 +1368,15 @@ export default function DiscoverScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <View style={{ flex: 1, backgroundColor: D.bg }}>
+        <StatusBar barStyle="dark-content" backgroundColor={D.bg} />
 
         {/* ── Header ── */}
         <View style={styles.header}>
           <View style={styles.headerTitleContainer}>
             <Image
               source={require("../../assets/images/luvstoer logo.png")}
-              style={[styles.headerLogo, { tintColor: "#6750A4" }]}
+              style={[styles.headerLogo, { tintColor: D.purple }]}
               contentFit="contain"
             />
           </View>
@@ -1133,7 +1394,7 @@ export default function DiscoverScreen() {
                     : "notifications-outline"
                 }
                 size={22}
-                color="#333"
+                color={D.black}
               />
               {notifUnreadCount > 0 && (
                 <View style={styles.notifBadge}>
@@ -1164,40 +1425,107 @@ export default function DiscoverScreen() {
           </View>
         </View>
 
-        {/* ── Search ── */}
-        <View style={styles.searchContainer}>
-          <Ionicons
-            name="search"
-            size={16}
-            color="#8E8E8E"
-            style={styles.searchIcon}
-          />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search"
-            placeholderTextColor="#8E8E8E"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-            clearButtonMode="while-editing"
-            autoCapitalize="characters"
-          />
-          {!!searchQuery && (
-            <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
-              <Ionicons name="close-circle" size={16} color="#C7C7C7" />
-            </TouchableOpacity>
-          )}
+        {/* ── Search (opens WhatsApp-style search page) ── */}
+        <View ref={searchBarRef} collapsable={false}>
+          <TouchableOpacity
+            style={[
+              styles.searchContainer,
+              searchMode && styles.searchContainerHidden,
+            ]}
+            activeOpacity={0.85}
+            onPress={() => {
+              setSearchQuery("");
+              searchBarRef.current?.measureInWindow((_x, y) => {
+                if (typeof y === "number" && y > 0) setSearchBarY(y);
+                setSearchMode(true);
+              });
+            }}
+          >
+            <Ionicons
+              name="search"
+              size={18}
+              color="#65676B"
+              style={styles.searchIcon}
+            />
+            <Text style={styles.searchPlaceholder}>Search</Text>
+          </TouchableOpacity>
         </View>
 
+        <SearchModeOverlay
+          visible={searchMode}
+          query={searchQuery}
+          onChangeQuery={setSearchQuery}
+          onClose={closeSearchMode}
+          placeholder="Search"
+          recent={recentSearches}
+          backgroundColor={D.bg}
+          fromY={searchBarY}
+          onClearAll={() => {
+            void clearRecentSearches(RECENT_SEARCH_HOME).then(
+              setRecentSearches,
+            );
+          }}
+          onSelectRecent={(person) => {
+            void rememberPerson(person);
+            const match =
+              activeUsers.find((u) => u.id === person.id) ||
+              (searchedUser?.id === person.id ? searchedUser : null);
+            if (match) {
+              closeSearchMode();
+              void openProfile(match);
+              return;
+            }
+            setSearchQuery(person.query || person.name);
+          }}
+        >
+          <FlatList
+            data={displayUsers}
+            extraData={{ relationshipById, likingId, feedTab }}
+            renderItem={renderItem}
+            keyExtractor={(item) => item.id}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[
+              styles.listContent,
+              displayUsers.length === 0 ? { flexGrow: 1 } : null,
+            ]}
+            ListEmptyComponent={
+              searchByIdLoading ? (
+                <View style={styles.emptyContainer}>
+                  <ActivityIndicator color={D.purple} />
+                  <Text style={styles.emptyTitle}>Searching…</Text>
+                </View>
+              ) : searchByIdError ? (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyTitle}>Search Failed</Text>
+                  <Text style={styles.emptyText}>{searchByIdError}</Text>
+                </View>
+              ) : (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyTitle}>No results</Text>
+                  <Text style={styles.emptyText}>
+                    Try a name or public ID (ABCD1234)
+                  </Text>
+                </View>
+              )
+            }
+          />
+        </SearchModeOverlay>
+
         {/* Sticky section bar while list scrolls */}
-        <View style={styles.stickySectionHeader}>
+        <View
+          style={styles.stickySectionHeader}
+          onTouchStart={dismissSearchKeyboard}
+        >
           <View style={styles.feedTabs}>
             <TouchableOpacity
               style={[
                 styles.feedTab,
                 feedTab === "nearby" && styles.feedTabActive,
               ]}
-              onPress={() => setFeedTab("nearby")}
+              onPress={() => {
+                dismissSearchKeyboard();
+                setFeedTab("nearby");
+              }}
               activeOpacity={0.85}
             >
               <Text
@@ -1215,6 +1543,7 @@ export default function DiscoverScreen() {
                 feedTab === "for_you" && styles.feedTabActive,
               ]}
               onPress={() => {
+                dismissSearchKeyboard();
                 setFeedTab("for_you");
                 if (!forYouUsers.length) void reloadForYou();
               }}
@@ -1238,55 +1567,72 @@ export default function DiscoverScreen() {
               ]}
               hitSlop={8}
               android_ripple={{ color: "rgba(0,0,0,0.08)", radius: 14 }}
-              onPress={() => setPrefsVisible(true)}
+              onPress={() => {
+                dismissSearchKeyboard();
+                setPrefsVisible(true);
+              }}
             >
-              <Ionicons name="options-outline" size={22} color="#262626" />
+              <Ionicons name="options-outline" size={22} color={D.black} />
             </Pressable>
           )}
         </View>
 
-        {/* ── List ── */}
-        <FlatList
-          data={displayUsers}
-          extraData={{ relationshipById, likingId, feedTab }}
-          renderItem={renderItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          keyboardShouldPersistTaps="handled"
-          removeClippedSubviews={true}
-          maxToRenderPerBatch={10}
-          updateCellsBatchingPeriod={50}
-          windowSize={10}
-          initialNumToRender={8}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={["#262626"]}
-              tintColor="#262626"
-            />
-          }
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          ListEmptyComponent={ListEmpty}
-          ListFooterComponent={
-            displayUsers.length ? (
-              <>
-                {loadingMore ? (
-                  <View style={styles.loadMoreFooter}>
-                    <ActivityIndicator size="small" color="#262626" />
-                    <Text style={styles.loadMoreText}>Loading more…</Text>
-                  </View>
-                ) : null}
-                <PremiumBanner router={router} />
-              </>
-            ) : null
-          }
-          onEndReached={() => {
-            if (feedTab === "for_you") void loadMoreForYou();
-            else void loadMoreNearby();
-          }}
-          onEndReachedThreshold={0.4}
-        />
+        {/* ── List / horizontal loading rows ── */}
+        {loading && displayUsers.length === 0 ? (
+          <TouchableWithoutFeedback onPress={dismissSearchKeyboard}>
+            <View style={{ flex: 1 }}>
+              <ListRowSkeleton count={8} />
+            </View>
+          </TouchableWithoutFeedback>
+        ) : (
+          <FlatList
+            data={displayUsers}
+            extraData={{ relationshipById, likingId, feedTab, staggerReveal }}
+            renderItem={renderItem}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={[
+              styles.listContent,
+              displayUsers.length === 0 ? { flexGrow: 1 } : null,
+            ]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            onScrollBeginDrag={dismissSearchKeyboard}
+            onTouchStart={dismissSearchKeyboard}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={10}
+            updateCellsBatchingPeriod={50}
+            windowSize={10}
+            initialNumToRender={8}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={[D.purple]}
+                tintColor={D.purple}
+              />
+            }
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            ListEmptyComponent={ListEmpty}
+            ListFooterComponent={
+              displayUsers.length ? (
+                <>
+                  {loadingMore ? (
+                    <View style={styles.loadMoreFooter}>
+                      <ActivityIndicator size="small" color={D.purple} />
+                      <Text style={styles.loadMoreText}>Loading more…</Text>
+                    </View>
+                  ) : null}
+                  <PremiumBanner router={router} />
+                </>
+              ) : null
+            }
+            onEndReached={() => {
+              if (feedTab === "for_you") void loadMoreForYou();
+              else void loadMoreNearby();
+            }}
+            onEndReachedThreshold={0.4}
+          />
+        )}
       </View>
 
       <PreferencesModal
@@ -1308,6 +1654,13 @@ export default function DiscoverScreen() {
         onUnlike={handleProfileUnlike}
         onMessage={handleProfileMessage}
         likingInProgress={likingId === selectedUser?.id}
+        onBlocked={(userId) => {
+          setNearbyUsers((prev) => prev.filter((u) => u.id !== userId));
+          setForYouUsers((prev) => prev.filter((u) => u.id !== userId));
+          setSearchedUser((prev) => (prev?.id === userId ? null : prev));
+          setSelectedUser((prev) => (prev?.id === userId ? null : prev));
+          setProfileModalVisible(false);
+        }}
       />
     </SafeAreaView>
   );
@@ -1317,7 +1670,7 @@ function PremiumBanner({ router }: { router: ReturnType<typeof useRouter> }) {
   return (
     <View style={styles.premiumWrap}>
       <LinearGradient
-        colors={["#1a1a1a", "#333"]}
+        colors={[D.purple, D.black]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.premiumCard}
@@ -1366,6 +1719,13 @@ function PreferencesModal({
     setActiveWithinMinutes(initial.activeWithinMinutes);
   }, [visible, initial]);
 
+  const showMeChips = [
+    { label: "All", value: "All" },
+    { label: "Men", value: "Man" },
+    { label: "Women", value: "Woman" },
+    { label: "Other", value: "Other" },
+  ];
+
   return (
     <Modal
       visible={visible}
@@ -1374,38 +1734,31 @@ function PreferencesModal({
       onRequestClose={onClose}
     >
       <View style={styles.prefsOverlay}>
-        <TouchableOpacity
-          style={styles.prefsDismissArea}
-          activeOpacity={1}
-          onPress={onClose}
-        />
+        <Pressable style={styles.prefsDismissArea} onPress={onClose} />
         <View style={styles.prefsSheet}>
-          <Text style={styles.prefsTitle}>Show me</Text>
+          <View style={styles.prefsHandle} />
+          <Text style={styles.prefsTitle}>Preferences</Text>
+          <Text style={styles.prefsSub}>Who you want to see nearby</Text>
 
-          <View style={styles.prefsSection}>
-            <View style={styles.prefsEqualRow}>
-              {GENDER_OPTIONS.map((option) => (
+          <Text style={styles.prefsSectionLabel}>Show me</Text>
+          <View style={styles.prefsChipRow}>
+            {showMeChips.map((opt) => {
+              const on = gender === opt.value;
+              return (
                 <TouchableOpacity
-                  key={option}
-                  style={[
-                    styles.prefsEqualCard,
-                    gender === option && styles.prefsEqualCardSelected,
-                  ]}
-                  onPress={() => setGender(option)}
-                  activeOpacity={0.75}
+                  key={opt.value}
+                  activeOpacity={0.8}
+                  onPress={() => setGender(opt.value)}
+                  style={[styles.prefsChip, on && styles.prefsChipOn]}
                 >
                   <Text
-                    style={[
-                      styles.prefsEqualCardText,
-                      gender === option && styles.prefsEqualCardTextSelected,
-                    ]}
-                    numberOfLines={1}
+                    style={[styles.prefsChipText, on && styles.prefsChipTextOn]}
                   >
-                    {option}
+                    {opt.label}
                   </Text>
                 </TouchableOpacity>
-              ))}
-            </View>
+              );
+            })}
           </View>
 
           <PrefSliderRow
@@ -1443,24 +1796,19 @@ function PreferencesModal({
             }
           />
 
-          <View style={styles.prefsActions}>
-            <TouchableOpacity
-              style={styles.prefsCancelBtn}
-              activeOpacity={0.7}
-              onPress={onClose}
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => onSearch({ gender, radiusKm, activeWithinMinutes })}
+          >
+            <LinearGradient
+              colors={[D.purple, D.black]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.prefsSaveBtn}
             >
-              <Text style={styles.prefsCancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.prefsSearchBtn}
-              activeOpacity={0.85}
-              onPress={() =>
-                onSearch({ gender, radiusKm, activeWithinMinutes })
-              }
-            >
-              <Text style={styles.prefsSearchBtnText}>Filter</Text>
-            </TouchableOpacity>
-          </View>
+              <Text style={styles.prefsSaveBtnText}>Save</Text>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -1619,7 +1967,7 @@ function clampedRatio(index: number, maxIndex: number) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#FFFFFF" },
+  container: { flex: 1, backgroundColor: D.bg },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1627,7 +1975,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 2,
     paddingBottom: 8,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: D.bg,
   },
   headerTitleContainer: { flex: 1 },
   headerLogo: { width: 100, height: 34, marginLeft: -2 },
@@ -1646,7 +1994,7 @@ const styles = StyleSheet.create({
     minWidth: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: "#111",
+    backgroundColor: D.purple,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 3,
@@ -1663,26 +2011,34 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "#EFEFEF",
+    backgroundColor: D.purpleSoft,
   },
   headerAvatar: { width: "100%", height: "100%" },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#EFEFEF",
+    backgroundColor: "#E4E6EB",
     marginHorizontal: 16,
-    marginTop: 2,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    height: 36,
-    borderRadius: 10,
+    marginTop: 4,
+    marginBottom: 10,
+    paddingHorizontal: 14,
+    height: 40,
+    borderRadius: 20,
   },
-  searchIcon: { marginRight: 8 },
+  searchContainerHidden: {
+    opacity: 0,
+  },
+  searchIcon: { marginRight: 10 },
   searchInput: {
     flex: 1,
-    fontSize: 15,
-    color: "#262626",
+    fontSize: 16,
+    color: "#050505",
     paddingVertical: 0,
+  },
+  searchPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: "#65676B",
   },
   listContent: { paddingBottom: 100 },
   loadMoreFooter: {
@@ -1694,7 +2050,7 @@ const styles = StyleSheet.create({
   },
   loadMoreText: {
     fontSize: 13,
-    color: "#8E8E8E",
+    color: D.muted,
   },
   premiumWrap: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 },
   premiumCard: {
@@ -1730,7 +2086,7 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
   premiumBtn: {
-    backgroundColor: "#EC4899",
+    backgroundColor: "#FFFFFF",
     paddingHorizontal: 10,
     height: 26,
     borderRadius: 13,
@@ -1738,7 +2094,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   premiumBtnText: {
-    color: "#fff",
+    color: D.purple,
     fontSize: 10.5,
     fontWeight: "700",
   },
@@ -1748,10 +2104,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 8,
     paddingTop: 4,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: D.bg,
     zIndex: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#DBDBDB",
+    borderBottomColor: D.border,
   },
   feedTabs: {
     flex: 1,
@@ -1765,15 +2121,15 @@ const styles = StyleSheet.create({
     borderBottomColor: "transparent",
   },
   feedTabActive: {
-    borderBottomColor: "#262626",
+    borderBottomColor: D.purple,
   },
   feedTabText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#8E8E8E",
+    color: D.muted,
   },
   feedTabTextActive: {
-    color: "#262626",
+    color: D.purple,
   },
   sectionLeft: {
     flexDirection: "row",
@@ -1783,7 +2139,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#262626",
+    color: D.black,
   },
   filterBtn: {
     width: 40,
@@ -1799,14 +2155,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     alignItems: "center",
-    backgroundColor: "#fff",
+    backgroundColor: "transparent",
   },
   imageContainer: { position: "relative" },
   avatar: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: "#EFEFEF",
+    backgroundColor: D.purpleSoft,
   },
   onlineStatus: {
     position: "absolute",
@@ -1836,11 +2192,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: "700",
-    color: "#262626",
+    color: D.black,
   },
   metaText: {
     fontSize: 12,
-    color: "#8E8E8E",
+    color: D.muted,
     fontWeight: "500",
   },
   subtitleRow: {
@@ -1852,11 +2208,11 @@ const styles = StyleSheet.create({
   },
   subtitleText: {
     fontSize: 13,
-    color: "#8E8E8E",
+    color: D.muted,
     marginTop: 1,
   },
   onlineNowText: {
-    color: "#262626",
+    color: D.black,
     fontWeight: "600",
   },
   matchBtn: {
@@ -1864,12 +2220,12 @@ const styles = StyleSheet.create({
     height: 28,
     paddingHorizontal: 7,
     borderRadius: 7,
-    backgroundColor: "#111",
+    backgroundColor: D.purple,
     justifyContent: "center",
     alignItems: "center",
   },
   matchBtnLiked: {
-    backgroundColor: "#EFEFEF",
+    backgroundColor: D.purpleSoft,
   },
   matchBtnText: {
     color: "#FFFFFF",
@@ -1877,7 +2233,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   matchBtnTextLiked: {
-    color: "#262626",
+    color: D.purple,
   },
   separator: {
     height: 0,
@@ -1892,18 +2248,18 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#262626",
+    color: D.black,
     marginTop: 8,
   },
   emptyText: {
     fontSize: 14,
-    color: "#8E8E8E",
+    color: D.muted,
     textAlign: "center",
     lineHeight: 20,
   },
   retryBtn: {
     marginTop: 16,
-    backgroundColor: "#0095F6",
+    backgroundColor: D.purple,
     paddingHorizontal: 28,
     paddingVertical: 10,
     borderRadius: 8,
@@ -1916,87 +2272,92 @@ const styles = StyleSheet.create({
   prefsOverlay: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.45)",
+    backgroundColor: "rgba(0,0,0,0.4)",
   },
   prefsDismissArea: {
     flex: 1,
   },
   prefsSheet: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 28,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 36 : 24,
+  },
+  prefsHandle: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#D0D0D0",
+    marginBottom: 14,
   },
   prefsTitle: {
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: "700",
-    color: "#262626",
-    textAlign: "center",
-    marginBottom: 18,
+    color: "#1C1B1F",
+    letterSpacing: -0.3,
   },
-  prefsSection: {
+  prefsSub: {
+    marginTop: 4,
     marginBottom: 16,
+    fontSize: 14,
+    color: "#49454F",
   },
-  prefsSectionTitle: {
-    fontSize: 12,
+  prefsSectionLabel: {
+    fontSize: 13,
     fontWeight: "600",
-    color: "#8E8E8E",
-    marginBottom: 8,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
+    color: "#79747E",
+    marginBottom: 10,
   },
-  prefsEqualRow: {
+  prefsChipRow: {
     flexDirection: "row",
     alignItems: "stretch",
     gap: 8,
+    marginBottom: 22,
     width: "100%",
   },
-  prefsEqualCard: {
+  prefsChip: {
     flex: 1,
     minWidth: 0,
-    height: 28,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#DBDBDB",
-    backgroundColor: "#FAFAFA",
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 20,
+    backgroundColor: "#EFE8F8",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 4,
   },
-  prefsEqualCardSelected: {
-    borderColor: "#262626",
-    backgroundColor: "#262626",
+  prefsChipOn: {
+    backgroundColor: "#370372",
   },
-  prefsEqualCardText: {
-    fontSize: 12,
-    fontWeight: "500",
-    color: "#262626",
+  prefsChipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1C1B1F",
     textAlign: "center",
   },
-  prefsEqualCardTextSelected: {
+  prefsChipTextOn: {
     color: "#fff",
-    fontWeight: "600",
   },
   prefsSliderSection: {
-    marginBottom: Platform.OS === "android" ? 2 : 10,
+    marginBottom: Platform.OS === "android" ? 10 : 16,
   },
   prefsSliderHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: Platform.OS === "android" ? 4 : 8,
+    marginBottom: Platform.OS === "android" ? 6 : 10,
   },
   prefsSliderTitle: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#262626",
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#79747E",
   },
   prefsSliderValue: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#262626",
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#370372",
   },
   prefsSliderTrackHit: {
     height: Platform.OS === "android" ? 28 : 36,
@@ -2006,12 +2367,12 @@ const styles = StyleSheet.create({
   prefsSliderTrack: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#EFEFEF",
+    backgroundColor: "#E8E0F2",
     overflow: "hidden",
   },
   prefsSliderFill: {
     height: "100%",
-    backgroundColor: "#262626",
+    backgroundColor: "#370372",
     borderRadius: 4,
   },
   prefsSliderThumb: {
@@ -2022,51 +2383,28 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 11,
     backgroundColor: "#FFFFFF",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(0,0,0,0.10)",
+    borderWidth: 2,
+    borderColor: "#370372",
     ...Platform.select({
       ios: {
-        shadowColor: "#000",
+        shadowColor: "#370372",
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.2,
+        shadowOpacity: 0.3,
         shadowRadius: 2.5,
       },
       android: { elevation: 3 },
     }),
   },
-  prefsActions: {
-    flexDirection: "row",
+  prefsSaveBtn: {
     alignItems: "center",
-    gap: 10,
+    justifyContent: "center",
+    paddingVertical: 15,
+    borderRadius: 14,
     marginTop: 8,
-    paddingTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#DBDBDB",
   },
-  prefsCancelBtn: {
-    flex: 1,
-    height: 44,
-    borderRadius: 8,
-    backgroundColor: "#EFEFEF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  prefsCancelBtnText: {
-    color: "#262626",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  prefsSearchBtn: {
-    flex: 1,
-    height: 44,
-    borderRadius: 8,
-    backgroundColor: "#0095F6",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  prefsSearchBtnText: {
+  prefsSaveBtnText: {
     color: "#fff",
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

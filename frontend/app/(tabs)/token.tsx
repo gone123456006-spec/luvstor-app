@@ -19,16 +19,6 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import Svg, {
-    Circle,
-    Defs,
-    G,
-    Line,
-    Path,
-    Stop,
-    LinearGradient as SvgLinearGradient,
-    Text as SvgText,
-} from "react-native-svg";
 import { nativeAlert } from "../../components/AppAlert";
 import BonusCoin from "../../components/BonusCoin";
 import {
@@ -37,7 +27,11 @@ import {
     getLocalProfile,
 } from "../../utils/auth";
 import { claimDailySpin, fetchTokenBalance } from "../../utils/chatTokens";
-import { initiateTokenPurchase } from "../../utils/payment";
+import {
+    fetchTokenPacks,
+    initiateTokenPurchase,
+    type TokenPackOffer,
+} from "../../utils/payment";
 import {
     getCachedTokenBalance,
     preloadTokenBalance,
@@ -51,45 +45,35 @@ const FALLBACK_AVATAR = require("../../assets/images/boy-image.png");
 // Wheel config
 // ─────────────────────────────────────────────
 const FREE_SPIN_CYCLE = [10, 10, 20, 10, 20, 10, 50];
+// Minimalist segment palette — soft, clean, high-contrast pairs
 const FESTIVAL_PALETTE = [
-  { color: "#E63946", textColor: "#fff" },
-  { color: "#FFB703", textColor: "#4A2500" },
-  { color: "#9B5DE5", textColor: "#fff" },
-  { color: "#F72585", textColor: "#fff" },
-  { color: "#2A9D8F", textColor: "#fff" },
-  { color: "#F4A261", textColor: "#4A2500" },
-  { color: "#06D6A0", textColor: "#073B2A" },
-];
-const SPIN_SLICE_LABELS = [
-  "LUCKY",
-  "BONUS",
-  "MEGA",
-  "SUPER",
-  "NICE",
-  "WOW",
-  "JACKPOT",
+  { color: "#EF4444", textColor: "#FFFFFF" }, // soft red
+  { color: "#F59E0B", textColor: "#FFFFFF" }, // amber
+  { color: "#8B5CF6", textColor: "#FFFFFF" }, // violet
+  { color: "#EC4899", textColor: "#FFFFFF" }, // pink
+  { color: "#14B8A6", textColor: "#FFFFFF" }, // teal
+  { color: "#3B82F6", textColor: "#FFFFFF" }, // blue
+  { color: "#EAB308", textColor: "#1C1917" }, // gold (jackpot)
 ];
 function segmentsFromCycle(cycle: number[]) {
   const jackpot = Math.max(...cycle, 0);
+  let dayNum = 0;
   return cycle.map((tokens, i) => {
     const isJackpot = tokens === jackpot && tokens >= 50;
+    if (!isJackpot) dayNum += 1;
     const pal = FESTIVAL_PALETTE[i % FESTIVAL_PALETTE.length];
     return {
       label: String(tokens),
-      subLabel: isJackpot
-        ? "JACKPOT"
-        : SPIN_SLICE_LABELS[i % SPIN_SLICE_LABELS.length],
+      subLabel: isJackpot ? "JACKPOT" : `Day ${dayNum}`,
       tokens,
-      color: isJackpot ? "#FFD166" : pal.color,
-      textColor: isJackpot ? "#4A2500" : pal.textColor,
+      color: isJackpot ? "#EAB308" : pal.color,
+      textColor: isJackpot ? "#1C1917" : pal.textColor,
     };
   });
 }
 
 const { width: SCREEN_W } = Dimensions.get("window");
-const WHEEL_SIZE = Math.min(SCREEN_W - 80, 248);
-const R = WHEEL_SIZE / 2;
-const SLICE_R = R - 18;
+const WHEEL_SIZE = Math.min(SCREEN_W - 56, 280);
 const TWO_PI = 2 * Math.PI;
 const SCROLL_H_PAD = 20;
 const AD_BANNER_W = SCREEN_W;
@@ -118,33 +102,28 @@ const PREMIUM_AD_PHOTOS = [
 ];
 
 const TOKEN_PACKS = [
-  { id: "10", count: 10, price: "₹10" },
-  { id: "100", count: 100, price: "₹80" },
-  { id: "500", count: 500, price: "₹350" },
-  { id: "1000", count: 1000, price: "₹600", popular: true },
-  { id: "5000", count: 5000, price: "₹2,000" },
-  { id: "10000", count: 10000, price: "₹3,000" },
-  { id: "50000", count: 50000, price: "₹10,000" },
-  { id: "100000", count: 100000, price: "₹15,000", biggest: true },
+  { id: "10", count: 10, price: "₹10", listPriceInr: 10 },
+  { id: "100", count: 100, price: "₹80", listPriceInr: 80 },
+  { id: "500", count: 500, price: "₹350", listPriceInr: 350 },
+  { id: "1000", count: 1000, price: "₹600", listPriceInr: 600, popular: true },
+  { id: "5000", count: 5000, price: "₹2,000", listPriceInr: 2000 },
+  { id: "10000", count: 10000, price: "₹3,000", listPriceInr: 3000 },
+  { id: "50000", count: 50000, price: "₹10,000", listPriceInr: 10000 },
+  {
+    id: "100000",
+    count: 100000,
+    price: "₹15,000",
+    listPriceInr: 15000,
+    biggest: true,
+  },
 ] as const;
+
+function formatInr(n: number) {
+  return `₹${Number(n).toLocaleString("en-IN")}`;
+}
 
 function easeOut(t: number) {
   return 1 - Math.pow(1 - t, 4);
-}
-
-function buildSlicePath(
-  cx: number,
-  cy: number,
-  r: number,
-  startAngle: number,
-  endAngle: number,
-) {
-  const x1 = cx + r * Math.cos(startAngle);
-  const y1 = cy + r * Math.sin(startAngle);
-  const x2 = cx + r * Math.cos(endAngle);
-  const y2 = cy + r * Math.sin(endAngle);
-  const largeArc = endAngle - startAngle > Math.PI ? 1 : 0;
-  return `M ${cx} ${cy} L ${x1.toFixed(4)} ${y1.toFixed(4)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(4)} ${y2.toFixed(4)} Z`;
 }
 
 const POPUP_BG = "#E5D39A";
@@ -153,13 +132,11 @@ const POPUP_CANCEL = "#DCC07A";
 const POPUP_OK = "#A67C1A";
 const POPUP_GOLD = "#F4C430";
 
-function msUntilNextUtcDay(now = new Date()) {
-  const next = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-  );
-  return Math.max(0, next - now.getTime());
+function msUntilNextSpin(nextSpinAt?: string | null, now = Date.now()) {
+  if (!nextSpinAt) return 0;
+  const t = Date.parse(nextSpinAt);
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, t - now);
 }
 
 function waitParts(ms: number) {
@@ -174,23 +151,27 @@ function SpinBonusPopup({
   visible,
   variant,
   tokensWon,
+  nextSpinAt,
   onCancel,
   onPrimary,
 }: {
   visible: boolean;
   variant: "wait" | "won";
   tokensWon?: number;
+  nextSpinAt?: string | null;
   onCancel: () => void;
   onPrimary: () => void;
 }) {
-  const [remainMs, setRemainMs] = React.useState(msUntilNextUtcDay);
+  const [remainMs, setRemainMs] = React.useState(() =>
+    msUntilNextSpin(nextSpinAt),
+  );
 
   React.useEffect(() => {
     if (!visible || variant !== "wait") return;
-    setRemainMs(msUntilNextUtcDay());
-    const t = setInterval(() => setRemainMs(msUntilNextUtcDay()), 1000);
+    setRemainMs(msUntilNextSpin(nextSpinAt));
+    const t = setInterval(() => setRemainMs(msUntilNextSpin(nextSpinAt)), 1000);
     return () => clearInterval(t);
-  }, [visible, variant]);
+  }, [visible, variant, nextSpinAt]);
 
   if (!visible) return null;
 
@@ -207,33 +188,35 @@ function SpinBonusPopup({
         activeOpacity={1}
         onPress={onCancel}
       />
-      <View style={styles.bonusCard}>
-        <View style={styles.bonusHeader}>
-          <View style={[styles.bonusBubble, styles.bonusBubbleLg]} />
-          <View style={[styles.bonusBubble, styles.bonusBubbleSm]} />
-          <View style={[styles.bonusBubble, styles.bonusBubbleMd]} />
-        </View>
+      <View style={styles.bonusWrap}>
         <View style={styles.bonusCoinWrap} pointerEvents="none">
           <BonusCoin />
         </View>
-        <View style={styles.bonusBody}>
-          <Text style={styles.bonusText}>{body}</Text>
-        </View>
-        <View style={styles.bonusActions}>
-          <TouchableOpacity
-            style={[styles.bonusBtn, styles.bonusBtnCancel]}
-            onPress={onCancel}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.bonusBtnCancelText}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.bonusBtn, styles.bonusBtnPrimary]}
-            onPress={onPrimary}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.bonusBtnText}>OK</Text>
-          </TouchableOpacity>
+        <View style={styles.bonusCard}>
+          <View style={styles.bonusHeader}>
+            <View style={[styles.bonusBubble, styles.bonusBubbleLg]} />
+            <View style={[styles.bonusBubble, styles.bonusBubbleSm]} />
+            <View style={[styles.bonusBubble, styles.bonusBubbleMd]} />
+          </View>
+          <View style={styles.bonusBody}>
+            <Text style={styles.bonusText}>{body}</Text>
+          </View>
+          <View style={styles.bonusActions}>
+            <TouchableOpacity
+              style={[styles.bonusBtn, styles.bonusBtnCancel]}
+              onPress={onCancel}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.bonusBtnCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bonusBtn, styles.bonusBtnPrimary]}
+              onPress={onPrimary}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.bonusBtnText}>OK</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </View>
@@ -241,39 +224,179 @@ function SpinBonusPopup({
 }
 
 function SunburstBg() {
-  const vb = 400;
-  const cx = 200;
-  const cy = 175;
-  const rayCount = 24;
-  const arc = TWO_PI / rayCount;
-  const radius = 290;
+  const rays = 24;
   return (
     <View style={styles.sunburstBg} pointerEvents="none">
-      <Svg
-        width="100%"
-        height="100%"
-        viewBox={`0 0 ${vb} ${vb}`}
-        preserveAspectRatio="xMidYMid slice"
-        style={{ backgroundColor: "transparent" }}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: "#E5D39A" }]} />
+      {Array.from({ length: rays }).map((_, i) => (
+        <View
+          key={i}
+          style={[
+            styles.sunburstRay,
+            {
+              transform: [{ rotate: `${(i * 360) / rays}deg` }],
+              backgroundColor: i % 2 === 0 ? "#E8D48A" : "#DCC07A",
+            },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
+/** Festival pie wheel — Views only (no SVG). */
+function SpinWheelFace({
+  segments,
+  size,
+}: {
+  segments: ReturnType<typeof segmentsFromCycle>;
+  size: number;
+}) {
+  const n = Math.max(segments.length, 1);
+  const sliceDeg = 360 / n;
+  const rim = 16;
+  const inner = size - rim * 2;
+  const radius = inner / 2;
+  // Mid of colored band (between GO hub and outer rim)
+  const hubR = 48;
+  const labelR = (hubR + radius) * 0.5;
+  // Keep number narrower than the wedge arc so it never spills into neighbors
+  const wedgeArc = labelR * (sliceDeg * (Math.PI / 180));
+  const labelW = Math.min(40, Math.max(28, wedgeArc * 0.55));
+  const labelH = 34;
+
+  return (
+    <View style={{ width: size, height: size }}>
+      <LinearGradient
+        colors={[
+          "#F0D56A",
+          "#E8C547",
+          "#A67C1A",
+          "#F3D56A",
+          "#7A5A12",
+          "#D4B24A",
+          "#5C440C",
+        ]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
       >
-        {Array.from({ length: rayCount }).map((_, i) => {
-          const a0 = -Math.PI / 2 + i * arc;
-          const a1 = a0 + arc;
-          return (
-            <Path
-              key={i}
-              d={buildSlicePath(cx, cy, radius, a0, a1)}
-              fill={i % 2 === 0 ? "#E8D48A" : "#DCC07A"}
-            />
-          );
-        })}
-      </Svg>
+        <View
+          style={{
+            width: size - 10,
+            height: size - 10,
+            borderRadius: (size - 10) / 2,
+            backgroundColor: "#8A6A18",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <LinearGradient
+            colors={["#6B5010", "#E6C35A", "#E8C547"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={{
+              width: size - 18,
+              height: size - 18,
+              borderRadius: (size - 18) / 2,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <View
+              style={{
+                width: inner,
+                height: inner,
+                borderRadius: radius,
+                overflow: "hidden",
+                backgroundColor: "#1A1208",
+              }}
+            >
+              {segments.map((seg, i) => {
+                // Triangle is symmetric about local "up", so rotate to wedge MID
+                // (matches spin math: mid at (i + 0.5) * slice)
+                const midDeg = (i + 0.5) * sliceDeg;
+                const halfBase =
+                  Math.tan((sliceDeg / 2) * (Math.PI / 180)) * radius * 1.01;
+                return (
+                  <View
+                    key={`slice-${i}`}
+                    pointerEvents="none"
+                    style={{
+                      position: "absolute",
+                      width: inner,
+                      height: inner,
+                      transform: [{ rotate: `${midDeg}deg` }],
+                    }}
+                  >
+                    <View
+                      style={{
+                        position: "absolute",
+                        left: radius - halfBase,
+                        top: 0,
+                        width: 0,
+                        height: 0,
+                        borderStyle: "solid",
+                        borderLeftWidth: halfBase,
+                        borderRightWidth: halfBase,
+                        borderTopWidth: radius,
+                        borderLeftColor: "transparent",
+                        borderRightColor: "transparent",
+                        borderTopColor: seg.color,
+                      }}
+                    />
+                    {/* Number locked to this wedge's centerline — same midDeg */}
+                    <View
+                      style={{
+                        position: "absolute",
+                        left: radius - labelW / 2,
+                        top: radius - labelR - labelH / 2,
+                        width: labelW,
+                        height: labelH,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          color: seg.textColor,
+                          fontSize: 22,
+                          fontWeight: "900",
+                          textAlign: "center",
+                          includeFontPadding: false,
+                          width: labelW,
+                          textShadowColor:
+                            seg.textColor === "#FFFFFF"
+                              ? "rgba(0,0,0,0.45)"
+                              : "rgba(255,255,255,0.35)",
+                          textShadowOffset: { width: 0, height: 1 },
+                          textShadowRadius: 2,
+                        }}
+                      >
+                        {seg.label}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </LinearGradient>
+        </View>
+      </LinearGradient>
     </View>
   );
 }
 
 // ─────────────────────────────────────────────
-// SpinModal (Updated to 1 Free Spin per day)
+// SpinModal (1 free spin per 24h window from first spin)
 // ─────────────────────────────────────────────
 interface SpinModalProps {
   visible: boolean;
@@ -284,7 +407,12 @@ interface SpinModalProps {
   spinsRemaining: number;
   spinsPerDay: number;
   spinCycle: number[];
-  onSpinAvailabilityChange: (canSpin: boolean, remaining?: number) => void;
+  nextSpinAt?: string | null;
+  onSpinAvailabilityChange: (
+    canSpin: boolean,
+    remaining?: number,
+    nextSpinAt?: string | null,
+  ) => void;
 }
 
 function SpinModal({
@@ -295,7 +423,8 @@ function SpinModal({
   canSpinToday: _canSpinToday,
   spinsRemaining,
   spinsPerDay,
-  spinCycle,
+  spinCycle: _spinCycle,
+  nextSpinAt: nextSpinAtProp,
   onSpinAvailabilityChange,
 }: SpinModalProps) {
   const segments = React.useMemo(() => segmentsFromCycle(FREE_SPIN_CYCLE), []);
@@ -307,7 +436,10 @@ function SpinModal({
   const [spinsLeft, setSpinsLeft] = React.useState(spinsRemaining);
   const [result, setResult] = React.useState<(typeof segments)[0] | null>(null);
   const [waitOpen, setWaitOpen] = React.useState(false);
-  const slideAnim = React.useRef(new Animated.Value(300)).current;
+  const [nextSpinAt, setNextSpinAt] = React.useState<string | null>(
+    nextSpinAtProp ?? null,
+  );
+  const insets = useSafeAreaInsets();
   const dotCount = Math.min(Math.max(spinsPerDay, 1), 8);
 
   React.useEffect(() => {
@@ -315,18 +447,18 @@ function SpinModal({
   }, [spinsRemaining, visible]);
 
   React.useEffect(() => {
-    if (visible) {
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        bounciness: 6,
-      }).start();
-    } else {
-      slideAnim.setValue(300);
+    setNextSpinAt(nextSpinAtProp ?? null);
+  }, [nextSpinAtProp, visible]);
+
+  React.useEffect(() => {
+    if (!visible) {
       setWaitOpen(false);
       setResult(null);
+      rotAnim.setValue(0);
+      currentRot.current = 0;
+      setIsSpinning(false);
     }
-  }, [visible]);
+  }, [visible, rotAnim]);
 
   async function doSpin() {
     if (isSpinning) return;
@@ -352,7 +484,12 @@ function SpinModal({
         setIsSpinning(false);
         const remaining = claim.spinsRemaining ?? 0;
         setSpinsLeft(remaining);
-        onSpinAvailabilityChange(remaining > 0, remaining);
+        if (claim.nextSpinAt) setNextSpinAt(claim.nextSpinAt);
+        onSpinAvailabilityChange(
+          remaining > 0,
+          remaining,
+          claim.nextSpinAt ?? null,
+        );
         onBalanceChange(claim.tokenBalance ?? balance);
         if (claim.error && claim.code !== "SPIN_LIMIT_REACHED") {
           nativeAlert("Spin failed", claim.error);
@@ -364,7 +501,12 @@ function SpinModal({
 
       const remaining = claim.spinsRemaining ?? 0;
       setSpinsLeft(remaining);
-      onSpinAvailabilityChange(remaining > 0, remaining);
+      if (claim.nextSpinAt) setNextSpinAt(claim.nextSpinAt);
+      onSpinAvailabilityChange(
+        remaining > 0,
+        remaining,
+        claim.nextSpinAt ?? null,
+      );
 
       const winIdx = Math.max(0, Math.min(n - 1, claim.winIndex));
       const offset = (Math.random() * 0.6 - 0.3) * arc;
@@ -385,7 +527,8 @@ function SpinModal({
         toValue: startDeg + totalDeg,
         duration: 4500,
         easing: easeOut,
-        useNativeDriver: true,
+        // Keep JS driver — LinearGradient slices can blank with native driver
+        useNativeDriver: false,
       }).start(() => {
         currentRot.current = (currentRot.current + totalRad) % TWO_PI;
         setIsSpinning(false);
@@ -410,6 +553,7 @@ function SpinModal({
       transparent
       animationType="fade"
       onRequestClose={onClose}
+      statusBarTranslucent
     >
       <View style={styles.modalOverlay}>
         <TouchableOpacity
@@ -417,13 +561,13 @@ function SpinModal({
           activeOpacity={1}
           onPress={onClose}
         />
-        <Animated.View
-          style={[
-            styles.modalSheet,
-            { transform: [{ translateY: slideAnim }] },
-          ]}
-        >
-          <View style={styles.modalSheetInner}>
+        <View style={styles.modalSheet}>
+          <View
+            style={[
+              styles.modalSheetInner,
+              { paddingBottom: Math.max(insets.bottom, 24) + 16 },
+            ]}
+          >
             <SunburstBg />
 
             <View style={styles.dotsRow}>
@@ -442,133 +586,18 @@ function SpinModal({
                   transform: [{ rotate: spinDeg }],
                   width: WHEEL_SIZE,
                   height: WHEEL_SIZE,
-                  backgroundColor: "transparent",
                 }}
               >
-                <Svg
-                  width={WHEEL_SIZE}
-                  height={WHEEL_SIZE}
-                  style={{ backgroundColor: "transparent" }}
-                >
-                  <Defs>
-                    <SvgLinearGradient
-                      id="metalGold"
-                      x1="0%"
-                      y1="0%"
-                      x2="100%"
-                      y2="100%"
-                    >
-                      <Stop offset="0%" stopColor="#F0D56A" />
-                      <Stop offset="16%" stopColor="#E8C547" />
-                      <Stop offset="38%" stopColor="#A67C1A" />
-                      <Stop offset="55%" stopColor="#F3D56A" />
-                      <Stop offset="72%" stopColor="#7A5A12" />
-                      <Stop offset="88%" stopColor="#D4B24A" />
-                      <Stop offset="100%" stopColor="#5C440C" />
-                    </SvgLinearGradient>
-                    <SvgLinearGradient
-                      id="metalBevel"
-                      x1="100%"
-                      y1="0%"
-                      x2="0%"
-                      y2="100%"
-                    >
-                      <Stop offset="0%" stopColor="#6B5010" />
-                      <Stop offset="45%" stopColor="#E6C35A" />
-                      <Stop offset="100%" stopColor="#E8C547" />
-                    </SvgLinearGradient>
-                  </Defs>
-
-                  <Circle cx={R} cy={R} r={R - 1} fill="url(#metalGold)" />
-                  <Circle cx={R} cy={R} r={R - 11} fill="url(#metalBevel)" />
-                  <Circle cx={R} cy={R} r={SLICE_R + 1} fill="#1A1208" />
-
-                  {segments.map((seg, i) => {
-                    const startAngle = -Math.PI / 2 + i * arc;
-                    const endAngle = startAngle + arc;
-                    const midAngle = startAngle + arc / 2;
-                    const d = buildSlicePath(
-                      R,
-                      R,
-                      SLICE_R,
-                      startAngle,
-                      endAngle,
-                    );
-                    const textR = SLICE_R * 0.6;
-                    const tx = R + textR * Math.cos(midAngle);
-                    const ty = R + textR * Math.sin(midAngle);
-                    const rotDeg = (midAngle * 180) / Math.PI;
-                    const lines = seg.label.split("\n");
-
-                    return (
-                      <G key={i}>
-                        <Path d={d} fill={seg.color} />
-                        <Line
-                          x1={R}
-                          y1={R}
-                          x2={R + SLICE_R * Math.cos(startAngle)}
-                          y2={R + SLICE_R * Math.sin(startAngle)}
-                          stroke="#C9A227"
-                          strokeWidth={1.6}
-                        />
-                        {lines.map((line, li) => (
-                          <SvgText
-                            key={li}
-                            x={tx}
-                            y={
-                              ty +
-                              (li - (lines.length - 1) / 2) * 12 -
-                              (lines.length === 1 ? 4 : 0)
-                            }
-                            fill={seg.textColor}
-                            fontSize={lines.length > 1 ? 11 : 14}
-                            fontWeight="800"
-                            textAnchor="middle"
-                            rotation={rotDeg}
-                            originX={tx}
-                            originY={ty}
-                          >
-                            {line}
-                          </SvgText>
-                        ))}
-                        {lines.length === 1 && (
-                          <SvgText
-                            x={tx}
-                            y={ty + 11}
-                            fill={seg.textColor}
-                            fontSize={8}
-                            fontWeight="700"
-                            textAnchor="middle"
-                            opacity={0.9}
-                            rotation={rotDeg}
-                            originX={tx}
-                            originY={ty}
-                          >
-                            {seg.subLabel}
-                          </SvgText>
-                        )}
-                      </G>
-                    );
-                  })}
-
-                  <Circle
-                    cx={R}
-                    cy={R}
-                    r={SLICE_R}
-                    fill="none"
-                    stroke="#8A6A18"
-                    strokeWidth={1.4}
-                  />
-                  <Circle cx={R} cy={R} r={44} fill="url(#metalGold)" />
-                  <Circle cx={R} cy={R} r={37} fill="#1A1208" />
-                </Svg>
+                <SpinWheelFace segments={segments} size={WHEEL_SIZE} />
               </Animated.View>
 
               <View style={styles.goHub} pointerEvents="box-none">
+                <View style={styles.goPointer} pointerEvents="none" />
                 <TouchableOpacity
                   style={styles.wheelCenterBtn}
                   onPress={doSpin}
                   activeOpacity={0.85}
+                  disabled={isSpinning}
                 >
                   <LinearGradient
                     colors={["#F0D56A", "#D4A017", "#8A6A18", "#E8C547"]}
@@ -577,19 +606,21 @@ function SpinModal({
                     style={styles.goRing}
                   >
                     <View style={styles.goInner}>
-                      <Text style={styles.wheelCenterText}>GO!</Text>
+                      <Text style={styles.wheelCenterText}>
+                        {isSpinning ? "…" : "GO!"}
+                      </Text>
                     </View>
                   </LinearGradient>
                 </TouchableOpacity>
-                <View style={styles.goPointer} pointerEvents="none" />
               </View>
             </View>
           </View>
-        </Animated.View>
+        </View>
 
         <SpinBonusPopup
           visible={waitOpen}
           variant="wait"
+          nextSpinAt={nextSpinAt}
           onCancel={() => setWaitOpen(false)}
           onPrimary={() => setWaitOpen(false)}
         />
@@ -654,6 +685,7 @@ export default function TokenScreen() {
   const insets = useSafeAreaInsets();
   const scrollRef = React.useRef<ScrollView>(null);
   const tokenSectionY = React.useRef(0);
+  const buyButtonY = React.useRef(0);
   const initialSnapshot = React.useMemo(() => getCachedTokenBalance(), []);
 
   const scrollToTokenPacks = React.useCallback(() => {
@@ -662,6 +694,15 @@ export default function TokenScreen() {
       animated: true,
     });
   }, []);
+
+  const scrollToBuyButton = React.useCallback(() => {
+    const y = tokenSectionY.current + buyButtonY.current - 24;
+    scrollRef.current?.scrollTo({
+      y: Math.max(y, 0),
+      animated: true,
+    });
+  }, []);
+
   const [balance, setBalance] = React.useState(
     initialSnapshot?.tokenBalance ?? 0,
   );
@@ -674,10 +715,18 @@ export default function TokenScreen() {
   const [spinsPerDay, setSpinsPerDay] = React.useState(
     initialSnapshot?.spinsPerDay ?? 1,
   );
+  const [nextSpinAt, setNextSpinAt] = React.useState<string | null>(
+    (initialSnapshot as { nextSpinAt?: string | null } | null)?.nextSpinAt ??
+      null,
+  );
   const [loadingBalance, setLoadingBalance] = React.useState(!initialSnapshot);
   const [spinModalOpen, setSpinModalOpen] = React.useState(false);
   const [selectedPackId, setSelectedPackId] = React.useState<string>("1000");
   const [buying, setBuying] = React.useState(false);
+  const [buyBtnPulse, setBuyBtnPulse] = React.useState(false);
+  const [packOffers, setPackOffers] = React.useState<
+    Record<string, TokenPackOffer>
+  >({});
   const [profilePhoto, setProfilePhoto] = React.useState<string | null>(null);
   const [userName, setUserName] = React.useState<string>("");
   const [userEmail, setUserEmail] = React.useState<string>("");
@@ -689,6 +738,7 @@ export default function TokenScreen() {
       setCanSpinToday(!!data.canSpinToday);
       setSpinsRemaining(data.spinsRemaining ?? (data.canSpinToday ? 1 : 0));
       setSpinsPerDay(data.spinsPerDay ?? 1);
+      setNextSpinAt(data.nextSpinAt ?? null);
       setSpinCycle(FREE_SPIN_CYCLE);
       setCachedTokenBalance(data);
     },
@@ -710,6 +760,14 @@ export default function TokenScreen() {
         if (data) {
           applyBalanceData(data);
         }
+        try {
+          const { packs } = await fetchTokenPacks(token);
+          const map: Record<string, TokenPackOffer> = {};
+          for (const p of packs) map[p.id] = p;
+          setPackOffers(map);
+        } catch {
+          /* keep static pack prices */
+        }
       } catch (e: any) {
         console.warn(
           "Failed to load token balance:",
@@ -720,6 +778,32 @@ export default function TokenScreen() {
       }
     },
     [applyBalanceData],
+  );
+
+  const selectedPack = React.useMemo(
+    () => TOKEN_PACKS.find((p) => p.id === selectedPackId) ?? TOKEN_PACKS[0],
+    [selectedPackId],
+  );
+
+  const selectedPackPriceLabel = React.useMemo(() => {
+    const offer = packOffers[selectedPack.id];
+    const priceInr =
+      offer?.priceInr ??
+      ("listPriceInr" in selectedPack ? selectedPack.listPriceInr : undefined);
+    return priceInr != null ? formatInr(priceInr) : selectedPack.price;
+  }, [packOffers, selectedPack]);
+
+  const selectPackAndShowBuy = React.useCallback(
+    (packId: string) => {
+      setSelectedPackId(packId);
+      setBuyBtnPulse(true);
+      // Let layout settle, then scroll Buy Tokens into view
+      requestAnimationFrame(() => {
+        setTimeout(() => scrollToBuyButton(), 50);
+      });
+      setTimeout(() => setBuyBtnPulse(false), 1200);
+    },
+    [scrollToBuyButton],
   );
 
   const buySelectedPack = React.useCallback(async () => {
@@ -760,7 +844,7 @@ export default function TokenScreen() {
         [{ text: "OK" }],
       );
 
-      // Reload balance to ensure sync
+      // Reload balance + refreshed pack-10 offer price
       await loadBalance();
     } catch (error: any) {
       console.error("Purchase error:", error);
@@ -934,6 +1018,17 @@ export default function TokenScreen() {
             <View style={styles.planList}>
               {TOKEN_PACKS.map((pack, index) => {
                 const selected = selectedPackId === pack.id;
+                const offer = packOffers[pack.id];
+                const priceInr =
+                  offer?.priceInr ??
+                  ("listPriceInr" in pack ? pack.listPriceInr : undefined);
+                const listPriceInr =
+                  offer?.listPriceInr ??
+                  ("listPriceInr" in pack ? pack.listPriceInr : undefined);
+                const showStrike =
+                  !!priceInr && !!listPriceInr && priceInr < listPriceInr;
+                const priceLabel =
+                  priceInr != null ? formatInr(priceInr) : pack.price;
                 return (
                   <TouchableOpacity
                     key={pack.id}
@@ -944,7 +1039,7 @@ export default function TokenScreen() {
                       selected && styles.planRowSelected,
                     ]}
                     activeOpacity={0.7}
-                    onPress={() => setSelectedPackId(pack.id)}
+                    onPress={() => selectPackAndShowBuy(pack.id)}
                   >
                     <View style={styles.planInfo}>
                       <View style={styles.planTitleRow}>
@@ -964,30 +1059,53 @@ export default function TokenScreen() {
                             </Text>
                           </View>
                         ) : null}
+                        {offer?.offerLabel ? (
+                          <View style={styles.planOfferTag}>
+                            <Text style={styles.planOfferText}>
+                              {offer.offerLabel}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                     </View>
 
-                    <Text
-                      style={[
-                        styles.planPrice,
-                        selected && styles.planPriceSelected,
-                      ]}
-                    >
-                      {pack.price}
-                    </Text>
+                    <View style={styles.planPriceCol}>
+                      {showStrike ? (
+                        <Text style={styles.planPriceStrike}>
+                          {formatInr(listPriceInr!)}
+                        </Text>
+                      ) : null}
+                      <Text
+                        style={[
+                          styles.planPrice,
+                          selected && styles.planPriceSelected,
+                        ]}
+                      >
+                        {priceLabel}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
             <TouchableOpacity
-              style={[styles.continueBtn, buying && styles.continueBtnDisabled]}
+              onLayout={(e) => {
+                buyButtonY.current = e.nativeEvent.layout.y;
+              }}
+              style={[
+                styles.continueBtn,
+                buyBtnPulse && styles.continueBtnPulse,
+                buying && styles.continueBtnDisabled,
+              ]}
               activeOpacity={0.85}
               disabled={buying}
               onPress={buySelectedPack}
             >
               <Text style={styles.continueBtnText}>
-                {buying ? "Processing…" : "Buy Tokens"}
+                {buying
+                  ? "Processing…"
+                  : `Buy ${selectedPack.count.toLocaleString()} tokens · ${selectedPackPriceLabel}`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1010,9 +1128,11 @@ export default function TokenScreen() {
         spinsRemaining={spinsRemaining}
         spinsPerDay={spinsPerDay}
         spinCycle={spinCycle}
-        onSpinAvailabilityChange={(canSpin, remaining) => {
+        nextSpinAt={nextSpinAt}
+        onSpinAvailabilityChange={(canSpin, remaining, nextAt) => {
           setCanSpinToday(canSpin);
           if (remaining !== undefined) setSpinsRemaining(remaining);
+          if (nextAt !== undefined) setNextSpinAt(nextAt);
         }}
       />
     </SafeAreaView>
@@ -1025,11 +1145,11 @@ export default function TokenScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F7F8FA",
+    backgroundColor: "#F5F5F7",
   },
   page: {
     flex: 1,
-    backgroundColor: "#F7F8FA",
+    backgroundColor: "#F5F5F7",
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -1351,11 +1471,31 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#6B7280",
   },
+  planOfferTag: {
+    backgroundColor: "#E8F5E9",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  planOfferText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#2E7D32",
+  },
+  planPriceCol: {
+    alignItems: "flex-end",
+    marginLeft: 8,
+  },
+  planPriceStrike: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    textDecorationLine: "line-through",
+    marginBottom: 1,
+  },
   planPrice: {
     fontSize: 16,
     fontWeight: "600",
     color: "#111",
-    marginLeft: 8,
   },
   planPriceSelected: {
     color: "#111B21",
@@ -1368,6 +1508,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 4,
     marginBottom: 8,
+  },
+  continueBtnPulse: {
+    transform: [{ scale: 1.02 }],
   },
   continueBtnDisabled: {
     opacity: 0.5,
@@ -1391,25 +1534,40 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     overflow: "hidden",
+    backgroundColor: "#E5D39A",
+    maxHeight: "88%",
   },
   modalSheetInner: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 18,
     paddingBottom: 28,
     alignItems: "center",
     position: "relative",
     overflow: "hidden",
     backgroundColor: "#E5D39A",
+    minHeight: WHEEL_SIZE + 110,
   },
   sunburstBg: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
+    zIndex: 0,
+    overflow: "hidden",
+  },
+  sunburstRay: {
+    position: "absolute",
+    width: 56,
+    height: 720,
+    left: "50%",
+    top: "50%",
+    marginLeft: -28,
+    marginTop: -360,
   },
   modalHeader: {
     width: "100%",
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 10,
+    zIndex: 2,
   },
   modalTitleWrap: {
     flex: 1,
@@ -1419,13 +1577,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 1.6,
-    color: "#FFD166",
+    color: "#A67C1A",
     marginBottom: 2,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#FFF6D6",
+    color: "#5C2E00",
   },
   closeBtn: {
     width: 36,
@@ -1441,32 +1599,35 @@ const styles = StyleSheet.create({
   dotsRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    justifyContent: "center",
+    marginBottom: 10,
     gap: 6,
+    zIndex: 2,
   },
   dotsLabel: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     color: "#7A3E00",
-    marginRight: 2,
+    marginRight: 4,
   },
   dot: {
-    width: 9,
-    height: 9,
+    width: 10,
+    height: 10,
     borderRadius: 5,
     backgroundColor: "#E07A14",
     marginHorizontal: 2,
   },
-  dotUsed: { backgroundColor: "rgba(122, 62, 0, 0.22)" },
+  dotUsed: { backgroundColor: "rgba(122, 62, 0, 0.28)" },
 
   wheelWrap: {
     position: "relative",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 16,
-    marginTop: 6,
+    marginBottom: 8,
+    marginTop: 4,
     width: WHEEL_SIZE,
     height: WHEEL_SIZE,
+    zIndex: 2,
   },
   svgPointer: {
     position: "absolute",
@@ -1488,20 +1649,21 @@ const styles = StyleSheet.create({
   goPointer: {
     position: "absolute",
     top: "50%",
-    marginTop: -55,
+    marginTop: -58,
     width: 0,
     height: 0,
-    borderLeftWidth: 11,
-    borderRightWidth: 11,
-    borderBottomWidth: 16,
+    borderLeftWidth: 12,
+    borderRightWidth: 12,
+    borderBottomWidth: 18,
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
     borderBottomColor: "#6C2BD9",
+    zIndex: 14,
   },
   wheelCenterBtn: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
@@ -1512,16 +1674,16 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
   },
   goRing: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     alignItems: "center",
     justifyContent: "center",
   },
   goInner: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     backgroundColor: "#5B21B6",
     borderWidth: 1.5,
     borderColor: "rgba(255, 243, 196, 0.55)",
@@ -1530,7 +1692,7 @@ const styles = StyleSheet.create({
   },
   wheelCenterText: {
     color: "#FFE566",
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: "900",
     letterSpacing: 0.6,
     textShadowColor: "rgba(60, 16, 110, 0.55)",
@@ -1569,20 +1731,23 @@ const styles = StyleSheet.create({
   },
 
   bonusOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     paddingHorizontal: 28,
     zIndex: 40,
   },
-  bonusCard: {
+  bonusWrap: {
     width: "100%",
     maxWidth: 340,
+    paddingTop: 30,
+  },
+  bonusCard: {
+    width: "100%",
     backgroundColor: "#fff",
     borderRadius: 18,
     overflow: "visible",
-    marginTop: 28,
     elevation: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 8 },
@@ -1590,7 +1755,7 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   bonusHeader: {
-    height: 92,
+    height: 58,
     backgroundColor: POPUP_HEADER,
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
@@ -1601,12 +1766,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.22)",
     borderRadius: 999,
   },
-  bonusBubbleLg: { width: 120, height: 120, left: -28, top: -18 },
-  bonusBubbleMd: { width: 70, height: 70, left: 42, top: 28 },
-  bonusBubbleSm: { width: 36, height: 36, left: 18, top: 8 },
+  bonusBubbleLg: { width: 90, height: 90, left: -22, top: -28 },
+  bonusBubbleMd: { width: 52, height: 52, left: 34, top: 12 },
+  bonusBubbleSm: { width: 26, height: 26, left: 12, top: 2 },
   bonusCoinWrap: {
     position: "absolute",
-    top: -28,
+    top: 0,
     left: 0,
     right: 0,
     alignItems: "center",
@@ -1626,7 +1791,7 @@ const styles = StyleSheet.create({
   bonusBody: {
     backgroundColor: "#fff",
     paddingHorizontal: 22,
-    paddingTop: 22,
+    paddingTop: 16,
     paddingBottom: 8,
   },
   bonusText: {

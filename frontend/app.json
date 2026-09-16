@@ -4,11 +4,17 @@
     "slug": "luvstor",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/app-icon.png",
     "scheme": "luvstor",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/spashscreen.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
     "ios": {
       "supportsTablet": true,
+      "icon": "./assets/images/app-icon.png",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -25,11 +31,72 @@
       "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "backgroundColor": "#8E2DE2",
-        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#370372",
+        "foregroundImage": "./assets/images/app-icon.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [
+            {
+              "scheme": "luvstor",
+              "host": "u"
+            },
+            {
+              "scheme": "luvstor",
+              "pathPrefix": "/u"
+            },
+            {
+              "scheme": "luvstor",
+              "host": "r"
+            },
+            {
+              "scheme": "luvstor",
+              "pathPrefix": "/r"
+            }
+          ]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [
+            {
+              "scheme": "https",
+              "host": "luvstor-api.onrender.com",
+              "pathPrefix": "/u"
+            },
+            {
+              "scheme": "https",
+              "host": "luvstor-api.onrender.com",
+              "pathPrefix": "/r"
+            },
+            {
+              "scheme": "https",
+              "host": "luvstor-api.onrender.com",
+              "pathPrefix": "/go"
+            },
+            {
+              "scheme": "http",
+              "host": "localhost",
+              "pathPrefix": "/u"
+            },
+            {
+              "scheme": "http",
+              "host": "localhost",
+              "pathPrefix": "/r"
+            },
+            {
+              "scheme": "http",
+              "host": "localhost",
+              "pathPrefix": "/go"
+            }
+          ]
+        }
+      ],
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
@@ -50,12 +117,18 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/app-icon.png"
     },
     "plugins": [
-      "expo-dev-client",
       "expo-router",
-      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
       "./plugins/withRazorpay",
       [
         "expo-location",
@@ -64,7 +137,7 @@
         }
       ],
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "Luvstor uses the microphone for voice messages and voice/video calls."
         }
@@ -76,12 +149,20 @@
           "cameraPermission": "Luvstor uses the camera for photos and video calls."
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Luvstor uses the camera for photo verification and video calls.",
+          "microphonePermission": "Luvstor uses the microphone for voice messages and voice/video calls.",
+          "recordAudioAndroid": false
+        }
+      ],
       "./plugins/withWebRTC",
       [
         "expo-notifications",
         {
           "icon": "./assets/images/android-icon-monochrome.png",
-          "color": "#8E2DE2",
+          "color": "#370372",
           "defaultChannel": "system",
           "enableBackgroundRemoteNotifications": true
         }
@@ -89,12 +170,13 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/luvstoer logo.png",
-          "imageWidth": 120,
+          "image": "./assets/images/spashscreen.png",
+          "imageWidth": 160,
           "resizeMode": "contain",
-          "backgroundColor": "#8E2DE2",
+          "backgroundColor": "#FFFFFF",
           "dark": {
-            "backgroundColor": "#8E2DE2"
+            "backgroundColor": "#FFFFFF",
+            "image": "./assets/images/spashscreen.png"
           }
         }
       ],
@@ -102,15 +184,6 @@
         "@react-native-google-signin/google-signin",
         {
           "iosUrlScheme": "com.googleusercontent.apps.944271155469-crp7cmrsa5fuqqk1moaut0pnj2p462dm"
-        }
-      ],
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "usesCleartextTraffic": true,
-            "enableOnBackInvokedCallback": true
-          }
         }
       ]
     ],

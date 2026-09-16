@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
     ActivityIndicator,
@@ -27,6 +27,8 @@ import { useAuth } from "../contexts/AuthContext";
 import { mapGoogleSignInError, useGoogleAuth } from "../hooks/useGoogleAuth";
 import { ApiError, apiGoogleLogin, apiSendOTP } from "../utils/api";
 import { resolvePostLoginRoute } from "../utils/auth";
+import { consumePendingProfileId } from "../utils/pendingProfileLink";
+import { normalizePublicId } from "../utils/profileLinks";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
@@ -96,6 +98,7 @@ const HERO_SLIDES = [
 
 export default function LoginScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ redirect?: string }>();
   const insets = useSafeAreaInsets();
   const { loginWithToken } = useAuth();
   const { signIn, ready, requiresDevBuild } = useGoogleAuth();
@@ -153,6 +156,41 @@ export default function LoginScreen() {
       name: user.name,
       profileComplete: user.profileComplete,
     });
+
+    // Backup attribution if auth path missed the invite code
+    try {
+      const {
+        peekPendingReferralCode,
+        consumePendingReferralCode,
+      } = await import("../utils/pendingReferral");
+      const { claimReferral } = await import("../utils/referrals");
+      const code = await peekPendingReferralCode();
+      if (code) {
+        try {
+          await claimReferral(token, code);
+        } catch {
+          /* already attributed / not new / etc. */
+        }
+        await consumePendingReferralCode();
+      }
+    } catch {
+      /* non-blocking */
+    }
+
+    // Prefer deep-link / share redirect → pending profile → normal post-login
+    const redirectRaw = Array.isArray(params.redirect)
+      ? params.redirect[0]
+      : params.redirect;
+    const redirectMatch = String(redirectRaw || "").match(
+      /(?:^|\/)u\/([A-Za-z]{4}\d{4})\b/i,
+    );
+    const fromRedirect = normalizePublicId(redirectMatch?.[1] || null);
+    const pendingId = fromRedirect || (await consumePendingProfileId());
+    if (pendingId) {
+      router.replace(`/u/${pendingId}` as any);
+      return;
+    }
+
     const nextRoute = await resolvePostLoginRoute(hydratedUser);
     router.replace(nextRoute as any);
   };
@@ -176,8 +214,14 @@ export default function LoginScreen() {
     try {
       const result = await apiSendOTP(trimmed);
       const cooldown = result.resendCooldownSeconds ?? 60;
+      const redirectRaw = Array.isArray(params.redirect)
+        ? params.redirect[0]
+        : params.redirect;
+      const redirectQ = redirectRaw
+        ? `&redirect=${encodeURIComponent(String(redirectRaw))}`
+        : "";
       router.push(
-        `/otp?email=${encodeURIComponent(trimmed)}&cooldown=${cooldown}` as any,
+        `/otp?email=${encodeURIComponent(trimmed)}&cooldown=${cooldown}${redirectQ}` as any,
       );
     } catch (err: any) {
       setError(err.message || "Could not send OTP. Check your connection.");

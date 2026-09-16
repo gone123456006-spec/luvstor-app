@@ -1,41 +1,111 @@
 /**
- * Explore random voice/video matchmaking — independent from friends/chat.
- * Shows real name, ID, and profile photo (WhatsApp-style) but no friend links.
+ * Explore random voice/video matchmaking — fully independent modes.
+ * - Separate queues for video and voice (never cross-match)
+ * - Independent from friends/chat calling
+ * - Optional gender + verified preferences (dating-style)
+ * - Shows real name, ID, and profile photo (WhatsApp-style) but no friend links
  */
 
+const User = require('../models/User');
 const { getBlockState } = require('../utils/blockState');
+const { canonicalShowMe } = require('../utils/showMe');
 const calls = require('./calls');
 
-/** @type {Map<string, { userId: string, callType: 'voice'|'video', joinedAt: number }>} */
+/** @type {Map<string, object>} */
 const videoQueue = new Map();
-/** @type {Map<string, { userId: string, callType: 'voice'|'video', joinedAt: number }>} */
+/** @type {Map<string, object>} */
 const voiceQueue = new Map();
 
+function normalizeType(callType) {
+  return callType === 'video' ? 'video' : 'voice';
+}
+
 function queueFor(callType) {
-  return callType === 'video' ? videoQueue : voiceQueue;
+  return normalizeType(callType) === 'video' ? videoQueue : voiceQueue;
 }
 
-function leaveQueue(userId) {
-  videoQueue.delete(String(userId));
-  voiceQueue.delete(String(userId));
+function normalizePrefs(prefs = {}) {
+  const showMe = canonicalShowMe(prefs.showMe) || 'All';
+  return {
+    showMe,
+    verifiedOnly: !!prefs.verifiedOnly,
+  };
 }
 
-function joinQueue(userId, callType) {
+/** Does A's showMe accept B's gender? */
+function wantsGender(showMe, peerGender) {
+  const want = canonicalShowMe(showMe) || 'All';
+  if (want === 'All') return true;
+  const peer = canonicalShowMe(peerGender);
+  if (!peer) return true; // unknown gender — don't block forever
+  return want === peer;
+}
+
+function prefsCompatible(a, b) {
+  if (!wantsGender(a.showMe, b.gender)) return false;
+  if (!wantsGender(b.showMe, a.gender)) return false;
+  if (a.verifiedOnly && !b.photoVerified) return false;
+  if (b.verifiedOnly && !a.photoVerified) return false;
+  return true;
+}
+
+/**
+ * Leave explore queue(s).
+ * @param {string} userId
+ * @param {'voice'|'video'|undefined} callType - if set, leave only that queue
+ */
+function leaveQueue(userId, callType) {
   const uid = String(userId);
+  if (callType === 'video') {
+    videoQueue.delete(uid);
+    return;
+  }
+  if (callType === 'voice') {
+    voiceQueue.delete(uid);
+    return;
+  }
+  videoQueue.delete(uid);
+  voiceQueue.delete(uid);
+}
+
+/**
+ * Join one explore mode queue.
+ * @param {string} userId
+ * @param {'voice'|'video'} callType
+ * @param {{ gender?: string, showMe?: string, verifiedOnly?: boolean, photoVerified?: boolean }} [prefs]
+ */
+function joinQueue(userId, callType, prefs = {}) {
+  const uid = String(userId);
+  const type = normalizeType(callType);
   leaveQueue(uid);
-  const type = callType === 'video' ? 'video' : 'voice';
-  const entry = { userId: uid, callType: type, joinedAt: Date.now() };
+  const normalized = normalizePrefs(prefs);
+  const entry = {
+    userId: uid,
+    callType: type,
+    joinedAt: Date.now(),
+    gender: canonicalShowMe(prefs.gender) || '',
+    showMe: normalized.showMe,
+    verifiedOnly: normalized.verifiedOnly,
+    photoVerified: !!prefs.photoVerified,
+  };
   queueFor(type).set(uid, entry);
   return entry;
 }
 
-function isInQueue(userId) {
+function isInQueue(userId, callType) {
   const uid = String(userId);
+  if (callType === 'video') return videoQueue.has(uid);
+  if (callType === 'voice') return voiceQueue.has(uid);
   return videoQueue.has(uid) || voiceQueue.has(uid);
 }
 
+function queueSize(callType) {
+  return queueFor(callType).size;
+}
+
 async function pickMatch(callType) {
-  const q = queueFor(callType);
+  const type = normalizeType(callType);
+  const q = queueFor(type);
   const ids = [...q.keys()];
   if (ids.length < 2) return null;
 
@@ -43,11 +113,18 @@ async function pickMatch(callType) {
     for (let j = i + 1; j < ids.length; j++) {
       const a = ids[i];
       const b = ids[j];
+      const entryA = q.get(a);
+      const entryB = q.get(b);
+      if (!entryA || !entryB) continue;
+
+      if (!prefsCompatible(entryA, entryB)) continue;
+
       const block = await getBlockState(a, b);
       if (block.blocked) continue;
+
       q.delete(a);
       q.delete(b);
-      return { callerId: a, calleeId: b, callType };
+      return { callerId: a, calleeId: b, callType: type };
     }
   }
   return null;
@@ -60,15 +137,20 @@ function explorePeerCard(snapshot) {
     photo: snapshot?.photo || '',
     gender: snapshot?.gender || '',
     publicId: snapshot?.publicId || '',
+    photoVerified: !!snapshot?.photoVerified,
   };
 }
 
 async function startExploreCall(io, notifyUser, { callerId, calleeId, callType }) {
-  const roomId = `explore_${Date.now()}_${callerId.slice(-4)}_${calleeId.slice(-4)}`;
+  const type = normalizeType(callType);
+  leaveQueue(callerId);
+  leaveQueue(calleeId);
+
+  const roomId = `explore_${type}_${Date.now()}_${callerId.slice(-4)}_${calleeId.slice(-4)}`;
   const result = await calls.startOutgoing({
     callerId,
     calleeId,
-    callType,
+    callType: type,
     roomId,
   });
 
@@ -121,7 +203,7 @@ async function startExploreCall(io, notifyUser, { callerId, calleeId, callType }
     peer: callerCard,
   });
 
-  return { ok: true, callId: session.callId };
+  return { ok: true, callId: session.callId, callType: type };
 }
 
 async function tryMatch(io, notifyUser, callType) {
@@ -130,10 +212,33 @@ async function tryMatch(io, notifyUser, callType) {
   return startExploreCall(io, notifyUser, match);
 }
 
+/**
+ * Load gender / verification / saved explore prefs for a joining user.
+ */
+async function loadJoinProfile(userId) {
+  const u = await User.findById(userId)
+    .select('gender explorePrefs photoVerification showMe')
+    .lean();
+  if (!u) return null;
+  return {
+    gender: canonicalShowMe(u.gender) || '',
+    photoVerified: u.photoVerification?.status === 'approved',
+    showMe:
+      canonicalShowMe(u.explorePrefs?.showMe) ||
+      canonicalShowMe(u.showMe) ||
+      'All',
+    verifiedOnly: !!u.explorePrefs?.verifiedOnly,
+  };
+}
+
 module.exports = {
   joinQueue,
   leaveQueue,
   isInQueue,
+  queueSize,
   tryMatch,
   startExploreCall,
+  loadJoinProfile,
+  normalizePrefs,
+  prefsCompatible,
 };

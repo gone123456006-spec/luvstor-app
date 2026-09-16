@@ -32,12 +32,11 @@ function resolvePaidPackFromOrder({ order, clientPackId, TOKEN_PACKS, getPackPri
   }
 
   const notedPriceInr = Number(order.notes?.priceInr);
-  const fallbackPrice = Number(getPackPriceInr(packId, user));
   const expectedPaise = Number.isFinite(notedPriceInr)
     ? notedPriceInr * 100
-    : fallbackPrice * 100;
+    : Number(getPackPriceInr(packId, user)) * 100;
 
-  if (!Number.isFinite(expectedPaise) || Number(order.amount) !== Number(expectedPaise)) {
+  if (Number(order.amount) !== Number(expectedPaise)) {
     return {
       ok: false,
       status: 400,

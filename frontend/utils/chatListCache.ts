@@ -22,7 +22,13 @@ export type ConversationItem = {
   theyBlocked?: boolean;
 };
 
-export type ChatFilterKey = 'All' | 'Friend' | 'Request' | 'Online' | 'Archive';
+export type ChatFilterKey =
+  | 'All'
+  | 'Friend'
+  | 'Request'
+  | 'Online'
+  | 'Unread'
+  | 'Archive';
 
 export type ChatListSnapshot = {
   conversations: ConversationItem[];

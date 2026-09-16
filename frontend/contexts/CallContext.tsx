@@ -12,7 +12,7 @@ import {
   AppStateStatus,
   Vibration,
 } from 'react-native';
-import { Audio, isAudioAvailable } from '../utils/expoAv';
+import { setAudioModeAsync } from 'expo-audio';
 import { useAuth } from './AuthContext';
 import { useSocket } from './SocketContext';
 import { apiRequest } from '../utils/api';
@@ -22,6 +22,7 @@ import {
   CallMediaType,
   NetworkQuality,
   isWebRTCAvailable,
+  getWebRTCUnavailableMessage,
 } from '../services/webrtc';
 import { resolveMediaUrl } from '../utils/media';
 
@@ -242,17 +243,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   );
 
   const configureAudio = useCallback(async (speakerOn: boolean) => {
-    if (!isAudioAvailable() || !Audio) {
-      console.warn('[Call] audio mode skipped — expo-av native module missing');
-      return;
-    }
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: !speakerOn,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: 'doNotMix',
+        shouldRouteThroughEarpiece: !speakerOn,
       });
     } catch (err) {
       console.warn('[Call] audio mode:', (err as Error).message);
@@ -367,8 +364,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
       if (!isWebRTCAvailable()) {
         patch({
-          error:
-            'Voice/video calls need a development build (Expo Go does not include WebRTC).',
+          error: getWebRTCUnavailableMessage(),
           phase: 'ended',
           endReason: 'error',
           peer,
@@ -392,8 +388,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     if (!socket || !s.callId || s.phase !== 'incoming') return;
     if (!isWebRTCAvailable()) {
       patch({
-        error:
-          'Voice/video calls need a development build (Expo Go does not include WebRTC).',
+        error: getWebRTCUnavailableMessage(),
       });
       socket.emit('call:decline', { callId: s.callId });
       finishCall('error');
@@ -546,6 +541,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     };
 
     const onIncoming = (payload: any) => {
+      // Keep Explore and friend calls from stealing each other's active session
       if (stateRef.current.phase !== 'idle' && stateRef.current.phase !== 'ended') {
         if (payload?.callId) {
           socket.emit('call:decline', { callId: payload.callId });

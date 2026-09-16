@@ -24,6 +24,8 @@ const {
   MAX_SESSION_EXCLUDE,
 } = require("../services/discoveryRotation");
 const { MAX_PROFILE_PHOTOS } = require("../config/profileLimits");
+const { isProfileComplete } = require("../utils/userHelpers");
+const { WELCOME_PROFILE_TOKENS, GALLERY_POST_TOKENS_PER_IMAGE } = require("../services/chatTokens");
 
 /**
  * Profile Isolation Principles:
@@ -55,6 +57,7 @@ router.get("/me", auth, async (req, res) => {
       publicId: user.publicId || "",
       email: user.email,
       name: user.name,
+      authProvider: user.authProvider || "email",
       age: user.age,
       bio: user.bio,
       gender: user.gender,
@@ -62,6 +65,7 @@ router.get("/me", auth, async (req, res) => {
       interests: user.interests,
       relationshipGoal: user.relationshipGoal,
       photo: user.photo,
+      coverPhoto: user.coverPhoto || "",
       photos: user.photos || [],
       height: user.height,
       distance: user.distance,
@@ -87,6 +91,10 @@ router.get("/me", auth, async (req, res) => {
         gender: user.discoveryPrefs?.gender || "",
         radiusKm: user.discoveryPrefs?.radiusKm ?? null,
         activeWithinMinutes: user.discoveryPrefs?.activeWithinMinutes || 0,
+      },
+      explorePrefs: {
+        showMe: canonicalShowMe(user.explorePrefs?.showMe) || "All",
+        verifiedOnly: !!user.explorePrefs?.verifiedOnly,
       },
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
@@ -118,6 +126,7 @@ router.put("/me", auth, async (req, res) => {
       "interests",
       "relationshipGoal",
       "photo",
+      "coverPhoto",
       "photos",
       "height",
       "distance",
@@ -126,6 +135,11 @@ router.put("/me", auth, async (req, res) => {
     allowed.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    if (updates.coverPhoto !== undefined) {
+      updates.coverPhoto =
+        typeof updates.coverPhoto === "string" ? updates.coverPhoto.trim() : "";
+    }
 
     // Gallery: max 6 images, strings only
     if (updates.photos !== undefined) {
@@ -236,9 +250,33 @@ router.put("/me", auth, async (req, res) => {
       updates.relationshipGoal = String(updates.relationshipGoal || "").trim();
     }
 
+    // Explore match preferences (independent from Discover showMe)
+    if (req.body.explorePrefs && typeof req.body.explorePrefs === "object") {
+      const ep = req.body.explorePrefs;
+      if (ep.showMe !== undefined) {
+        const canonical = canonicalShowMe(ep.showMe);
+        if (String(ep.showMe || "").trim() && !canonical) {
+          return res.status(400).json({
+            error: "explorePrefs.showMe must be Man, Woman, Other, or All",
+          });
+        }
+        updates["explorePrefs.showMe"] = canonical || "All";
+      }
+      if (ep.verifiedOnly !== undefined) {
+        updates["explorePrefs.verifiedOnly"] = !!ep.verifiedOnly;
+      }
+      updates["explorePrefs.updatedAt"] = new Date();
+    }
+
     // Validate no attempt to modify protected fields (security critical)
     const protectedFields = [
       "tokenBalance",
+      "welcomeTokensGrantedAt",
+      "photoVerificationTokensGrantedAt",
+      "galleryPostRewardCount",
+      "galleryPostRewardInitialized",
+      "tokenPack10PurchaseCount",
+      "lastTokenPaymentId",
       "lastSpinDate",
       "activeDeviceId",
       "chatSessionStartedAt",
@@ -263,8 +301,16 @@ router.put("/me", auth, async (req, res) => {
       }
     }
 
+    const before = await User.findById(req.userId)
+      .select(
+        "name age bio gender photo photos interests relationshipGoal welcomeTokensGrantedAt tokenBalance photoVerification galleryPostRewardCount galleryPostRewardInitialized",
+      )
+      .lean();
+    if (!before) return res.status(404).json({ error: "User not found" });
+    const wasComplete = isProfileComplete(before);
+
     // Update only own profile by userId
-    const user = await User.findByIdAndUpdate(req.userId, updates, {
+    let user = await User.findByIdAndUpdate(req.userId, updates, {
       returnDocument: "after",
       runValidators: true,
     }).select("-__v -activeDeviceId");
@@ -272,11 +318,165 @@ router.put("/me", auth, async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
     await ensureUserPublicId(user);
 
+    // Re-verify if main profile photo changed a lot after photo verification
+    const photoChanged =
+      updates.photo !== undefined || updates.photos !== undefined;
+    if (
+      photoChanged &&
+      before.photoVerification?.status === "approved"
+    ) {
+      const { mainPhotoFingerprint } = require("../services/photoFaceMatch");
+      const prevFp =
+        before.photoVerification.verifiedMainPhoto ||
+        mainPhotoFingerprint(before);
+      const nextFp = mainPhotoFingerprint(user);
+      if (prevFp && nextFp && prevFp !== nextFp) {
+        user = await User.findByIdAndUpdate(
+          req.userId,
+          {
+            $set: {
+              "photoVerification.status": "none",
+              "photoVerification.reviewedAt": new Date(),
+              "photoVerification.reviewNote":
+                "Re-verify required after changing your main photo",
+              "photoVerification.verifiedMainPhoto": "",
+              "photoVerification.matchScore": null,
+            },
+          },
+          { returnDocument: "after" },
+        ).select("-__v -activeDeviceId");
+      }
+    }
+
+    // One-time welcome tokens: only when profile becomes complete the first time
+    let welcomeTokensGranted = 0;
+    let galleryPostTokensGranted = 0;
+    if (
+      !wasComplete &&
+      isProfileComplete(user) &&
+      !before.welcomeTokensGrantedAt
+    ) {
+      const granted = await User.findOneAndUpdate(
+        {
+          _id: req.userId,
+          $or: [
+            { welcomeTokensGrantedAt: null },
+            { welcomeTokensGrantedAt: { $exists: false } },
+          ],
+        },
+        {
+          $inc: { tokenBalance: WELCOME_PROFILE_TOKENS },
+          $set: { welcomeTokensGrantedAt: new Date() },
+        },
+        { returnDocument: "after" },
+      ).select("tokenBalance welcomeTokensGrantedAt");
+
+      if (granted) {
+        welcomeTokensGranted = WELCOME_PROFILE_TOKENS;
+        user.tokenBalance = granted.tokenBalance;
+        user.welcomeTokensGrantedAt = granted.welcomeTokensGrantedAt;
+        try {
+          const { createNotification } = require("../services/notifications");
+          await createNotification(req.app.get("io"), {
+            userId: req.userId,
+            type: "token",
+            title: "Welcome bonus!",
+            body: `You received ${WELCOME_PROFILE_TOKENS} free tokens for completing your profile.`,
+            deepLink: "/(tabs)/token",
+            data: {
+              screen: "token",
+              code: "WELCOME_BONUS",
+              amount: WELCOME_PROFILE_TOKENS,
+            },
+          });
+        } catch (e) {
+          console.warn("welcome token notification failed", e?.message || e);
+        }
+      }
+    }
+
+    // Post gallery: +5 tokens per image, first add only (new users / empty gallery)
+    if (updates.photos !== undefined) {
+      const beforePhotos = Array.isArray(before.photos)
+        ? before.photos.filter((u) => String(u || "").trim())
+        : [];
+      const afterPhotos = Array.isArray(user.photos)
+        ? user.photos.filter((u) => String(u || "").trim())
+        : [];
+      const nextCount = Math.min(afterPhotos.length, MAX_PROFILE_PHOTOS);
+
+      let rewardCount = Number(before.galleryPostRewardCount) || 0;
+      let initialized = !!before.galleryPostRewardInitialized;
+
+      if (!initialized) {
+        // Existing users who already have posts: lock out (no free tokens)
+        if (beforePhotos.length > 0) {
+          rewardCount = MAX_PROFILE_PHOTOS;
+        } else {
+          rewardCount = 0;
+        }
+        initialized = true;
+        await User.findByIdAndUpdate(req.userId, {
+          $set: {
+            galleryPostRewardInitialized: true,
+            galleryPostRewardCount: rewardCount,
+          },
+        });
+      }
+
+      const slotsToReward = Math.max(0, nextCount - rewardCount);
+      if (slotsToReward > 0 && rewardCount < MAX_PROFILE_PHOTOS) {
+        const grantSlots = Math.min(
+          slotsToReward,
+          MAX_PROFILE_PHOTOS - rewardCount,
+        );
+        const grantTokens = grantSlots * GALLERY_POST_TOKENS_PER_IMAGE;
+        const granted = await User.findOneAndUpdate(
+          {
+            _id: req.userId,
+            galleryPostRewardCount: { $lt: MAX_PROFILE_PHOTOS },
+          },
+          {
+            $inc: {
+              tokenBalance: grantTokens,
+              galleryPostRewardCount: grantSlots,
+            },
+            $set: { galleryPostRewardInitialized: true },
+          },
+          { returnDocument: "after" },
+        ).select("tokenBalance galleryPostRewardCount");
+
+        if (granted) {
+          galleryPostTokensGranted = grantTokens;
+          user.tokenBalance = granted.tokenBalance;
+          try {
+            const { createNotification } = require("../services/notifications");
+            await createNotification(req.app.get("io"), {
+              userId: req.userId,
+              type: "token",
+              title: "Post photo bonus!",
+              body: `You received ${galleryPostTokensGranted} tokens for adding ${grantSlots} post photo${grantSlots > 1 ? "s" : ""}.`,
+              deepLink: "/(tabs)/token",
+              data: {
+                screen: "token",
+                code: "GALLERY_POST_BONUS",
+                amount: galleryPostTokensGranted,
+                images: grantSlots,
+              },
+            });
+          } catch (e) {
+            console.warn("gallery post token notification failed", e?.message || e);
+          }
+        }
+      }
+    }
+
     // Instantly sync profile changes across Discover, Chat, etc.
     const publicFieldsChanged = [
       "name",
       "bio",
       "photo",
+      "coverPhoto",
       "photos",
       "age",
       "gender",
@@ -297,6 +497,9 @@ router.put("/me", auth, async (req, res) => {
       message: "Profile updated",
       profile: user,
       publicId: user.publicId || "",
+      welcomeTokensGranted,
+      galleryPostTokensGranted,
+      tokenBalance: user.tokenBalance ?? 0,
     });
   } catch (err) {
     console.error("PUT /me error:", err);
@@ -379,7 +582,7 @@ router.get("/profile/:userId", auth, async (req, res) => {
 
     // Fetch public fields + location so we can show distance
     const user = await User.findById(userId).select(
-      "publicId name age bio photo photos gender interests height relationshipGoal isOnline lastSeen location subscriptionPlan subscriptionExpiresAt photoVerification",
+      "publicId name age bio photo coverPhoto photos gender interests height relationshipGoal isOnline lastSeen location subscriptionPlan subscriptionExpiresAt photoVerification",
     );
 
     if (!user) {
@@ -391,10 +594,11 @@ router.get("/profile/:userId", auth, async (req, res) => {
       user.toObject ? user.toObject() : user,
     );
 
-    // Log the visit for "who viewed you" in the daily suggestion digest.
+    // Log the visit for "who viewed you" + profile_view notification.
     // Fire-and-forget, and never for a blocked pair.
     if (!safe.privacyHidden && !safe.theyBlocked && !safe.iBlocked) {
-      recordProfileView(req.userId, userId).catch(() => {});
+      const io = req.app.get('io');
+      recordProfileView(req.userId, userId, new Date(), io).catch(() => {});
     }
 
     // Distance from requester (WhatsApp-style "X km away")
@@ -438,6 +642,7 @@ router.get("/profile/:userId", auth, async (req, res) => {
       age: safe.age ?? null,
       bio: safe.bio || "",
       photo: safe.privacyHidden ? "" : safe.photo || "",
+      coverPhoto: safe.privacyHidden ? "" : safe.coverPhoto || "",
       photos: safe.privacyHidden ? [] : safe.photos || [],
       gender: safe.gender || "",
       interests: safe.interests || [],
@@ -489,7 +694,7 @@ router.get("/search-by-id", auth, async (req, res) => {
       _id: { $ne: req.userId },
       isVerified: true,
     }).select(
-      "publicId name age bio photo photos gender interests height relationshipGoal isOnline lastSeen location subscriptionPlan subscriptionExpiresAt",
+      "publicId name age bio photo coverPhoto photos gender interests height relationshipGoal isOnline lastSeen location subscriptionPlan subscriptionExpiresAt",
     );
 
     if (!user) {
@@ -540,6 +745,7 @@ router.get("/search-by-id", auth, async (req, res) => {
       age: user.age,
       bio: user.bio,
       photo: user.photo,
+      coverPhoto: user.coverPhoto || "",
       photos: user.photos || [],
       gender: user.gender,
       interests: user.interests,
@@ -692,5 +898,26 @@ function getDistanceMetres(lat1, lon1, lat2, lon2) {
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+// GET /api/users/online-nearby
+// Get online nearby users for pulse strip
+router.get("/online-nearby", auth, async (req, res) => {
+  try {
+    const { getOnlineNearbyPulse } = require('../services/onlineNearby');
+    
+    const radiusKm = Number(req.query.radius) || undefined;
+    const limit = Number(req.query.limit) || undefined;
+    
+    const result = await getOnlineNearbyPulse(req.userId, {
+      radiusKm,
+      limit,
+    });
+    
+    res.json(result);
+  } catch (err) {
+    console.error("online-nearby error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
 module.exports = router;

@@ -25,14 +25,14 @@ import {
 import { isExpoGo } from '../../utils/push';
 
 const WA = {
-  bg: '#FDF8FF',
+  bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
-  secondary: '#49454F',
+  secondary: '#6B7280',
   muted: '#667781',
-  border: '#E7E0EC',
-  primary: '#6750A4',
-  header: '#FDF8FF',
+  border: '#E8E8ED',
+  primary: '#370372',
+  header: '#F5F5F7',
 };
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -94,7 +94,7 @@ const ROWS: ToggleRow[] = [
     label: 'Updates',
     sub: 'App announcements and reminders',
     icon: 'information-circle',
-    color: '#6750A4',
+    color: '#370372',
   },
   {
     key: 'promotions',
@@ -268,7 +268,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#EADDFF',
+    backgroundColor: '#EFE8F8',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -280,7 +280,7 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 8,
   },
-  listGroup: { backgroundColor: WA.white },
+  listGroup: { backgroundColor: WA.bg },
   listRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -307,7 +307,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
-    backgroundColor: '#EADDFF',
+    backgroundColor: '#EFE8F8',
   },
   enableText: { color: WA.primary, fontWeight: '600', fontSize: 13 },
   footerNote: {

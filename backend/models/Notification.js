@@ -21,6 +21,8 @@ const NOTIFICATION_TYPES = [
   'promo',
   /** Once-a-day "here's what's waiting for you" digest. */
   'suggestion',
+  /** Someone opened your profile */
+  'profile_view',
 ];
 
 /** Android channel each type is delivered on (must exist on the client). */
@@ -40,6 +42,7 @@ const TYPE_CHANNEL = {
   system: 'system',
   promo: 'promotions',
   suggestion: 'suggestions',
+  profile_view: 'social',
 };
 
 const notificationSchema = new mongoose.Schema(

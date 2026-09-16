@@ -108,13 +108,16 @@ function getActiveCallForUser(userId) {
 }
 
 async function actorSnapshot(userId) {
-  const u = await User.findById(userId).select('name photo gender publicId').lean();
+  const u = await User.findById(userId)
+    .select('name photo gender publicId photoVerification')
+    .lean();
   return {
     id: String(userId),
     name: u?.name || 'User',
     photo: u?.photo || '',
     gender: u?.gender || '',
     publicId: u?.publicId || '',
+    photoVerified: u?.photoVerification?.status === 'approved',
   };
 }
 
@@ -242,6 +245,7 @@ async function startOutgoing({
     callType: callType === 'video' ? 'video' : 'voice',
     status: 'ringing',
     roomId: roomId || [cId, rId].sort().join('_'),
+    explore: String(roomId || '').startsWith('explore_'),
     startedAt,
     answeredAt: null,
     offerFrom: null,

@@ -3,8 +3,10 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import React from "react";
 import {
+    Animated,
     Dimensions,
     Modal,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
@@ -16,14 +18,19 @@ import {
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { MAX_PROFILE_GALLERY } from "../constants/profile";
-import { isValidPublicId } from "../utils/auth";
+import { getAuthToken, isValidPublicId } from "../utils/auth";
+import { blockUser, ReportReason, reportUser } from "../utils/friends";
 import { resolveMediaUrl } from "../utils/media";
-import ProfileInfoModal from "./ProfileInfoModal";
+import { showMeLabel } from "../utils/showMe";
+import { useAppAlert } from "./AppAlert";
+import CopyablePublicId, { sharePublicProfile } from "./CopyablePublicId";
 import ProfileInstagramSection from "./ProfileInstagramSection";
 import ProfilePhotoViewer from "./ProfilePhotoViewer";
-import WhatsAppAvatar, { getDisplayName } from "./WhatsAppAvatar";
+import WhatsAppAvatar, {
+  getDisplayName,
+} from "./WhatsAppAvatar";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 /** Same theme as Profile tab */
 const WA = {
@@ -34,6 +41,43 @@ const WA = {
   border: "#E7E0EC",
   teal: "#6750A4",
   primaryContainer: "#EADDFF",
+  danger: "#B3261E",
+};
+
+const REPORT_REASONS: { key: ReportReason; label: string }[] = [
+  { key: "spam", label: "Spam" },
+  { key: "harassment", label: "Harassment or bullying" },
+  { key: "inappropriate", label: "Inappropriate content" },
+  { key: "fake_profile", label: "Fake profile" },
+  { key: "underage", label: "Underage user" },
+  { key: "other", label: "Other" },
+];
+
+const INTEREST_EMOJIS: Record<string, string> = {
+  Travel: "✈️",
+  Music: "🎵",
+  Fitness: "🏋️",
+  Cooking: "🍳",
+  Art: "🎨",
+  Gaming: "🎮",
+  Movies: "🎬",
+  Photography: "📷",
+  Reading: "📖",
+  Dancing: "💃",
+  Nature: "🍃",
+  Coffee: "☕",
+  Yoga: "🧘",
+  Sports: "⚽",
+  Pets: "🐾",
+  Food: "🍕",
+};
+
+const GOAL_EMOJIS: Record<string, string> = {
+  "Long-term relationship": "👩‍❤️‍👨",
+  "Casual dating": "🥂",
+  Friendship: "🤝",
+  "Just vibes": "🤙",
+  "See where it goes": "🧭",
 };
 
 interface UserProfile {
@@ -44,10 +88,12 @@ interface UserProfile {
   bio: string;
   photo: string;
   photos?: string[];
+  coverPhoto?: string;
   gender: string;
   interests: string[];
   height?: number | null;
   relationshipGoal?: string;
+  showMe?: string;
   distance?: number;
   distanceKm?: string;
   isOnline?: boolean;
@@ -57,6 +103,7 @@ interface UserProfile {
   theyLiked?: boolean;
   subscriptionBadge?: string | null;
   subscriptionExpiresAt?: string | null;
+  photoVerified?: boolean;
 }
 
 interface Props {
@@ -66,6 +113,8 @@ interface Props {
   onLike?: () => void;
   onUnlike?: () => void;
   onMessage?: () => void;
+  /** Called after a successful block (parent can remove from feed) */
+  onBlocked?: (userId: string) => void;
   likingInProgress?: boolean;
 }
 
@@ -76,13 +125,49 @@ export default function UserProfileModal({
   onLike,
   onUnlike,
   onMessage,
+  onBlocked,
   likingInProgress = false,
 }: Props) {
   const insets = useSafeAreaInsets();
+  const { showAlert } = useAppAlert();
   const [photoViewerVisible, setPhotoViewerVisible] = React.useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = React.useState(0);
+  const [viewerUris, setViewerUris] = React.useState<string[]>([]);
+  const [viewerTitle, setViewerTitle] = React.useState("Photos");
   const [likedLocal, setLikedLocal] = React.useState(false);
   const [infoVisible, setInfoVisible] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const [reportOpen, setReportOpen] = React.useState(false);
+  const [blockConfirmOpen, setBlockConfirmOpen] = React.useState(false);
+  const [reasonPickerOpen, setReasonPickerOpen] = React.useState(false);
+  const [pendingAlsoBlock, setPendingAlsoBlock] = React.useState(false);
+  const [actionBusy, setActionBusy] = React.useState(false);
+  const waSheetAnim = React.useRef(new Animated.Value(0)).current;
+  const waSheetVisible = blockConfirmOpen || reportOpen || reasonPickerOpen;
+
+  React.useEffect(() => {
+    if (!waSheetVisible) {
+      waSheetAnim.setValue(0);
+      return;
+    }
+    waSheetAnim.setValue(0);
+    Animated.timing(waSheetAnim, {
+      toValue: 1,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [waSheetVisible, blockConfirmOpen, reportOpen, reasonPickerOpen, waSheetAnim]);
+
+  const closeMenu = () => setMenuOpen(false);
+  const closeMenuNow = () => {
+    setMenuOpen(false);
+    setReportOpen(false);
+    setBlockConfirmOpen(false);
+    setReasonPickerOpen(false);
+    setPendingAlsoBlock(false);
+  };
+
+  const closeInfoPage = () => setInfoVisible(false);
 
   React.useEffect(() => {
     if (visible && user) {
@@ -95,8 +180,7 @@ export default function UserProfileModal({
     const seen = new Set<string>();
     const list: string[] = [];
     const toUrl = (url?: string) => resolveMediaUrl(url) || url || "";
-    // Same order as own Profile: photos array first (cover = photos[0]), then photo
-    for (const url of [...(user.photos || []), user.photo]) {
+    for (const url of user.photos || []) {
       const resolved = toUrl(url);
       if (!resolved) continue;
       const key = String(resolved).split("?")[0];
@@ -106,13 +190,20 @@ export default function UserProfileModal({
       if (list.length >= MAX_PROFILE_GALLERY) break;
     }
     return list;
-  }, [user?.photo, user?.photos]);
+  }, [user?.photos]);
 
   React.useEffect(() => {
     if (!visible) {
       setPhotoViewerVisible(false);
       setSelectedPhotoIndex(0);
+      setViewerUris([]);
       setInfoVisible(false);
+      setMenuOpen(false);
+      setReportOpen(false);
+      setBlockConfirmOpen(false);
+      setReasonPickerOpen(false);
+      setPendingAlsoBlock(false);
+      setActionBusy(false);
     }
   }, [visible]);
 
@@ -120,25 +211,71 @@ export default function UserProfileModal({
 
   const displayName = getDisplayName(user.name, user.publicId);
   const alreadyLiked = likedLocal;
-  const coverUri = gallery[0] || null;
-  const avatarPhoto =
-    resolveMediaUrl(user.photo) || user.photo || gallery[0] || "";
+  const coverUri =
+    resolveMediaUrl(user.coverPhoto) || user.coverPhoto || null;
+  const coverHeight = 148 + Math.max(insets.top, 0);
+  const avatarPhoto = resolveMediaUrl(user.photo) || user.photo || "";
 
   const rawKm = user.distanceKm != null ? String(user.distanceKm).trim() : "";
   const kmFromField =
     rawKm && rawKm !== "?" ? rawKm.replace(/\s*km$/i, "").trim() : "";
-  const kmFromMetres =
-    user.distance != null && Number.isFinite(Number(user.distance))
-      ? (Number(user.distance) / 1000).toFixed(1)
-      : "";
-  const kmValue = kmFromField || kmFromMetres;
+  // Only show distance when the list/API provided distanceKm (nearby only).
+  // Do not invent km from raw metres — that would surface non-nearby / unclamped values.
+  const kmValue = kmFromField;
+
+  const profileInfoRows = [
+    {
+      icon: "person" as const,
+      color: "#9C27B0",
+      title: "Gender",
+      value: user.gender,
+    },
+    {
+      icon: "resize" as const,
+      color: "#FF9800",
+      title: "Height",
+      value: user.height ? `${user.height} cm` : undefined,
+    },
+    {
+      icon: "heart" as const,
+      color: "#FF4B6E",
+      title: "Looking for",
+      value: user.relationshipGoal
+        ? `${GOAL_EMOJIS[user.relationshipGoal] || ""} ${user.relationshipGoal}`.trim()
+        : undefined,
+    },
+    {
+      icon: "people" as const,
+      color: "#2196F3",
+      title: "Show me",
+      value: user.showMe
+        ? showMeLabel(user.gender, user.showMe)
+        : undefined,
+    },
+    {
+      icon: "locate" as const,
+      color: WA.teal,
+      title: "Distance",
+      value: kmValue ? `${kmValue} km` : undefined,
+    },
+  ];
+
+  const optionsInterests = (user.interests || []).filter(Boolean);
+
+  const showViewer = (uris: string[], index: number, title: string) => {
+    const clean = uris.filter(Boolean);
+    if (!clean.length) return;
+    closeMenuNow();
+    setViewerUris(clean);
+    setViewerTitle(title);
+    setSelectedPhotoIndex(Math.min(Math.max(index, 0), clean.length - 1));
+    setPhotoViewerVisible(true);
+  };
 
   const openPhotoViewer = (index: number) => {
     if (!gallery[index]) return;
-    const uris = gallery.filter(Boolean);
-    const startIndex = uris.indexOf(gallery[index]);
-    setSelectedPhotoIndex(startIndex >= 0 ? startIndex : 0);
-    setPhotoViewerVisible(true);
+    const startIndex = gallery.filter(Boolean).indexOf(gallery[index]);
+    showViewer(gallery, startIndex >= 0 ? startIndex : 0, displayName);
   };
 
   const handleLikeToggle = () => {
@@ -153,6 +290,99 @@ export default function UserProfileModal({
     else onUnlike?.();
   };
 
+  const handleShare = () => {
+    closeMenuNow();
+    void sharePublicProfile({
+      publicId: user.publicId,
+      name: displayName,
+    });
+  };
+
+  const doBlock = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setBlockConfirmOpen(false);
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      await blockUser(token, user.id);
+      closeMenuNow();
+      onBlocked?.(user.id);
+      onClose();
+      setTimeout(() => {
+        showAlert({
+          title: "User blocked",
+          message: `${displayName} has been blocked.`,
+          icon: "hand-left",
+        });
+      }, 320);
+    } catch (e: any) {
+      showAlert({
+        title: "Could not block",
+        message: e?.message || "Please try again.",
+        icon: "alert-circle",
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleBlock = () => {
+    setReportOpen(false);
+    setReasonPickerOpen(false);
+    setBlockConfirmOpen(true);
+  };
+
+  const handleReport = () => {
+    setBlockConfirmOpen(false);
+    setReasonPickerOpen(false);
+    setReportOpen(true);
+  };
+
+  const openReasonPicker = (alsoBlock: boolean) => {
+    setBlockConfirmOpen(false);
+    setReportOpen(false);
+    setPendingAlsoBlock(alsoBlock);
+    setReasonPickerOpen(true);
+  };
+
+  const submitReport = async (reason: ReportReason, alsoBlock: boolean) => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setReasonPickerOpen(false);
+    setReportOpen(false);
+    setBlockConfirmOpen(false);
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      await reportUser(token, user.id, reason, { alsoBlock });
+      closeMenuNow();
+      if (alsoBlock) {
+        onBlocked?.(user.id);
+        onClose();
+      }
+      setTimeout(() => {
+        showAlert({
+          title: alsoBlock ? "Reported & blocked" : "Report sent",
+          message: alsoBlock
+            ? `${displayName} was reported and blocked.`
+            : "Thanks — our team will review this report.",
+          icon: "checkmark-circle",
+        });
+      }, 320);
+    } catch (e: any) {
+      showAlert({
+        title: "Could not report",
+        message: e?.message || "Please try again.",
+        icon: "alert-circle",
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const topBtnTop = Math.max(insets.top, 8) + 8;
+
   return (
     <>
       <Modal
@@ -160,73 +390,87 @@ export default function UserProfileModal({
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => {
-          if (photoViewerVisible) setPhotoViewerVisible(false);
+          if (reasonPickerOpen) setReasonPickerOpen(false);
+          else if (reportOpen) setReportOpen(false);
+          else if (blockConfirmOpen) setBlockConfirmOpen(false);
+          else if (menuOpen) setMenuOpen(false);
+          else if (infoVisible) setInfoVisible(false);
+          else if (photoViewerVisible) setPhotoViewerVisible(false);
           else onClose();
         }}
         statusBarTranslucent
       >
         <SafeAreaView style={styles.container} edges={["bottom"]}>
+          <View
+            style={[styles.headerBar, { paddingTop: topBtnTop }]}
+            pointerEvents="box-none"
+          >
+            <TouchableOpacity
+              style={styles.headerBtn}
+              onPress={onClose}
+              activeOpacity={0.8}
+              hitSlop={8}
+            >
+              <Ionicons name="arrow-back" size={22} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerBtn}
+              onPress={() => setMenuOpen(true)}
+              activeOpacity={0.8}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="More options"
+            >
+              <Ionicons name="ellipsis-vertical" size={20} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}
             style={styles.scrollView}
             bounces={false}
+            keyboardShouldPersistTaps="handled"
           >
-            {/* ── Cover + Avatar (exact Profile tab layout) ── */}
             <View style={styles.coverBlock}>
               <TouchableOpacity
                 style={[
                   styles.coverWrap,
-                  { height: 148 + Math.max(insets.top, 0) },
+                  { height: coverHeight },
                 ]}
                 activeOpacity={0.9}
-                onPress={() => openPhotoViewer(0)}
+                onPress={() => {
+                  if (coverUri) showViewer([coverUri], 0, displayName);
+                }}
                 disabled={!coverUri}
               >
                 {coverUri ? (
                   <Image
                     source={{ uri: coverUri }}
-                    style={styles.coverImage}
+                    style={{ width: "100%", height: coverHeight }}
                     contentFit="cover"
+                    cachePolicy="memory-disk"
+                    transition={0}
                   />
                 ) : (
                   <LinearGradient
                     colors={["#6750A4", "#FF4B6E"]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
-                    style={styles.coverImage}
+                    style={{ width: "100%", height: coverHeight }}
                   />
                 )}
-              </TouchableOpacity>
-
-              {/* Back arrow only — overlaid on cover */}
-              <TouchableOpacity
-                style={[
-                  styles.coverBackBtn,
-                  { top: Math.max(insets.top, 8) + 8 },
-                ]}
-                onPress={onClose}
-                activeOpacity={0.8}
-                hitSlop={8}
-              >
-                <Ionicons name="arrow-back" size={22} color="#fff" />
               </TouchableOpacity>
 
               <View style={styles.avatarBlock}>
                 <TouchableOpacity
                   style={styles.avatarWrap}
                   onPress={() => {
-                    const idx = gallery.findIndex(
-                      (u) =>
-                        u &&
-                        avatarPhoto &&
-                        String(u).split("?")[0] ===
-                          String(avatarPhoto).split("?")[0],
-                    );
-                    openPhotoViewer(idx >= 0 ? idx : 0);
+                    if (avatarPhoto) showViewer([avatarPhoto], 0, displayName);
                   }}
                   activeOpacity={0.85}
-                  disabled={!avatarPhoto && !gallery.length}
+                  disabled={!avatarPhoto}
                 >
                   <WhatsAppAvatar
                     photo={avatarPhoto || undefined}
@@ -236,18 +480,28 @@ export default function UserProfileModal({
                     online={!!user.isOnline}
                     badge={user.subscriptionBadge}
                     badgeExpiresAt={user.subscriptionExpiresAt}
+                    photoVerified={!!user.photoVerified}
                   />
                 </TouchableOpacity>
-                <Text style={styles.userName}>
-                  {displayName}
-                  {user.age ? `, ${user.age}` : ""}
-                </Text>
-                <Text style={styles.userIdText}>
-                  ID:{" "}
-                  {isValidPublicId(user.publicId)
-                    ? String(user.publicId).toUpperCase()
-                    : "····"}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Text style={styles.userName}>
+                    {displayName}
+                    {user.age ? `, ${user.age}` : ""}
+                  </Text>
+                  {user.photoVerified ? (
+                    <Ionicons
+                      name="shield-checkmark"
+                      size={18}
+                      color="#22C55E"
+                      style={{ marginLeft: 6, marginBottom: 6 }}
+                    />
+                  ) : null}
+                </View>
+                <CopyablePublicId
+                  publicId={user.publicId}
+                  name={displayName}
+                  showShare={false}
+                />
               </View>
             </View>
 
@@ -263,78 +517,548 @@ export default function UserProfileModal({
             <View style={{ height: 24 }} />
           </ScrollView>
 
-          {/* Footer actions */}
-          {(onLike || onUnlike || onMessage) && (
-            <View style={styles.footer}>
-              {(onLike || onUnlike) && (
-                <TouchableOpacity
+          <View style={styles.footer}>
+            {(onLike || onUnlike) && (
+              <TouchableOpacity
+                style={[
+                  styles.footerBtn,
+                  alreadyLiked ? styles.footerBtnLiked : styles.footerBtnLike,
+                ]}
+                activeOpacity={0.85}
+                disabled={likingInProgress}
+                onPress={handleLikeToggle}
+              >
+                <Ionicons
+                  name={alreadyLiked ? "heart" : "heart-outline"}
+                  size={20}
+                  color={alreadyLiked ? "#FF4B6E" : "#fff"}
+                />
+                <Text
                   style={[
-                    styles.footerBtn,
-                    alreadyLiked ? styles.footerBtnLiked : styles.footerBtnLike,
+                    styles.footerBtnText,
+                    alreadyLiked && { color: "#FF4B6E" },
                   ]}
-                  activeOpacity={0.85}
-                  disabled={likingInProgress}
-                  onPress={handleLikeToggle}
                 >
-                  <Ionicons
-                    name={alreadyLiked ? "heart" : "heart-outline"}
-                    size={20}
-                    color={alreadyLiked ? "#FF4B6E" : "#fff"}
+                  {user.areFriends
+                    ? "Friends"
+                    : alreadyLiked
+                      ? "Liked"
+                      : "Like"}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {onMessage ? (
+              <TouchableOpacity
+                style={[styles.footerBtn, styles.footerBtnMsg]}
+                activeOpacity={0.85}
+                onPress={onMessage}
+              >
+                <Ionicons name="chatbubble" size={18} color="#fff" />
+                <Text style={styles.footerBtnText}>Message</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <ProfilePhotoViewer
+            visible={photoViewerVisible}
+            uris={viewerUris}
+            initialIndex={selectedPhotoIndex}
+            title={viewerTitle}
+            onClose={() => setPhotoViewerVisible(false)}
+            asOverlay
+          />
+        </SafeAreaView>
+
+          {menuOpen ? (
+            <View
+              style={[
+                styles.optionsPage,
+                {
+                  width: Dimensions.get("window").width,
+                  height: Dimensions.get("window").height,
+                },
+              ]}
+              collapsable={false}
+            >
+              <View
+                style={[
+                  styles.optionsHeader,
+                  { paddingTop: Math.max(insets.top, 8) },
+                ]}
+              >
+                <TouchableOpacity
+                  style={styles.optionsBackBtn}
+                  onPress={closeMenuNow}
+                  activeOpacity={0.7}
+                  hitSlop={8}
+                >
+                  <Ionicons name="arrow-back" size={24} color="#262626" />
+                </TouchableOpacity>
+
+                <Text style={styles.optionsTitle} numberOfLines={1}>
+                  Options
+                </Text>
+
+                <View style={styles.optionsHeaderSpacer} />
+              </View>
+
+              <ScrollView
+                style={styles.optionsScroll}
+                contentContainerStyle={[
+                  styles.optionsScrollContent,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+                ]}
+                bounces={false}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.optionsAvatarBlock}>
+                  <WhatsAppAvatar
+                    photo={avatarPhoto || undefined}
+                    name={user.name}
+                    publicId={user.publicId}
+                    size={96}
+                    online={!!user.isOnline}
+                    badge={user.subscriptionBadge}
+                    badgeExpiresAt={user.subscriptionExpiresAt}
+                    photoVerified={!!user.photoVerified}
                   />
-                  <Text
+                  <Text style={styles.optionsUserName} numberOfLines={1}>
+                    {displayName}
+                  </Text>
+                </View>
+
+                <View style={styles.optionsGroup}>
+                  <TouchableOpacity
+                    style={styles.optionsRow}
+                    onPress={handleShare}
+                    activeOpacity={0.65}
+                  >
+                    <Text style={styles.optionsRowText}>Share</Text>
+                    <Ionicons name="share-outline" size={22} color="#262626" />
+                  </TouchableOpacity>
+                  <View style={styles.optionsDivider} />
+                  <TouchableOpacity
+                    style={styles.optionsRow}
+                    onPress={handleBlock}
+                    activeOpacity={0.65}
+                    disabled={actionBusy}
+                  >
+                    <Text style={[styles.optionsRowText, styles.optionsDanger]}>
+                      Block
+                    </Text>
+                    <Ionicons
+                      name="hand-left-outline"
+                      size={22}
+                      color="#ED4956"
+                    />
+                  </TouchableOpacity>
+                  <View style={styles.optionsDivider} />
+                  <TouchableOpacity
+                    style={styles.optionsRow}
+                    onPress={handleReport}
+                    activeOpacity={0.65}
+                    disabled={actionBusy}
+                  >
+                    <Text style={[styles.optionsRowText, styles.optionsDanger]}>
+                      Report
+                    </Text>
+                    <Ionicons name="flag-outline" size={22} color="#ED4956" />
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+
+              {/* Block — WhatsApp-style sheet */}
+              {blockConfirmOpen ? (
+                <View
+                  style={[
+                    styles.waSheetOverlay,
+                    {
+                      width: Dimensions.get("window").width,
+                      height: Dimensions.get("window").height,
+                    },
+                  ]}
+                  pointerEvents="box-none"
+                >
+                  <Pressable
+                    style={styles.waSheetBackdrop}
+                    onPress={() => setBlockConfirmOpen(false)}
+                  />
+                  <Animated.View
                     style={[
-                      styles.footerBtnText,
-                      alreadyLiked && { color: "#FF4B6E" },
+                      styles.waSheet,
+                      {
+                        paddingBottom: Math.max(insets.bottom, 16),
+                        transform: [
+                          {
+                            translateY: waSheetAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [420, 0],
+                            }),
+                          },
+                        ],
+                      },
                     ]}
                   >
-                    {user.areFriends
-                      ? "Friends"
-                      : alreadyLiked
-                        ? "Liked"
-                        : "Like"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              {onMessage ? (
-                <TouchableOpacity
-                  style={[styles.footerBtn, styles.footerBtnMsg]}
-                  activeOpacity={0.85}
-                  onPress={onMessage}
+                    <View style={styles.waSheetHeader}>
+                      <Text style={styles.waSheetTitle} numberOfLines={2}>
+                        {`Block "${displayName}"?`}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.waCloseBtn}
+                        onPress={() => setBlockConfirmOpen(false)}
+                        activeOpacity={0.7}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="close" size={20} color={WA.teal} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.waInfoCard}>
+                      <Text style={styles.waInfoText}>
+                        This person won’t be able to message or call you. They
+                        won’t know you blocked or reported them.
+                      </Text>
+                      <Text style={[styles.waInfoText, styles.waInfoTextGap]}>
+                        If you block and report, recent messages from this chat
+                        may also be sent to Luvstor.
+                      </Text>
+                    </View>
+
+                    <View style={styles.waActionCard}>
+                      <TouchableOpacity
+                        style={styles.waActionRow}
+                        activeOpacity={0.55}
+                        disabled={actionBusy}
+                        onPress={() => openReasonPicker(true)}
+                      >
+                        <Ionicons
+                          name="warning-outline"
+                          size={22}
+                          color={WA.danger}
+                        />
+                        <Text style={styles.waActionText}>
+                          Block and report
+                        </Text>
+                      </TouchableOpacity>
+                      <View style={styles.waActionDivider} />
+                      <TouchableOpacity
+                        style={styles.waActionRow}
+                        activeOpacity={0.55}
+                        disabled={actionBusy}
+                        onPress={() => void doBlock()}
+                      >
+                        <Ionicons
+                          name="ban-outline"
+                          size={22}
+                          color={WA.danger}
+                        />
+                        <Text style={styles.waActionText}>Block</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </Animated.View>
+                </View>
+              ) : null}
+
+              {/* Report — WhatsApp-style sheet */}
+              {reportOpen ? (
+                <View
+                  style={[
+                    styles.waSheetOverlay,
+                    {
+                      width: Dimensions.get("window").width,
+                      height: Dimensions.get("window").height,
+                    },
+                  ]}
+                  pointerEvents="box-none"
                 >
-                  <Ionicons name="chatbubble" size={18} color="#fff" />
-                  <Text style={styles.footerBtnText}>Message</Text>
-                </TouchableOpacity>
+                  <Pressable
+                    style={styles.waSheetBackdrop}
+                    onPress={() => setReportOpen(false)}
+                  />
+                  <Animated.View
+                    style={[
+                      styles.waSheet,
+                      {
+                        paddingBottom: Math.max(insets.bottom, 16),
+                        transform: [
+                          {
+                            translateY: waSheetAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [420, 0],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  >
+                    <View style={styles.waSheetHeader}>
+                      <Text style={styles.waSheetTitle}>Report to Luvstor</Text>
+                      <TouchableOpacity
+                        style={styles.waCloseBtn}
+                        onPress={() => setReportOpen(false)}
+                        activeOpacity={0.7}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="close" size={20} color={WA.teal} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.waInfoCard}>
+                      <Text style={styles.waInfoText}>
+                        Recent messages from this chat may be sent to Luvstor.
+                        This person won’t know you blocked or reported them.
+                      </Text>
+                      <Text style={[styles.waInfoText, styles.waInfoTextGap]}>
+                        If you report and block, this person won’t be able to
+                        message or call you.
+                      </Text>
+                    </View>
+
+                    <View style={styles.waActionCard}>
+                      <TouchableOpacity
+                        style={styles.waActionRow}
+                        activeOpacity={0.55}
+                        disabled={actionBusy}
+                        onPress={() => openReasonPicker(true)}
+                      >
+                        <Ionicons
+                          name="ban-outline"
+                          size={22}
+                          color={WA.danger}
+                        />
+                        <Text style={styles.waActionText}>
+                          Report and block
+                        </Text>
+                      </TouchableOpacity>
+                      <View style={styles.waActionDivider} />
+                      <TouchableOpacity
+                        style={styles.waActionRow}
+                        activeOpacity={0.55}
+                        disabled={actionBusy}
+                        onPress={() => openReasonPicker(false)}
+                      >
+                        <Ionicons
+                          name="warning-outline"
+                          size={22}
+                          color={WA.danger}
+                        />
+                        <Text style={styles.waActionText}>Report</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </Animated.View>
+                </View>
+              ) : null}
+
+              {/* Report reason picker — same sheet UI as Block/Report */}
+              {reasonPickerOpen ? (
+                <View
+                  style={[
+                    styles.waSheetOverlay,
+                    {
+                      width: Dimensions.get("window").width,
+                      height: Dimensions.get("window").height,
+                    },
+                  ]}
+                  pointerEvents="box-none"
+                >
+                  <Pressable
+                    style={styles.waSheetBackdrop}
+                    onPress={() => setReasonPickerOpen(false)}
+                  />
+                  <Animated.View
+                    style={[
+                      styles.waSheet,
+                      {
+                        paddingBottom: Math.max(insets.bottom, 16),
+                        transform: [
+                          {
+                            translateY: waSheetAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [520, 0],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  >
+                    <View style={styles.waSheetHeader}>
+                      <Text style={styles.waSheetTitle}>
+                        {pendingAlsoBlock ? "Report and block" : "Report"}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.waCloseBtn}
+                        onPress={() => setReasonPickerOpen(false)}
+                        activeOpacity={0.7}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="close" size={20} color={WA.teal} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.waActionCard}>
+                      {REPORT_REASONS.map((item, index) => (
+                        <React.Fragment key={item.key}>
+                          {index > 0 ? (
+                            <View style={styles.reasonRowDivider} />
+                          ) : null}
+                          <TouchableOpacity
+                            style={styles.reasonRow}
+                            activeOpacity={0.55}
+                            disabled={actionBusy}
+                            onPress={() =>
+                              void submitReport(item.key, pendingAlsoBlock)
+                            }
+                          >
+                            <Text style={styles.reasonRowText}>
+                              {item.label}
+                            </Text>
+                          </TouchableOpacity>
+                        </React.Fragment>
+                      ))}
+                    </View>
+                  </Animated.View>
+                </View>
               ) : null}
             </View>
-          )}
+          ) : null}
 
-        </SafeAreaView>
+          {infoVisible ? (
+            <View
+              style={[
+                styles.optionsPage,
+                {
+                  width: Dimensions.get("window").width,
+                  height: Dimensions.get("window").height,
+                },
+              ]}
+              collapsable={false}
+            >
+              <View
+                style={[
+                  styles.optionsHeader,
+                  { paddingTop: Math.max(insets.top, 8) },
+                ]}
+              >
+                <TouchableOpacity
+                  style={styles.optionsBackBtn}
+                  onPress={closeInfoPage}
+                  activeOpacity={0.7}
+                  hitSlop={8}
+                >
+                  <Ionicons name="arrow-back" size={24} color="#262626" />
+                </TouchableOpacity>
+
+                <Text style={styles.optionsTitle} numberOfLines={1}>
+                  Profile Info
+                </Text>
+
+                <View style={styles.optionsHeaderSpacer} />
+              </View>
+
+              <ScrollView
+                style={styles.optionsScroll}
+                contentContainerStyle={[
+                  styles.optionsScrollContent,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+                ]}
+                bounces={false}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.optionsAvatarBlock}>
+                  <WhatsAppAvatar
+                    photo={avatarPhoto || undefined}
+                    name={user.name}
+                    publicId={user.publicId}
+                    size={96}
+                    online={!!user.isOnline}
+                    badge={user.subscriptionBadge}
+                    badgeExpiresAt={user.subscriptionExpiresAt}
+                    photoVerified={!!user.photoVerified}
+                  />
+                  <Text style={styles.optionsUserName} numberOfLines={1}>
+                    {displayName}
+                    {user.age ? `, ${user.age}` : ""}
+                  </Text>
+                  {isValidPublicId(user.publicId) ? (
+                    <CopyablePublicId
+                      publicId={user.publicId}
+                      name={displayName}
+                      textStyle={styles.optionsUserId}
+                      showShare={false}
+                    />
+                  ) : null}
+                </View>
+
+                <View style={[styles.optionsGroup, styles.optionsInfoGroup]}>
+                  {profileInfoRows.map((row, index) => {
+                    const empty = !row.value?.trim();
+                    return (
+                      <React.Fragment key={row.title}>
+                        {index > 0 ? (
+                          <View style={styles.optionsDivider} />
+                        ) : null}
+                        <View style={styles.optionsInfoRow}>
+                          <View
+                            style={[
+                              styles.optionsInfoIcon,
+                              { backgroundColor: row.color },
+                            ]}
+                          >
+                            <Ionicons
+                              name={row.icon}
+                              size={16}
+                              color="#FFFFFF"
+                            />
+                          </View>
+                          <View style={styles.optionsInfoTextWrap}>
+                            <Text style={styles.optionsInfoLabel}>
+                              {row.title}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.optionsInfoValue,
+                                empty && styles.optionsInfoValueEmpty,
+                              ]}
+                            >
+                              {empty ? "Not set" : row.value}
+                            </Text>
+                          </View>
+                        </View>
+                      </React.Fragment>
+                    );
+                  })}
+                </View>
+
+                <View style={[styles.optionsGroup, styles.optionsInfoGroup]}>
+                  <View style={styles.optionsInfoRow}>
+                    <View
+                      style={[
+                        styles.optionsInfoIcon,
+                        { backgroundColor: "#4CAF50" },
+                      ]}
+                    >
+                      <Ionicons name="sparkles" size={16} color="#FFFFFF" />
+                    </View>
+                    <Text style={styles.optionsInfoLabel}>Interests</Text>
+                  </View>
+                  {optionsInterests.length > 0 ? (
+                    <View style={styles.optionsInterestsWrap}>
+                      {optionsInterests.map((interest) => (
+                        <View key={interest} style={styles.optionsInterestChip}>
+                          <Text style={styles.optionsInterestText}>
+                            {INTEREST_EMOJIS[interest] || "✨"} {interest}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.optionsInfoEmptyPad}>Not set</Text>
+                  )}
+                </View>
+              </ScrollView>
+            </View>
+          ) : null}
       </Modal>
-
-      <ProfilePhotoViewer
-        visible={photoViewerVisible}
-        uris={gallery}
-        initialIndex={selectedPhotoIndex}
-        onClose={() => setPhotoViewerVisible(false)}
-      />
-
-      <ProfileInfoModal
-        visible={infoVisible}
-        onClose={() => setInfoVisible(false)}
-        info={{
-          name: user.name,
-          publicId: user.publicId,
-          age: user.age,
-          photo: avatarPhoto,
-          gender: user.gender,
-          height: user.height,
-          relationshipGoal: user.relationshipGoal,
-          distanceLabel: kmValue ? `${kmValue} km` : undefined,
-          interests: user.interests,
-          subscriptionBadge: user.subscriptionBadge,
-          subscriptionExpiresAt: user.subscriptionExpiresAt,
-        }}
-      />
     </>
   );
 }
@@ -347,6 +1071,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: WA.bg,
+    overflow: "visible",
   },
   scrollView: { flex: 1 },
   scrollContent: { paddingBottom: 16 },
@@ -360,18 +1085,536 @@ const styles = StyleSheet.create({
     backgroundColor: WA.border,
   },
   coverImage: {
-    ...StyleSheet.absoluteFillObject,
+    width: "100%",
   },
-  coverBackBtn: {
+  headerBar: {
     position: "absolute",
-    left: 12,
-    zIndex: 5,
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 300,
+    elevation: 300,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+  },
+  headerBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
     backgroundColor: "rgba(0,0,0,0.45)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  moreWrap: {
+    alignItems: "flex-end",
+    zIndex: 301,
+  },
+  /** Full-screen Options page (covers whole window) */
+  optionsPage: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#FFFFFF",
+    zIndex: 99990,
+    elevation: 99990,
+  },
+  optionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingBottom: 10,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#DBDBDB",
+  },
+  optionsBackBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2,
+  },
+  optionsHeaderCenter: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    minHeight: 44,
+  },
+  optionsHeaderSpacer: {
+    width: 44,
+  },
+  optionsInfoHeaderBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionsTitle: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#262626",
+    letterSpacing: 0.2,
+  },
+  optionsScroll: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+  optionsScrollContent: {
+    paddingTop: 28,
+    paddingHorizontal: 16,
+    flexGrow: 1,
+  },
+  optionsAvatarBlock: {
+    alignItems: "center",
+    marginBottom: 28,
+    gap: 8,
+  },
+  optionsUserName: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#262626",
+  },
+  optionsUserId: {
+    fontSize: 13,
+    color: WA.secondary,
+    letterSpacing: 0.4,
+  },
+  optionsGroup: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#DBDBDB",
+  },
+  optionsInfoGroup: {
+    marginBottom: 12,
+  },
+  optionsInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  optionsInfoIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionsInfoTextWrap: {
+    flex: 1,
+  },
+  optionsInfoLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: WA.secondary,
+  },
+  optionsInfoValue: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: "500",
+    color: WA.text,
+  },
+  optionsInfoValueEmpty: {
+    color: "#8E8E8E",
+    fontWeight: "400",
+  },
+  optionsInfoEmptyPad: {
+    fontSize: 15,
+    color: "#8E8E8E",
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+  },
+  optionsInterestsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+  },
+  optionsInterestChip: {
+    backgroundColor: WA.primaryContainer,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  optionsInterestText: {
+    fontSize: 13,
+    color: WA.teal,
+    fontWeight: "500",
+  },
+  optionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 52,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: "#FFFFFF",
+  },
+  optionsRowText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "400",
+    color: "#262626",
+  },
+  optionsDanger: {
+    color: "#ED4956",
+  },
+  optionsDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#DBDBDB",
+    marginLeft: 16,
+  },
+  /** In-page alert sheets — nested Modal does not show */
+  confirmOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+    elevation: 30,
+    justifyContent: "flex-end",
+  },
+  confirmOverlayCenter: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 40,
+    elevation: 40,
+  },
+  confirmBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  /** WhatsApp-style Block / Report sheet */
+  waSheetOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 40,
+    elevation: 40,
+    justifyContent: "flex-end",
+  },
+  waSheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  waSheet: {
+    width: "100%",
+    backgroundColor: WA.bg,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    gap: 10,
+    zIndex: 41,
+  },
+  waSheetHeader: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 44,
+    marginBottom: 2,
+  },
+  waSheetTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: WA.text,
+    textAlign: "center",
+  },
+  waCloseBtn: {
+    position: "absolute",
+    right: 4,
+    top: 0,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: WA.primaryContainer,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waInfoCard: {
+    backgroundColor: WA.white,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
+  },
+  waInfoText: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: WA.text,
+    fontWeight: "400",
+  },
+  waInfoTextGap: {
+    marginTop: 14,
+  },
+  waActionCard: {
+    backgroundColor: WA.white,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
+  },
+  waActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    minHeight: 54,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  waActionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: WA.border,
+    marginLeft: 52,
+  },
+  waActionText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: WA.danger,
+  },
+  outlineCardCenterWrap: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 36,
+    zIndex: 41,
+  },
+  /** Outlined centered card (like reference popup) */
+  outlineCard: {
+    width: "100%",
+    maxWidth: 300,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#C7C7CC",
+  },
+  outlineBorder: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#C7C7CC",
+  },
+  outlineCardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111111",
+    textAlign: "center",
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+  },
+  outlineCardHDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E5E5EA",
+  },
+  outlineCardVDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: "#E5E5EA",
+    alignSelf: "stretch",
+  },
+  outlineCardActions: {
+    flexDirection: "row",
+    minHeight: 52,
+  },
+  outlineCardAction: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+  },
+  outlineCardActionDanger: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#ED4956",
+  },
+  outlineCardActionPrimary: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: WA.teal,
+  },
+  alertSheet: {
+    width: "100%",
+    paddingHorizontal: 10,
+    paddingBottom: 6,
+    gap: 8,
+    zIndex: 41,
+  },
+  alertCard: {
+    backgroundColor: WA.white,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  alertStick: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#D1D1D6",
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  alertTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: WA.text,
+    textAlign: "center",
+    paddingTop: 12,
+    paddingHorizontal: 16,
+  },
+  alertMessage: {
+    marginTop: 8,
+    marginBottom: 16,
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#8E8E8E",
+    textAlign: "center",
+    paddingHorizontal: 16,
+  },
+  alertDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: WA.border,
+  },
+  alertBtn: {
+    minHeight: 56,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  alertBtnDefault: {
+    fontSize: 17,
+    fontWeight: "400",
+    color: WA.teal,
+  },
+  alertCancel: {
+    minHeight: 56,
+    borderRadius: 14,
+    backgroundColor: WA.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  alertCancelText: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: WA.teal,
+  },
+  reasonSheet: {
+    width: "100%",
+    paddingHorizontal: 10,
+    gap: 8,
+    zIndex: 41,
+  },
+  reasonCard: {
+    backgroundColor: WA.white,
+    borderRadius: 14,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
+  },
+  reasonStick: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#D1D1D6",
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  reasonTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: WA.text,
+    textAlign: "center",
+    paddingTop: 10,
+    paddingHorizontal: 16,
+  },
+  reasonSubtitle: {
+    marginTop: 6,
+    marginBottom: 14,
+    fontSize: 13,
+    lineHeight: 18,
+    color: WA.secondary,
+    textAlign: "center",
+    paddingHorizontal: 16,
+  },
+  reasonDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: WA.border,
+  },
+  reasonBtn: {
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  reasonBtnText: {
+    fontSize: 17,
+    fontWeight: "400",
+    color: WA.teal,
+    textAlign: "center",
+  },
+  reasonCancel: {
+    minHeight: 56,
+    borderRadius: 14,
+    backgroundColor: WA.white,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
+  },
+  reasonWhyText: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: WA.secondary,
+    textAlign: "center",
+    fontWeight: "400",
+  },
+  reasonRow: {
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  reasonRowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: WA.border,
+  },
+  reasonRowText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: WA.teal,
+    textAlign: "center",
+  },
+  reasonCancelCard: {
+    minHeight: 54,
+    borderRadius: 18,
+    backgroundColor: WA.white,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: WA.border,
+  },
+  reasonCancelText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: WA.teal,
   },
   avatarBlock: {
     alignItems: "center",
@@ -408,151 +1651,103 @@ const styles = StyleSheet.create({
     marginTop: 3,
     letterSpacing: 0.5,
   },
-  waSectionHint: {
-    fontSize: 14,
-    color: WA.secondary,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 8,
+  sheetOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
+    justifyContent: "flex-end",
   },
-  waListGroup: {
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(11, 20, 26, 0.45)",
+  },
+  sheetWrap: {
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  sheetCard: {
     backgroundColor: WA.white,
+    borderRadius: 16,
+    overflow: "hidden",
   },
-  waListRow: {
+  sheetRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 16,
+    gap: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
   },
-  waIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  waRowContent: {
+  sheetRowText: {
     flex: 1,
-  },
-  waRowLabel: {
     fontSize: 16,
-    fontWeight: "500",
+    fontWeight: "600",
     color: WA.text,
   },
-  waRowSub: {
-    fontSize: 13,
-    color: WA.secondary,
-    marginTop: 2,
+  sheetDanger: {
+    color: WA.danger,
   },
-  waDivider: {
+  sheetDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: WA.border,
-    marginLeft: 72,
+    marginLeft: 18,
   },
-  photoGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: PHOTO_GAP,
-    paddingHorizontal: PHOTO_PAD,
-    paddingVertical: 12,
+  sheetCancel: {
+    backgroundColor: WA.white,
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: "center",
   },
-  photoSlot: {
-    width: PHOTO_SIZE,
-    height: PHOTO_SIZE,
-    borderRadius: 10,
-    overflow: "hidden",
-    backgroundColor: WA.border,
-  },
-  photoSlotEmptyBg: {
-    backgroundColor: "#F0EDF4",
-  },
-  photoSlotImage: {
-    width: "100%",
-    height: "100%",
-  },
-  coverTag: {
-    position: "absolute",
-    top: 6,
-    left: 6,
-    backgroundColor: "rgba(0,0,0,0.65)",
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  coverTagText: {
-    color: "#fff",
-    fontSize: 10,
+  sheetCancelText: {
+    fontSize: 16,
     fontWeight: "700",
-  },
-  photoSlotEmpty: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  addIconCircleLocked: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#E7E0EC",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  interestsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  interestChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: WA.primaryContainer,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 20,
-  },
-  interestEmoji: { fontSize: 13 },
-  interestChipText: {
-    fontSize: 13,
-    fontWeight: "500",
     color: WA.teal,
+  },
+  reportTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: WA.text,
+    textAlign: "center",
+    paddingTop: 16,
+    paddingHorizontal: 18,
+  },
+  reportSubtitle: {
+    fontSize: 13,
+    color: WA.secondary,
+    textAlign: "center",
+    paddingHorizontal: 18,
+    paddingBottom: 10,
+    paddingTop: 4,
   },
   footer: {
     flexDirection: "row",
     gap: 10,
     paddingHorizontal: 16,
     paddingTop: 10,
-    paddingBottom: 8,
+    paddingBottom: 10,
+    backgroundColor: WA.white,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: WA.border,
-    backgroundColor: WA.white,
   },
   footerBtn: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    paddingVertical: 13,
+    gap: 6,
+    paddingVertical: 12,
     borderRadius: 24,
   },
   footerBtnLike: {
     backgroundColor: WA.teal,
   },
   footerBtnLiked: {
-    backgroundColor: "#FFF0F2",
-    borderWidth: 1,
-    borderColor: "#FF4B6E",
+    backgroundColor: "#FFE8EE",
   },
   footerBtnMsg: {
-    backgroundColor: "#128C7E",
+    backgroundColor: "#25D366",
   },
   footerBtnText: {
-    fontSize: 15,
-    fontWeight: "700",
     color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
   },
 });

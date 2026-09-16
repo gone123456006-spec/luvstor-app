@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
 import * as FileSystem from "expo-file-system/legacy";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
@@ -25,29 +24,29 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { useAppAlert } from "../../components/AppAlert";
+import CopyablePublicId from "../../components/CopyablePublicId";
 import ProfileInfoModal from "../../components/ProfileInfoModal";
 import ProfileInstagramSection from "../../components/ProfileInstagramSection";
 import ProfilePhotoViewer from "../../components/ProfilePhotoViewer";
 import WhatsAppAvatar, {
     getDisplayName,
-    VerifiedTick,
 } from "../../components/WhatsAppAvatar";
 import { MAX_PROFILE_GALLERY } from "../../constants/profile";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
-import { API_BASE, apiRequest } from "../../utils/api";
+import { apiRequest, getApiBase } from "../../utils/api";
 import {
     getAuthToken,
     getCurrentAuthUser,
     getLocalProfile,
-    isValidPublicId,
     saveLocalProfile,
 } from "../../utils/auth";
+import { resolveMediaUrl } from "../../utils/media";
 import {
     getCachedProfile,
     preloadProfile,
-    ProfileScreenSnapshot
+    ProfileScreenSnapshot,
+    updateCachedProfile,
 } from "../../utils/profileCache";
 import {
     followGenderChange,
@@ -59,7 +58,7 @@ import { useLiveSubscriptionBadge } from "../../utils/subscriptions";
 
 // ── Luvstor theme + WhatsApp-style layout ───────────────────
 const WA = {
-  bg: "#FDF8FF",
+  bg: "#F5F5F7",
   white: "#FFFFFF",
   text: "#1C1B1F",
   secondary: "#49454F",
@@ -67,7 +66,7 @@ const WA = {
   teal: "#6750A4",
   green: "#6750A4",
   danger: "#FF4B6E",
-  header: "#FDF8FF",
+  header: "#F5F5F7",
   accent: "#FF4B6E",
   primaryContainer: "#EADDFF",
 };
@@ -126,8 +125,7 @@ const DISTANCE_EDIT_OPTIONS = [1, 5, 10, 25, 50, 100];
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { signOut, sessionVersion, refreshSession } = useAuth();
-  const { showAlert } = useAppAlert();
+  const { sessionVersion, refreshSession } = useAuth();
   const { bumpProfileLocal } = useSocket();
   const initialSnapshot = React.useMemo(() => getCachedProfile(), []);
   const [profile, setProfile] = useState<any>(initialSnapshot?.profile ?? null);
@@ -153,11 +151,23 @@ export default function ProfileScreen() {
   const [editDistance, setEditDistance] = useState(10);
   const [editInterests, setEditInterests] = useState<string[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
+  /** Local/server preview for Edit Profile DP (shows instantly while uploading). */
+  const [editPhotoUri, setEditPhotoUri] = useState<string | null>(null);
 
-  // Profile gallery (up to 6 images)
+  // Posts gallery (up to 6) — independent from DP + cover
   const [gallery, setGallery] = useState<string[]>(
     initialSnapshot?.gallery ?? [],
   );
+  const [coverPhoto, setCoverPhoto] = useState<string>(
+    initialSnapshot?.coverPhoto ?? initialSnapshot?.profile?.coverPhoto ?? "",
+  );
+  const [coverBusy, setCoverBusy] = useState(false);
+  const coverBusyRef = useRef(false);
+  const coverPhotoRef = useRef(coverPhoto);
+  coverPhotoRef.current = coverPhoto;
+  /** After a successful cover save, ignore empty server snapshots briefly */
+  const coverStickyUntilRef = useRef(0);
+  const [coverOptionsVisible, setCoverOptionsVisible] = useState(false);
   const [gallerySlotBusy, setGallerySlotBusy] = useState<number | null>(null);
   const [gallerySlot, setGallerySlot] = useState<number>(0);
   const [galleryOptionsVisible, setGalleryOptionsVisible] = useState(false);
@@ -174,6 +184,7 @@ export default function ProfileScreen() {
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [photoViewerIndex, setPhotoViewerIndex] = useState(0);
   const [photoViewerUris, setPhotoViewerUris] = useState<string[]>([]);
+  const [photoViewerTitle, setPhotoViewerTitle] = useState("Photos");
 
   const [activeSafetyTab, setActiveSafetyTab] = useState<"tips" | "checklist">(
     "tips",
@@ -209,20 +220,21 @@ export default function ProfileScreen() {
   // ── Image URL helpers ──
   const toAbsolute = (url?: string | null) => {
     if (!url) return "";
-    if (
-      url.startsWith("http") ||
-      url.startsWith("data:") ||
-      url.startsWith("file:")
-    )
-      return url;
-    return `${API_BASE}${url}`;
+    return resolveMediaUrl(url) || url;
   };
 
   /** Server stores relative paths (/uploads/...) so they survive IP changes. */
   const toRelative = (url?: string | null) => {
     if (!url) return "";
     const clean = url.split("?")[0];
-    return clean.startsWith(API_BASE) ? clean.slice(API_BASE.length) : clean;
+    try {
+      const parsed = new URL(clean);
+      if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
+    } catch {
+      /* relative path */
+    }
+    const base = getApiBase();
+    return clean.startsWith(base) ? clean.slice(base.length) : clean;
   };
 
   /** Upload a local image, returns the server-relative url. */
@@ -246,20 +258,26 @@ export default function ProfileScreen() {
   const uploadPhotoToBackend = async (uri: string) => {
     try {
       setUploadingPhoto(true);
+      // Show picked image on Edit Profile immediately
+      setEditPhotoUri(uri);
+
       const token = await getAuthToken();
       if (!token) {
         Alert.alert("Error", "Please log in to upload photo");
+        setEditPhotoUri(null);
         setUploadingPhoto(false);
         return null;
       }
 
       const url = await uploadImage(uri);
       if (!url) {
+        setEditPhotoUri(null);
         setUploadingPhoto(false);
         return null;
       }
 
       const absoluteUrl = toAbsolute(url);
+      const busted = `${absoluteUrl}?t=${Date.now()}`;
 
       // Update profile with new photo URL on backend
       await apiRequest("/api/users/me", token, {
@@ -275,15 +293,26 @@ export default function ProfileScreen() {
           ...currentProfile,
           photo: absoluteUrl,
         });
+      }
 
-        // Cache-busting timestamp so the new image renders right away
-        setProfile({ ...profile, photo: `${absoluteUrl}?t=${Date.now()}` });
+      setProfile((prev: any) => (prev ? { ...prev, photo: busted } : prev));
+      updateCachedProfile({ photo: busted });
+      setEditPhotoUri(busted);
+
+      if (authUser) {
+        bumpProfileLocal({
+          userId: String(authUser.id || profile?.id || ""),
+          name: profile?.name,
+          photo: busted,
+          gender: profile?.gender,
+        });
       }
 
       setUploadingPhoto(false);
-      return absoluteUrl;
+      return busted;
     } catch (error: any) {
       console.error("Upload error:", error);
+      setEditPhotoUri(null);
       Alert.alert("Upload Error", error?.message || "Failed to upload photo");
       setUploadingPhoto(false);
       return null;
@@ -306,14 +335,14 @@ export default function ProfileScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 1,
     });
 
     if (!result.canceled && result.assets[0]) {
-      const photoUrl = await uploadPhotoToBackend(result.assets[0].uri);
-      if (photoUrl) {
-        Alert.alert("Success", "Profile picture updated!");
-      } else {
+      const localUri = result.assets[0].uri;
+      setEditPhotoUri(localUri);
+      const photoUrl = await uploadPhotoToBackend(localUri);
+      if (!photoUrl) {
         Alert.alert("Error", "Failed to upload photo. Please try again.");
       }
     }
@@ -332,14 +361,14 @@ export default function ProfileScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 1,
     });
 
     if (!result.canceled && result.assets[0]) {
-      const photoUrl = await uploadPhotoToBackend(result.assets[0].uri);
-      if (photoUrl) {
-        Alert.alert("Success", "Profile picture updated!");
-      } else {
+      const localUri = result.assets[0].uri;
+      setEditPhotoUri(localUri);
+      const photoUrl = await uploadPhotoToBackend(localUri);
+      if (!photoUrl) {
         Alert.alert("Error", "Failed to upload photo. Please try again.");
       }
     }
@@ -375,7 +404,17 @@ export default function ProfileScreen() {
                   ...currentProfile,
                   photo: "",
                 });
-                setProfile({ ...profile, photo: "" });
+              }
+              setProfile((prev: any) => (prev ? { ...prev, photo: "" } : prev));
+              setEditPhotoUri(null);
+              updateCachedProfile({ photo: "" });
+              if (authUser) {
+                bumpProfileLocal({
+                  userId: String(authUser.id || profile?.id || ""),
+                  name: profile?.name,
+                  photo: "",
+                  gender: profile?.gender,
+                });
               }
 
               Alert.alert("Success", "Profile picture removed");
@@ -388,32 +427,34 @@ export default function ProfileScreen() {
     );
   };
 
-  const showPhotoViewer = (uris: string[], index: number) => {
+  const showPhotoViewer = (uris: string[], index: number, title = "Photos") => {
     if (!uris.length) return;
     setPhotoViewerUris(uris);
     setPhotoViewerIndex(Math.min(Math.max(index, 0), uris.length - 1));
+    setPhotoViewerTitle(title);
     setPhotoViewerVisible(true);
   };
 
   const viewPhoto = () => {
     setPhotoOptionsVisible(false);
-    const avatar = profile?.photo;
+    const avatar = editPhotoUri || profile?.photo;
     if (!avatar) return;
     const uris = gallery.filter(Boolean);
     const idx = uris.findIndex(
       (uri) => String(uri).split("?")[0] === String(avatar).split("?")[0],
     );
     if (idx >= 0) {
-      showPhotoViewer(uris, idx);
+      showPhotoViewer(uris, idx, "Profile photo");
       return;
     }
-    showPhotoViewer([avatar], 0);
+    showPhotoViewer([avatar], 0, "Profile photo");
   };
 
   const handlePhotoPress = () => {
     if (Platform.OS === "ios") {
       // iOS Action Sheet
-      const options = profile?.photo
+      const hasPhoto = !!(editPhotoUri || profile?.photo);
+      const options = hasPhoto
         ? [
             "View Photo",
             "Take Photo",
@@ -423,8 +464,8 @@ export default function ProfileScreen() {
           ]
         : ["Take Photo", "Choose from Library", "Cancel"];
 
-      const destructiveIndex = profile?.photo ? 3 : -1;
-      const cancelIndex = profile?.photo ? 4 : 2;
+      const destructiveIndex = hasPhoto ? 3 : -1;
+      const cancelIndex = hasPhoto ? 4 : 2;
 
       ActionSheetIOS.showActionSheetWithOptions(
         {
@@ -433,7 +474,7 @@ export default function ProfileScreen() {
           destructiveButtonIndex: destructiveIndex,
         },
         (buttonIndex) => {
-          if (profile?.photo) {
+          if (hasPhoto) {
             if (buttonIndex === 0) viewPhoto();
             else if (buttonIndex === 1) takePhoto();
             else if (buttonIndex === 2) chooseFromGallery();
@@ -450,16 +491,189 @@ export default function ProfileScreen() {
     }
   };
 
-  // ── Background gallery (max 6) ──
+  // ── Cover (independent from DP + posts) ───────────────────────
+  const displayCoverUrl = (url?: string | null) => {
+    if (!url) return "";
+    return resolveMediaUrl(url) || toAbsolute(url) || url;
+  };
+
+  const persistCover = async (next: string) => {
+    const token = await getAuthToken();
+    if (!token) throw new Error("Please log in");
+    const relative = toRelative(next);
+    const display = displayCoverUrl(relative || next);
+    const res: any = await apiRequest("/api/users/me", token, {
+      method: "PUT",
+      body: JSON.stringify({ coverPhoto: relative }),
+    });
+    const saved =
+      typeof res?.profile?.coverPhoto === "string"
+        ? res.profile.coverPhoto
+        : relative;
+    const savedDisplay = displayCoverUrl(saved) || display;
+    const authUser = await getCurrentAuthUser();
+    if (authUser?.email) {
+      const current = await getLocalProfile(authUser.email);
+      await saveLocalProfile(authUser.email, {
+        ...current,
+        coverPhoto: saved || relative,
+      });
+    }
+    updateCachedProfile({
+      coverPhoto: savedDisplay,
+      profile: {
+        ...(getCachedProfile()?.profile || profile || {}),
+        coverPhoto: saved || relative,
+      } as any,
+    });
+    coverPhotoRef.current = savedDisplay;
+    setCoverPhoto(savedDisplay);
+    setProfile((prev: any) =>
+      prev ? { ...prev, coverPhoto: saved || relative } : prev,
+    );
+    coverStickyUntilRef.current = Date.now() + 20_000;
+    const myId = String(profile?.userId || authUser?.id || "");
+    if (myId) {
+      bumpProfileLocal({
+        userId: myId,
+        publicId: profile?.publicId,
+        coverPhoto: saved || relative,
+        photo: profile?.photo,
+        name: profile?.name,
+      });
+    }
+    return savedDisplay;
+  };
+
+  const pickCoverImage = async (fromCamera: boolean) => {
+    setCoverOptionsVisible(false);
+    const permission = fromCamera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permission.status !== "granted") {
+      Alert.alert(
+        "Permission needed",
+        fromCamera
+          ? "Please allow camera access to take photos"
+          : "Please allow photo library access",
+      );
+      return;
+    }
+    const pickerOptions = {
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [16, 9] as [number, number],
+      quality: 0.9,
+    };
+    const result = fromCamera
+      ? await ImagePicker.launchCameraAsync(pickerOptions)
+      : await ImagePicker.launchImageLibraryAsync(pickerOptions);
+    if (result.canceled || !result.assets?.[0]) return;
+
+    const localUri = result.assets[0].uri;
+    coverBusyRef.current = true;
+    setCoverBusy(true);
+    // Instant local preview so cover is visible immediately
+    coverPhotoRef.current = localUri;
+    setCoverPhoto(localUri);
+    try {
+      const url = await uploadImage(localUri);
+      if (!url) throw new Error("Upload failed");
+      await persistCover(url);
+    } catch (e: any) {
+      coverPhotoRef.current = "";
+      setCoverPhoto("");
+      Alert.alert("Upload failed", e?.message || "Please try again.");
+    } finally {
+      coverBusyRef.current = false;
+      setCoverBusy(false);
+    }
+  };
+
+  const removeCoverPhoto = () => {
+    setCoverOptionsVisible(false);
+    Alert.alert("Remove cover", "Remove your cover photo?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          coverBusyRef.current = true;
+          coverStickyUntilRef.current = 0;
+          coverPhotoRef.current = "";
+          setCoverPhoto("");
+          try {
+            await persistCover("");
+          } catch {
+            Alert.alert("Error", "Could not remove cover");
+          } finally {
+            coverBusyRef.current = false;
+          }
+        },
+      },
+    ]);
+  };
+
+  const viewCoverPhoto = () => {
+    setCoverOptionsVisible(false);
+    if (!coverPhoto) return;
+    const uri = displayCoverUrl(coverPhoto);
+    showPhotoViewer([uri], 0, "Cover photo");
+  };
+
+  const openCoverOptions = () => {
+    if (Platform.OS === "ios") {
+      const hasCover = !!coverPhoto;
+      const options = hasCover
+        ? [
+            "View Cover",
+            "Replace with Camera",
+            "Replace from Library",
+            "Remove Cover",
+            "Cancel",
+          ]
+        : ["Take Photo", "Choose from Library", "Cancel"];
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options,
+          cancelButtonIndex: hasCover ? 4 : 2,
+          destructiveButtonIndex: hasCover ? 3 : -1,
+        },
+        (buttonIndex) => {
+          if (hasCover) {
+            if (buttonIndex === 0) viewCoverPhoto();
+            else if (buttonIndex === 1) pickCoverImage(true);
+            else if (buttonIndex === 2) pickCoverImage(false);
+            else if (buttonIndex === 3) removeCoverPhoto();
+          } else {
+            if (buttonIndex === 0) pickCoverImage(true);
+            else if (buttonIndex === 1) pickCoverImage(false);
+          }
+        },
+      );
+    } else {
+      setCoverOptionsVisible(true);
+    }
+  };
+
+  // ── Posts gallery (max 6) — independent from cover + DP ──
   const persistGallery = async (next: string[]) => {
     const token = await getAuthToken();
     if (!token) return;
     const relative = next.map(toRelative).filter(Boolean);
 
-    await apiRequest("/api/users/me", token, {
+    const res = await apiRequest("/api/users/me", token, {
       method: "PUT",
       body: JSON.stringify({ photos: relative }),
     });
+
+    const granted = Number(res?.galleryPostTokensGranted || 0);
+    if (granted > 0) {
+      Alert.alert(
+        "Post photo bonus!",
+        `You received ${granted} free tokens for adding post photo(s).`,
+      );
+    }
 
     const authUser = await getCurrentAuthUser();
     if (authUser?.email) {
@@ -537,7 +751,7 @@ export default function ProfileScreen() {
     if (!gallery[index]) return;
     const uris = gallery.filter(Boolean);
     const startIndex = uris.indexOf(gallery[index]);
-    showPhotoViewer(uris, startIndex >= 0 ? startIndex : 0);
+    showPhotoViewer(uris, startIndex >= 0 ? startIndex : 0, "Photos");
   };
 
   const openGalleryOptions = (index: number) => {
@@ -612,6 +826,7 @@ export default function ProfileScreen() {
         ? profile.interests.filter((i: string) => typeof i === "string")
         : [],
     );
+    setEditPhotoUri(null);
     setEditVisible(true);
   };
 
@@ -741,6 +956,7 @@ export default function ProfileScreen() {
       });
       await refreshSession();
 
+      setEditPhotoUri(null);
       setEditVisible(false);
     } catch (e: any) {
       Alert.alert("Could not save", e?.message || "Please try again.");
@@ -751,8 +967,20 @@ export default function ProfileScreen() {
 
   const applyProfileSnapshot = useCallback(
     (snapshot: ProfileScreenSnapshot) => {
+      if (coverBusyRef.current) return;
       setProfile(snapshot.profile);
       setGallery(snapshot.gallery);
+      const raw = snapshot.coverPhoto || snapshot.profile?.coverPhoto || "";
+      const next = displayCoverUrl(raw);
+      const sticky =
+        Date.now() < coverStickyUntilRef.current && !!coverPhotoRef.current;
+      // Prefer any real cover; never wipe with empty while sticky/local exists
+      if (next) {
+        coverPhotoRef.current = next;
+        setCoverPhoto(next);
+      } else if (!sticky && !coverPhotoRef.current) {
+        setCoverPhoto("");
+      }
       setSubscriptionBadge(snapshot.subscriptionBadge);
       setSubscriptionExpiresAt(snapshot.subscriptionExpiresAt);
     },
@@ -762,16 +990,44 @@ export default function ProfileScreen() {
   // Fetch profile when tab focuses; use preloaded cache first.
   useFocusEffect(
     useCallback(() => {
+      if (coverBusyRef.current) return;
       const cached = getCachedProfile();
       if (cached) {
         applyProfileSnapshot(cached);
       }
 
       void preloadProfile({ force: true }).then((snapshot) => {
-        if (snapshot) {
+        if (snapshot && !coverBusyRef.current) {
           applyProfileSnapshot(snapshot);
         }
       });
+
+      // Direct /me cover sync — bypasses stale empty cache races
+      void (async () => {
+        try {
+          const token = await getAuthToken();
+          if (!token || coverBusyRef.current) return;
+          const me: any = await apiRequest("/api/users/me", token);
+          const raw = typeof me?.coverPhoto === "string" ? me.coverPhoto : "";
+          if (!raw) return;
+          const next = displayCoverUrl(raw);
+          if (!next || coverBusyRef.current) return;
+          coverPhotoRef.current = next;
+          setCoverPhoto(next);
+          setProfile((prev: any) =>
+            prev ? { ...prev, coverPhoto: raw } : prev,
+          );
+          updateCachedProfile({
+            coverPhoto: next,
+            profile: {
+              ...(getCachedProfile()?.profile || {}),
+              coverPhoto: raw,
+            } as any,
+          });
+        } catch {
+          /* ignore — snapshot path still runs */
+        }
+      })();
     }, [sessionVersion, applyProfileSnapshot]),
   );
 
@@ -783,12 +1039,6 @@ export default function ProfileScreen() {
       route: "/settings",
     },
     {
-      icon: "ban",
-      label: "Blocked",
-      color: "#EA4335",
-      route: "/blocked",
-    },
-    {
       icon: "card",
       label: "Subscription",
       color: "#FF4B6E",
@@ -797,13 +1047,32 @@ export default function ProfileScreen() {
     {
       icon: "shield-checkmark",
       label: "Photo verification",
-      color: "#0095F6",
+      color: "#22C55E",
       route: "/photo-verify",
     },
-    { icon: "shield-checkmark", label: "Safety Center", color: "#4CAF50" },
-    { icon: "help-circle", label: "Help & Support", color: "#2196F3" },
-    { icon: "log-out", label: "Logout", color: "#FF4B6E" },
+    {
+      icon: "gift",
+      label: "Refer & Get 50 Tokens",
+      color: "#7C3AED",
+      route: "/refer",
+    },
+    {
+      icon: "shield-checkmark",
+      label: "Safety Center",
+      color: "#4CAF50",
+      route: "/safety-center",
+    },
+    {
+      icon: "help-circle",
+      label: "Help & Support",
+      color: "#2196F3",
+      route: "/help-support",
+    },
   ];
+
+  const coverHeight = 148 + Math.max(insets.top, 0);
+  const coverUri =
+    displayCoverUrl(coverPhoto) || displayCoverUrl(profile?.coverPhoto) || "";
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
@@ -820,31 +1089,45 @@ export default function ProfileScreen() {
         bounces={false}
         overScrollMode="never"
       >
-        {/* ── Cover + Avatar ── */}
+        {/* ── Cover + Avatar (independent sections) ── */}
         <View style={styles.coverBlock}>
-          <TouchableOpacity
-            style={[
-              styles.coverWrap,
-              { height: 148 + Math.max(insets.top, 0) },
-            ]}
-            activeOpacity={0.9}
-            onPress={() => handleGallerySlotPress(0)}
-          >
-            {gallery[0] ? (
+          <View style={[styles.coverWrap, { height: coverHeight }]}>
+            {coverUri ? (
               <Image
-                source={{ uri: gallery[0] }}
-                style={styles.coverImage}
+                key={coverUri}
+                source={{ uri: coverUri }}
+                style={{ width: "100%", height: coverHeight }}
                 contentFit="cover"
-                cachePolicy="none"
+                cachePolicy="memory-disk"
+                recyclingKey={coverUri}
+                onError={() => {
+                  // Retry once with cache-bust if remote URL fails
+                  const base = coverUri.split("?")[0];
+                  if (
+                    base &&
+                    !coverUri.startsWith("file:") &&
+                    !coverUri.startsWith("content:")
+                  ) {
+                    const busted = `${base}?t=${Date.now()}`;
+                    coverPhotoRef.current = busted;
+                    setCoverPhoto(busted);
+                  }
+                }}
               />
             ) : (
               <LinearGradient
-                colors={["#6750A4", "#FF4B6E"]}
+                colors={["#370372", "#1C1B1F"]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={styles.coverImage}
+                style={{ width: "100%", height: coverHeight }}
               />
             )}
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              activeOpacity={1}
+              onPress={openCoverOptions}
+              disabled={coverBusy}
+            />
             <TouchableOpacity
               style={[styles.coverEditBtn, styles.profileEditBtn]}
               onPress={openEditProfile}
@@ -853,61 +1136,71 @@ export default function ProfileScreen() {
               <Ionicons name="pencil" size={11} color="#fff" />
               <Text style={styles.coverEditText}>Edit</Text>
             </TouchableOpacity>
-            <View style={[styles.coverEditBtn, styles.coverAddBtn]}>
-              <Ionicons name="camera" size={11} color="#fff" />
-              <Text style={styles.coverEditText}>
-                {gallery[0] ? "Edit cover" : "Add cover"}
-              </Text>
-            </View>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.coverEditBtn, styles.coverAddBtn]}
+              onPress={openCoverOptions}
+              activeOpacity={0.85}
+              disabled={coverBusy}
+            >
+              {coverBusy ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="camera" size={11} color="#fff" />
+                  <Text style={styles.coverEditText}>
+                    {coverUri ? "Edit cover" : "Add cover"}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.avatarBlock}>
             <TouchableOpacity
               style={styles.avatarWrap}
-              onPress={handlePhotoPress}
-              activeOpacity={0.85}
-              disabled={uploadingPhoto}
+              onPress={() => {
+                if (profile?.photo) viewPhoto();
+              }}
+              activeOpacity={profile?.photo ? 0.85 : 1}
+              disabled={uploadingPhoto || !profile?.photo}
             >
               <WhatsAppAvatar
                 photo={profile?.photo}
                 name={profile?.name}
                 publicId={profile?.publicId}
                 size={78}
+                badge={liveSubscriptionBadge}
+                badgeExpiresAt={subscriptionExpiresAt}
+                photoVerified={
+                  !!profile?.photoVerification?.photoVerified ||
+                  profile?.photoVerification?.status === "approved"
+                }
               />
               {uploadingPhoto ? (
                 <View style={styles.uploadingOverlay}>
                   <ActivityIndicator size="small" color="#fff" />
                 </View>
-              ) : (
-                <View style={styles.cameraIconBadge}>
-                  <Ionicons name="camera" size={12} color="#fff" />
-                </View>
-              )}
+              ) : null}
             </TouchableOpacity>
             <View style={styles.userNameRow}>
               <Text style={styles.userName}>
                 {getDisplayName(profile?.name, profile?.publicId)}
                 {profile?.age ? `, ${profile.age}` : ""}
               </Text>
-              {liveSubscriptionBadge ? (
-                <VerifiedTick avatarSize={52} inline />
-              ) : null}
               {profile?.photoVerification?.photoVerified ||
               profile?.photoVerification?.status === "approved" ? (
                 <Ionicons
                   name="shield-checkmark"
                   size={18}
-                  color="#0095F6"
+                  color="#22C55E"
                   style={{ marginLeft: 4 }}
                 />
               ) : null}
             </View>
-            <Text style={styles.userIdText}>
-              ID:{" "}
-              {isValidPublicId(profile?.publicId)
-                ? String(profile.publicId).toUpperCase()
-                : "····"}
-            </Text>
+            <CopyablePublicId
+              publicId={profile?.publicId}
+              name={getDisplayName(profile?.name, profile?.publicId)}
+            />
           </View>
         </View>
 
@@ -926,7 +1219,7 @@ export default function ProfileScreen() {
         />
 
         {/* ── Settings Menu ── */}
-        <Text style={styles.waSectionHint}>Account</Text>
+        <Text style={styles.waSectionHint}>More</Text>
         <View style={[styles.waListGroup, { marginBottom: 40 }]}>
           {MENU_ITEMS.map((item, index) => (
             <View key={item.label}>
@@ -934,10 +1227,10 @@ export default function ProfileScreen() {
                 style={styles.waListRow}
                 activeOpacity={0.7}
                 onPress={() => {
-                  if (item.label === "Settings") {
+                  if (item.label === "Refer & Get 50 Tokens") {
+                    router.push("/refer" as any);
+                  } else if (item.label === "Settings") {
                     router.push((item as any).route);
-                  } else if (item.label === "Blocked") {
-                    router.push("/blocked" as any);
                   } else if (item.label === "Photo verification") {
                     router.push("/photo-verify" as any);
                   } else if (item.label === "Safety Center") {
@@ -946,23 +1239,8 @@ export default function ProfileScreen() {
                     router.push("/help-support" as any);
                   } else if (item.label === "Subscription") {
                     router.push("/subscription" as any);
-                  } else if (item.label === "Logout") {
-                    showAlert({
-                      title: "Are you sure you want to log out?",
-                      actionsLayout: "horizontal",
-                      buttons: [
-                        {
-                          text: "Logout",
-                          icon: "log-out-outline",
-                          style: "destructive",
-                          onPress: async () => {
-                            await signOut();
-                            router.replace("/login");
-                          },
-                        },
-                        { text: "Cancel", icon: "close-circle-outline" },
-                      ],
-                    });
+                  } else if ((item as any).route) {
+                    router.push((item as any).route);
                   } else {
                     Alert.alert(
                       item.label,
@@ -976,14 +1254,11 @@ export default function ProfileScreen() {
                 >
                   <Ionicons name={item.icon as any} size={20} color="#fff" />
                 </View>
-                <Text
-                  style={[
-                    styles.waRowLabel,
-                    item.label === "Logout" && { color: WA.danger },
-                  ]}
-                >
-                  {item.label}
-                </Text>
+                <View style={styles.waRowContent}>
+                  <Text style={[styles.waRowLabel, { flex: 0 }]}>
+                    {item.label}
+                  </Text>
+                </View>
                 <Ionicons
                   name="chevron-forward"
                   size={18}
@@ -998,56 +1273,45 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
 
-      {/* ── Edit Profile (WhatsApp-style) ── */}
+      {/* ── Edit Profile (Instagram-style) ── */}
       <Modal
         animationType="slide"
         visible={editVisible}
-        onRequestClose={() => !savingEdit && setEditVisible(false)}
+        onRequestClose={() => {
+          if (savingEdit) return;
+          setEditPhotoUri(null);
+          setEditVisible(false);
+        }}
         presentationStyle="fullScreen"
         statusBarTranslucent
       >
-        <View style={styles.waEditRoot}>
+        <View style={styles.igEditRoot}>
           <StatusBar barStyle="dark-content" backgroundColor={WA.bg} />
-          <View
-            style={[
-              styles.waEditHeaderWrap,
-              { paddingTop: Math.max(insets.top, 0) },
-            ]}
-          >
-            {Platform.OS === "ios" ? (
-              <BlurView
-                intensity={55}
-                tint="light"
-                style={StyleSheet.absoluteFillObject}
-              />
-            ) : null}
-            <View
-              style={[
-                styles.waEditHeaderFrost,
-                Platform.OS === "ios" && styles.waEditHeaderFrostIos,
-              ]}
-              pointerEvents="none"
-            />
-            <View style={styles.waEditHeader}>
+          <View style={{ paddingTop: Math.max(insets.top, 0) }}>
+            <View style={styles.igEditHeader}>
               <TouchableOpacity
-                onPress={() => !savingEdit && setEditVisible(false)}
+                onPress={() => {
+                  if (savingEdit) return;
+                  setEditPhotoUri(null);
+                  setEditVisible(false);
+                }}
                 hitSlop={8}
                 disabled={savingEdit}
-                style={styles.waEditHeaderBtn}
+                style={styles.igEditHeaderBtn}
               >
-                <Text style={styles.waEditCancel}>Cancel</Text>
+                <Text style={styles.igEditCancel}>Cancel</Text>
               </TouchableOpacity>
-              <Text style={styles.waEditTitle}>Edit profile</Text>
+              <Text style={styles.igEditTitle}>Edit profile</Text>
               <TouchableOpacity
                 onPress={saveEditProfile}
                 hitSlop={8}
                 disabled={savingEdit}
-                style={styles.waEditHeaderBtn}
+                style={styles.igEditHeaderBtn}
               >
                 {savingEdit ? (
                   <ActivityIndicator size="small" color={WA.teal} />
                 ) : (
-                  <Text style={styles.waEditSave}>Save</Text>
+                  <Text style={styles.igEditDone}>Done</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1060,244 +1324,261 @@ export default function ProfileScreen() {
             <ScrollView
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={[
-                styles.waEditScroll,
+                styles.igEditScroll,
                 { paddingBottom: 40 + Math.max(insets.bottom, 0) },
               ]}
               showsVerticalScrollIndicator={false}
             >
-              <Text style={styles.waEditSectionHint}>
-                Name, age and about are shown on your profile to others.
-              </Text>
+              {/* Avatar — photo edit only here (pencil badge) */}
+              <View style={styles.igEditAvatarBlock}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => !savingEdit && handlePhotoPress()}
+                  disabled={savingEdit || uploadingPhoto}
+                  style={styles.igEditAvatarTap}
+                >
+                  <WhatsAppAvatar
+                    key={editPhotoUri || profile?.photo || "no-photo"}
+                    photo={editPhotoUri || profile?.photo || null}
+                    name={editName || profile?.name || "You"}
+                    publicId={profile?.publicId}
+                    size={96}
+                  />
+                  {uploadingPhoto ? (
+                    <View style={styles.igEditAvatarBusy}>
+                      <ActivityIndicator color="#fff" />
+                    </View>
+                  ) : (
+                    <View style={styles.igEditAvatarPencil}>
+                      <Ionicons name="pencil" size={14} color="#FFFFFF" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <CopyablePublicId
+                  publicId={profile?.publicId}
+                  name={
+                    editName || getDisplayName(profile?.name, profile?.publicId)
+                  }
+                  style={styles.igEditIdRow}
+                />
+              </View>
 
-              <View style={styles.waEditGroup}>
-                <View style={styles.waEditRow}>
-                  <Text style={styles.waEditRowLabel}>Name</Text>
+              {/* Fields */}
+              <View style={styles.igEditFields}>
+                <View style={styles.igEditRow}>
+                  <Text style={styles.igEditLabel}>Name</Text>
                   <TextInput
-                    style={styles.waEditRowInput}
+                    style={styles.igEditInput}
                     value={editName}
                     onChangeText={setEditName}
-                    placeholder="Your name"
-                    placeholderTextColor="#999"
+                    placeholder="Name"
+                    placeholderTextColor={WA.secondary}
                     maxLength={50}
                     autoCapitalize="words"
                     editable={!savingEdit}
                   />
                 </View>
-                <View style={styles.waEditDivider} />
-                <View style={styles.waEditRow}>
-                  <Text style={styles.waEditRowLabel}>Age</Text>
+
+                <View style={styles.igEditRow}>
+                  <Text style={styles.igEditLabel}>Age</Text>
                   <TextInput
-                    style={styles.waEditRowInput}
+                    style={styles.igEditInput}
                     value={editAge}
                     onChangeText={(t) =>
                       setEditAge(t.replace(/[^0-9]/g, "").slice(0, 3))
                     }
                     placeholder="18+"
-                    placeholderTextColor="#999"
+                    placeholderTextColor={WA.secondary}
                     keyboardType="number-pad"
                     maxLength={3}
                     editable={!savingEdit}
                   />
                 </View>
-                <View style={styles.waEditDivider} />
-                <View style={styles.waEditRow}>
-                  <Text style={styles.waEditRowLabel}>Height</Text>
+
+                <View style={styles.igEditRow}>
+                  <Text style={styles.igEditLabel}>Height</Text>
                   <TextInput
-                    style={styles.waEditRowInput}
+                    style={styles.igEditInput}
                     value={editHeight}
                     onChangeText={(t) =>
                       setEditHeight(t.replace(/[^0-9]/g, "").slice(0, 3))
                     }
                     placeholder="cm"
-                    placeholderTextColor="#999"
+                    placeholderTextColor={WA.secondary}
                     keyboardType="number-pad"
                     maxLength={3}
                     editable={!savingEdit}
                   />
                 </View>
-              </View>
 
-              <Text style={styles.waEditSectionHint}>About</Text>
-              <View style={styles.waEditGroup}>
-                <TextInput
-                  style={styles.waEditAboutInput}
-                  value={editBio}
-                  onChangeText={setEditBio}
-                  placeholder="Hey there! I am using Luvstor"
-                  placeholderTextColor="#999"
-                  maxLength={300}
-                  multiline
-                  textAlignVertical="top"
-                  editable={!savingEdit}
-                />
-                <Text style={styles.waEditCharCount}>{editBio.length}/300</Text>
-              </View>
-
-              <Text style={styles.waEditSectionHint}>Gender</Text>
-              <View style={styles.waEditGroup}>
-                <View style={styles.waEditChipWrap}>
-                  {GENDER_EDIT_OPTIONS.map((g) => {
-                    const selected = editGender === g;
-                    return (
-                      <TouchableOpacity
-                        key={g}
-                        style={[
-                          styles.waEditChip,
-                          selected && styles.waEditChipSelected,
-                        ]}
-                        onPress={() => {
-                          if (savingEdit) return;
-                          const nextGender = g;
-                          setEditShowMe((prev) =>
-                            followGenderChange(editGender, prev, nextGender),
-                          );
-                          setEditGender(nextGender);
-                        }}
-                        activeOpacity={0.8}
-                        disabled={savingEdit}
-                      >
-                        <Text
-                          style={[
-                            styles.waEditChipText,
-                            selected && styles.waEditChipTextSelected,
-                          ]}
-                        >
-                          {g}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                <View style={[styles.igEditRow, styles.igEditRowBio]}>
+                  <Text style={[styles.igEditLabel, { paddingTop: 4 }]}>
+                    Bio
+                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <TextInput
+                      style={[styles.igEditInput, styles.igEditBioInput]}
+                      value={editBio}
+                      onChangeText={setEditBio}
+                      placeholder="Bio"
+                      placeholderTextColor={WA.secondary}
+                      maxLength={300}
+                      multiline
+                      textAlignVertical="top"
+                      editable={!savingEdit}
+                    />
+                    <Text style={styles.igEditCharCount}>
+                      {editBio.length}/300
+                    </Text>
+                  </View>
                 </View>
               </View>
 
-              <Text style={styles.waEditSectionHint}>Show me</Text>
-              <View style={styles.waEditGroup}>
-                <View style={styles.waEditChipWrap}>
-                  {SHOW_ME_OPTIONS.map((option) => {
-                    const selected = editShowMe === option.value;
-                    return (
-                      <TouchableOpacity
-                        key={option.value}
+              <Text style={styles.igEditSection}>Gender</Text>
+              <View style={styles.igEditChipWrap}>
+                {GENDER_EDIT_OPTIONS.map((g) => {
+                  const selected = editGender === g;
+                  return (
+                    <TouchableOpacity
+                      key={g}
+                      style={[
+                        styles.igEditChip,
+                        selected && styles.igEditChipOn,
+                      ]}
+                      onPress={() => {
+                        if (savingEdit) return;
+                        setEditShowMe((prev) =>
+                          followGenderChange(editGender, prev, g),
+                        );
+                        setEditGender(g);
+                      }}
+                      activeOpacity={0.8}
+                      disabled={savingEdit}
+                    >
+                      <Text
                         style={[
-                          styles.waEditChip,
-                          selected && styles.waEditChipSelected,
+                          styles.igEditChipText,
+                          selected && styles.igEditChipTextOn,
                         ]}
-                        onPress={() =>
-                          !savingEdit && setEditShowMe(option.value)
-                        }
-                        activeOpacity={0.8}
-                        disabled={savingEdit}
                       >
-                        <Text
-                          style={[
-                            styles.waEditChipText,
-                            selected && styles.waEditChipTextSelected,
-                          ]}
-                        >
-                          {option.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                        {g}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
-              <Text style={styles.waEditSectionHint}>Looking for</Text>
-              <View style={styles.waEditGroup}>
-                <View style={styles.waEditChipWrap}>
-                  {GOAL_OPTIONS.map((label) => {
-                    const selected = editGoal === label;
-                    return (
-                      <TouchableOpacity
-                        key={label}
+              <Text style={styles.igEditSection}>Show me</Text>
+              <View style={styles.igEditChipWrap}>
+                {SHOW_ME_OPTIONS.map((option) => {
+                  const selected = editShowMe === option.value;
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
+                      style={[
+                        styles.igEditChip,
+                        selected && styles.igEditChipOn,
+                      ]}
+                      onPress={() => !savingEdit && setEditShowMe(option.value)}
+                      activeOpacity={0.8}
+                      disabled={savingEdit}
+                    >
+                      <Text
                         style={[
-                          styles.waEditChip,
-                          selected && styles.waEditChipSelected,
+                          styles.igEditChipText,
+                          selected && styles.igEditChipTextOn,
                         ]}
-                        onPress={() => !savingEdit && setEditGoal(label)}
-                        activeOpacity={0.8}
-                        disabled={savingEdit}
                       >
-                        <Text style={styles.waEditChipEmoji}>
-                          {selected ? "✓" : GOAL_EMOJIS[label] || "✨"}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.waEditChipText,
-                            selected && styles.waEditChipTextSelected,
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
-              <Text style={styles.waEditSectionHint}>Discovery distance</Text>
-              <View style={styles.waEditGroup}>
-                <View style={styles.waEditChipWrap}>
-                  {DISTANCE_EDIT_OPTIONS.map((km) => {
-                    const selected = editDistance === km;
-                    return (
-                      <TouchableOpacity
-                        key={km}
+              <Text style={styles.igEditSection}>Looking for</Text>
+              <View style={styles.igEditChipWrap}>
+                {GOAL_OPTIONS.map((label) => {
+                  const selected = editGoal === label;
+                  return (
+                    <TouchableOpacity
+                      key={label}
+                      style={[
+                        styles.igEditChip,
+                        selected && styles.igEditChipOn,
+                      ]}
+                      onPress={() => !savingEdit && setEditGoal(label)}
+                      activeOpacity={0.8}
+                      disabled={savingEdit}
+                    >
+                      <Text
                         style={[
-                          styles.waEditChip,
-                          selected && styles.waEditChipSelected,
+                          styles.igEditChipText,
+                          selected && styles.igEditChipTextOn,
                         ]}
-                        onPress={() => !savingEdit && setEditDistance(km)}
-                        activeOpacity={0.8}
-                        disabled={savingEdit}
                       >
-                        <Text
-                          style={[
-                            styles.waEditChipText,
-                            selected && styles.waEditChipTextSelected,
-                          ]}
-                        >
-                          {km} km
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
-              <Text style={styles.waEditSectionHint}>
-                Interests · select at least 1
-              </Text>
-              <View style={styles.waEditGroup}>
-                <View style={styles.waEditChipWrap}>
-                  {INTEREST_OPTIONS.map((label) => {
-                    const selected = editInterests.includes(label);
-                    return (
-                      <TouchableOpacity
-                        key={label}
+              <Text style={styles.igEditSection}>Discovery distance</Text>
+              <View style={styles.igEditChipWrap}>
+                {DISTANCE_EDIT_OPTIONS.map((km) => {
+                  const selected = editDistance === km;
+                  return (
+                    <TouchableOpacity
+                      key={km}
+                      style={[
+                        styles.igEditChip,
+                        selected && styles.igEditChipOn,
+                      ]}
+                      onPress={() => !savingEdit && setEditDistance(km)}
+                      activeOpacity={0.8}
+                      disabled={savingEdit}
+                    >
+                      <Text
                         style={[
-                          styles.waEditChip,
-                          selected && styles.waEditChipSelected,
+                          styles.igEditChipText,
+                          selected && styles.igEditChipTextOn,
                         ]}
-                        onPress={() => !savingEdit && toggleEditInterest(label)}
-                        activeOpacity={0.8}
-                        disabled={savingEdit}
                       >
-                        <Text style={styles.waEditChipEmoji}>
-                          {selected ? "✓" : INTEREST_EMOJIS[label] || "✨"}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.waEditChipText,
-                            selected && styles.waEditChipTextSelected,
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                        {km} km
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.igEditSection}>Interests</Text>
+              <Text style={styles.igEditHint}>Select at least 1</Text>
+              <View style={styles.igEditChipWrap}>
+                {INTEREST_OPTIONS.map((label) => {
+                  const selected = editInterests.includes(label);
+                  return (
+                    <TouchableOpacity
+                      key={label}
+                      style={[
+                        styles.igEditChip,
+                        selected && styles.igEditChipOn,
+                      ]}
+                      onPress={() => !savingEdit && toggleEditInterest(label)}
+                      activeOpacity={0.8}
+                      disabled={savingEdit}
+                    >
+                      <Text
+                        style={[
+                          styles.igEditChipText,
+                          selected && styles.igEditChipTextOn,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
@@ -1837,7 +2118,7 @@ export default function ProfileScreen() {
           <View style={styles.photoOptionsContainer}>
             <Text style={styles.photoOptionsTitle}>Profile Photo</Text>
 
-            {profile?.photo && (
+            {(editPhotoUri || profile?.photo) && (
               <TouchableOpacity
                 style={styles.photoOption}
                 onPress={viewPhoto}
@@ -1866,7 +2147,7 @@ export default function ProfileScreen() {
               <Text style={styles.photoOptionText}>Choose from Gallery</Text>
             </TouchableOpacity>
 
-            {profile?.photo && (
+            {(editPhotoUri || profile?.photo) && (
               <TouchableOpacity
                 style={[styles.photoOption, styles.photoOptionDanger]}
                 onPress={removePhoto}
@@ -1892,7 +2173,81 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ── Background Photo Options (Android) ── */}
+      {/* ── Cover Photo Options (Android) ── */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={coverOptionsVisible}
+        onRequestClose={() => setCoverOptionsVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.photoModalOverlay}
+          activeOpacity={1}
+          onPress={() => setCoverOptionsVisible(false)}
+        >
+          <View style={styles.photoOptionsContainer}>
+            <Text style={styles.photoOptionsTitle}>Cover Photo</Text>
+
+            {!!coverPhoto && (
+              <TouchableOpacity
+                style={styles.photoOption}
+                activeOpacity={0.7}
+                onPress={viewCoverPhoto}
+              >
+                <Ionicons name="eye-outline" size={22} color={C.primary} />
+                <Text style={styles.photoOptionText}>View Cover</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.photoOption}
+              activeOpacity={0.7}
+              onPress={() => pickCoverImage(true)}
+            >
+              <Ionicons name="camera-outline" size={22} color={C.primary} />
+              <Text style={styles.photoOptionText}>
+                {coverPhoto ? "Replace with Camera" : "Take Photo"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.photoOption}
+              activeOpacity={0.7}
+              onPress={() => pickCoverImage(false)}
+            >
+              <Ionicons name="images-outline" size={22} color={C.primary} />
+              <Text style={styles.photoOptionText}>
+                {coverPhoto ? "Replace from Gallery" : "Choose from Gallery"}
+              </Text>
+            </TouchableOpacity>
+
+            {!!coverPhoto && (
+              <TouchableOpacity
+                style={[styles.photoOption, styles.photoOptionDanger]}
+                activeOpacity={0.7}
+                onPress={removeCoverPhoto}
+              >
+                <Ionicons name="trash-outline" size={22} color="#f44336" />
+                <Text
+                  style={[styles.photoOptionText, styles.photoOptionDangerText]}
+                >
+                  Remove Cover
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.photoOptionCancel}
+              activeOpacity={0.7}
+              onPress={() => setCoverOptionsVisible(false)}
+            >
+              <Text style={styles.photoOptionCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Post Photo Options (Android) ── */}
       <Modal
         animationType="fade"
         transparent={true}
@@ -1906,7 +2261,7 @@ export default function ProfileScreen() {
         >
           <View style={styles.photoOptionsContainer}>
             <Text style={styles.photoOptionsTitle}>
-              {gallerySlot === 0 ? "Cover Photo" : `Photo ${gallerySlot + 1}`}
+              {`Post ${gallerySlot + 1}`}
             </Text>
 
             {!!gallery[gallerySlot] && (
@@ -1977,6 +2332,7 @@ export default function ProfileScreen() {
         visible={photoViewerVisible}
         uris={photoViewerUris}
         initialIndex={photoViewerIndex}
+        title={photoViewerTitle}
         onClose={() => setPhotoViewerVisible(false)}
       />
 
@@ -1997,6 +2353,9 @@ export default function ProfileScreen() {
           interests: profile?.interests,
           subscriptionBadge: liveSubscriptionBadge,
           subscriptionExpiresAt: subscriptionExpiresAt,
+          photoVerified:
+            !!profile?.photoVerification?.photoVerified ||
+            profile?.photoVerification?.status === "approved",
         }}
       />
     </SafeAreaView>
@@ -2025,9 +2384,10 @@ const styles = StyleSheet.create({
     width: "100%",
     overflow: "hidden",
     backgroundColor: WA.border,
+    position: "relative",
   },
   coverImage: {
-    ...StyleSheet.absoluteFillObject,
+    width: "100%",
   },
   coverEditBtn: {
     position: "absolute",
@@ -2315,6 +2675,164 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: WA.bg,
+  },
+  igEditRoot: {
+    flex: 1,
+    backgroundColor: "#F5F5F7",
+  },
+  igEditHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 12,
+    minHeight: 44,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#E5E5E5",
+    backgroundColor: "#F5F5F7",
+  },
+  igEditHeaderBtn: {
+    minWidth: 64,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  igEditCancel: {
+    fontSize: 16,
+    color: WA.secondary,
+    fontWeight: "500",
+  },
+  igEditTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: WA.text,
+  },
+  igEditDone: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: WA.teal,
+    textAlign: "right",
+  },
+  igEditScroll: {
+    paddingBottom: 40,
+  },
+  igEditAvatarBlock: {
+    alignItems: "center",
+    paddingTop: 28,
+    paddingBottom: 20,
+  },
+  igEditAvatarTap: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+  },
+  igEditAvatarBusy: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 48,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  igEditAvatarPencil: {
+    position: "absolute",
+    right: 2,
+    bottom: 2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#262626",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#F5F5F7",
+  },
+  igEditIdRow: {
+    marginTop: 12,
+  },
+  igEditFields: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: WA.border,
+    paddingHorizontal: 16,
+    backgroundColor: WA.white,
+  },
+  igEditRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: WA.border,
+    minHeight: 48,
+    paddingVertical: 4,
+  },
+  igEditRowBio: {
+    alignItems: "flex-start",
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  igEditLabel: {
+    width: 88,
+    fontSize: 15,
+    color: WA.text,
+    fontWeight: "500",
+  },
+  igEditInput: {
+    flex: 1,
+    fontSize: 15,
+    color: WA.text,
+    paddingVertical: 12,
+    paddingRight: 4,
+  },
+  igEditBioInput: {
+    minHeight: 72,
+    paddingTop: 0,
+    lineHeight: 20,
+  },
+  igEditCharCount: {
+    alignSelf: "flex-end",
+    fontSize: 12,
+    color: WA.secondary,
+    marginTop: 4,
+  },
+  igEditSection: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: WA.text,
+    paddingHorizontal: 16,
+    paddingTop: 22,
+    paddingBottom: 8,
+  },
+  igEditHint: {
+    fontSize: 12,
+    color: WA.secondary,
+    paddingHorizontal: 16,
+    marginTop: -4,
+    marginBottom: 6,
+  },
+  igEditChipWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 4,
+  },
+  igEditChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: WA.white,
+    borderWidth: 0,
+  },
+  igEditChipOn: {
+    backgroundColor: WA.primaryContainer,
+    borderWidth: 0,
+  },
+  igEditChipText: {
+    fontSize: 13,
+    color: WA.text,
+    fontWeight: "500",
+  },
+  igEditChipTextOn: {
+    color: WA.teal,
+    fontWeight: "700",
   },
   waEditRoot: {
     flex: 1,

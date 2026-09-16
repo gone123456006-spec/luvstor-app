@@ -44,6 +44,7 @@ const TYPE_DEFAULTS = {
   system: { priority: 'normal', sound: 'default' },
   promo: { priority: 'low', sound: 'default' },
   suggestion: { priority: 'normal', sound: 'default' },
+  profile_view: { priority: 'normal', sound: 'default' },
 };
 
 /** Pref keys on User.notificationPrefs (separate from Android channel ids). */
@@ -65,9 +66,18 @@ const TYPE_PREF = {
   // The daily digest is a nudge, not a real-time event: it shares the
   // promotions opt-out so muting it never silences an actual like or match.
   suggestion: 'promotions',
+  profile_view: 'social',
 };
 
-const SOCIAL_TYPES = new Set(['friend_request', 'friends', 'like', 'match', 'chat', 'call']);
+const SOCIAL_TYPES = new Set([
+  'friend_request',
+  'friends',
+  'like',
+  'match',
+  'chat',
+  'call',
+  'profile_view',
+]);
 
 /** Personal DMs belong in Chats — never the Notification Center (WhatsApp-style). */
 const HIDE_FROM_CENTER = new Set(['chat']);
@@ -88,7 +98,8 @@ function resolveDeepLink(type, data = {}, actorId = null) {
       return userId ? `/messages/${userId}` : '/(tabs)/chat';
     case 'friend_request':
     case 'like':
-      return '/(tabs)/chat';
+    case 'profile_view':
+      return userId ? `/(tabs)` : '/notifications';
     case 'token':
     case 'token_purchase':
     case 'token_low':
@@ -127,6 +138,11 @@ function applyActorCopy(type, title, body, actorName) {
       };
     case 'like':
       return { title: `${actorName} liked your profile`, body };
+    case 'profile_view':
+      return {
+        title: `${actorName} viewed your profile.`,
+        body: body || 'Like or message them back.',
+      };
     case 'chat':
       return { title: actorName, body };
     case 'call':
@@ -156,6 +172,32 @@ function serialize(doc, actor = {}) {
     actorGender: doc.actorGender || actor.actorGender || '',
     read: !!doc.read,
     createdAt: doc.createdAt,
+    locked: false,
+  };
+}
+
+/**
+ * Hide viewer identity until Gold / Platinum / Black.
+ * Photo is kept so the client can show a blurred DP (name/id stay hidden).
+ * Full row stays in DB so unlock reveals the real person later.
+ */
+function redactProfileViewPayload(payload) {
+  if (!payload || payload.type !== 'profile_view') return payload;
+  return {
+    ...payload,
+    title: 'Someone viewed your profile.',
+    body: 'Subscribe to Gold, Platinum, or Black to see who.',
+    // Keep photo for blurred DP preview — strip identity fields
+    actorId: null,
+    actorName: '',
+    actorGender: '',
+    groupKey: 'profile_view:locked',
+    data: {
+      locked: true,
+      action: 'profile_view',
+    },
+    deepLink: '/subscription',
+    locked: true,
   };
 }
 
@@ -174,14 +216,15 @@ async function pushAllowed(userId, type, { actorId } = {}) {
     const prefs = user?.notificationPrefs;
     if (prefs && prefKey && prefs[prefKey] === false) return false;
 
-    // Per-conversation mute (WhatsApp)
+    // Per-conversation mute + archived (WhatsApp keep-archived: no pushes)
     if (type === 'chat' && actorId) {
-      const muted = await ConversationState.exists({
+      const state = await ConversationState.findOne({
         userId,
         otherUserId: actorId,
-        muted: true,
-      });
-      if (muted) return false;
+      })
+        .select('muted archived')
+        .lean();
+      if (state?.muted || state?.archived) return false;
     }
 
     return true;
@@ -216,12 +259,117 @@ async function unreadCountFor(userId) {
   }
 }
 
+/** Unread DM count for launcher badge (WhatsApp-style — chats drive the badge). */
+async function chatUnreadCountFor(userId) {
+  try {
+    const mongoose = require('mongoose');
+    const Message = require('../models/Message');
+    const ConversationState = require('../models/ConversationState');
+    const myObjId = new mongoose.Types.ObjectId(userId);
+
+    const archived = await ConversationState.find({
+      userId,
+      archived: true,
+    })
+      .select('otherUserId')
+      .lean();
+    const archivedIds = archived.map((s) => String(s.otherUserId));
+
+    const match = {
+      receiverId: myObjId,
+      read: false,
+      isDeleted: { $ne: true },
+      undelivered: { $ne: true },
+      deletedFor: { $nin: [myObjId] },
+    };
+    if (archivedIds.length) {
+      match.senderId = {
+        $nin: archivedIds.map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
+
+    return await Message.countDocuments(match);
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Queue the FCM push for a persisted notification.
  * Never throws — push failure must not break the caller's flow.
  */
 async function queuePush(userId, notification, { badge } = {}) {
   try {
+    const isChat = notification.type === 'chat';
+    const opts = defaultsFor(notification.type);
+
+    // Fast chat path: fewer sequential DB hits → WhatsApp-like push latency
+    if (isChat) {
+      const actorId = notification.actorId || null;
+      const [tokens, user, muteState, unreadBadge] = await Promise.all([
+        deviceTokens.getActiveTokens(userId),
+        User.findById(userId).select('notificationPrefs').lean(),
+        actorId
+          ? ConversationState.findOne({
+              userId,
+              otherUserId: actorId,
+            })
+              .select('muted archived')
+              .lean()
+          : Promise.resolve(null),
+        typeof badge === 'number'
+          ? Promise.resolve(badge)
+          : chatUnreadCountFor(userId),
+      ]);
+
+      if (!tokens.length) return;
+      const prefs = user?.notificationPrefs;
+      if (prefs?.chat === false) return;
+      if (muteState?.muted || muteState?.archived) return;
+
+      const hidePreview = prefs?.showMessagePreview === false;
+      const title = notification.title || 'New message';
+      const body = hidePreview
+        ? 'New message'
+        : notification.body || 'New message';
+      const badgeCount = unreadBadge || 0;
+
+      const pushId =
+        notification._id != null
+          ? String(notification._id)
+          : `chat:${notification.groupKey || ''}:${notification.data?.messageId || Date.now()}`;
+
+      pushQueue.enqueue({
+        userId: String(userId),
+        notificationId: notification._id,
+        tokens,
+        payload: {
+          title,
+          body,
+          imageUrl: notification.imageUrl || undefined,
+          channelId: TYPE_CHANNEL.chat || 'chat',
+          priority: notification.priority || opts.priority,
+          sound: opts.sound,
+          groupKey: notification.groupKey || undefined,
+          collapseKey: notification.groupKey || undefined,
+          badge: badgeCount,
+          data: {
+            notificationId: pushId,
+            type: 'chat',
+            deepLink: notification.deepLink || '',
+            groupKey: notification.groupKey || '',
+            actorId: actorId ? String(actorId) : '',
+            actorName: notification.actorName || '',
+            actorPhoto: notification.actorPhoto || '',
+            actorGender: notification.actorGender || '',
+            badge: String(badgeCount),
+            ...(notification.data || {}),
+          },
+        },
+      });
+      return;
+    }
+
     if (
       !(await pushAllowed(userId, notification.type, {
         actorId: notification.actorId,
@@ -230,19 +378,27 @@ async function queuePush(userId, notification, { badge } = {}) {
       return;
     }
 
-    const tokens = await deviceTokens.getActiveTokens(userId);
+    const [tokens, computedBadge, preview] = await Promise.all([
+      deviceTokens.getActiveTokens(userId),
+      typeof badge === 'number'
+        ? Promise.resolve(badge)
+        : unreadCountFor(userId),
+      applyPreviewPrivacy(
+        userId,
+        notification.type,
+        notification.title,
+        notification.body,
+      ),
+    ]);
+
     if (!tokens.length) return;
 
-    const opts = defaultsFor(notification.type);
-    const badgeCount =
-      typeof badge === 'number' ? badge : await unreadCountFor(userId);
+    const badgeCount = computedBadge || 0;
 
-    const preview = await applyPreviewPrivacy(
-      userId,
-      notification.type,
-      notification.title,
-      notification.body,
-    );
+    const pushId =
+      notification._id != null
+        ? String(notification._id)
+        : `chat:${notification.groupKey || ''}:${notification.data?.messageId || Date.now()}`;
 
     pushQueue.enqueue({
       userId: String(userId),
@@ -259,13 +415,14 @@ async function queuePush(userId, notification, { badge } = {}) {
         collapseKey: notification.groupKey || undefined,
         badge: badgeCount,
         data: {
-          notificationId: String(notification._id),
+          notificationId: pushId,
           type: notification.type,
           deepLink: notification.deepLink || '',
           groupKey: notification.groupKey || '',
           actorId: notification.actorId ? String(notification.actorId) : '',
           actorName: notification.actorName || '',
           actorPhoto: notification.actorPhoto || '',
+          actorGender: notification.actorGender || '',
           badge: String(badgeCount),
           ...(notification.data || {}),
         },
@@ -307,17 +464,25 @@ async function createNotification(io, opts = {}) {
   if (!userId || !type || !opts.title) return null;
 
   try {
-    // WhatsApp: never tray-push while the recipient has this chat open
+    // Caller may already decide push (socket/HTTP hot path) — trust boolean
     let push = opts.push !== false;
-    if (push && type === 'chat' && actorId && (await isViewingChat(userId, actorId))) {
+    if (
+      push &&
+      type === 'chat' &&
+      actorId &&
+      typeof opts.push !== 'boolean' &&
+      (await isViewingChat(userId, actorId))
+    ) {
       push = false;
     }
 
-    let actorName = '';
-    let actorPhoto = '';
-    let actorGender = '';
+    // Chat mute/archive is enforced in queuePush (one round-trip with prefs)
 
-    if (actorId) {
+    let actorName = String(opts.actorName || '');
+    let actorPhoto = String(opts.actorPhoto || '');
+    let actorGender = String(opts.actorGender || '');
+
+    if (actorId && !actorName) {
       try {
         const actor = await actorPayload(User, actorId);
         actorName = actor.fromName || '';
@@ -341,7 +506,8 @@ async function createNotification(io, opts = {}) {
     // Personal messages: FCM/tray only — never Notification Center / badge
     if (HIDE_FROM_CENTER.has(type)) {
       if (push) {
-        await queuePush(userId, {
+        // Fire-and-forget so callers (socket) don't await FCM pipeline
+        void queuePush(userId, {
           _id: null,
           type,
           title: title || 'New message',
@@ -387,10 +553,41 @@ async function createNotification(io, opts = {}) {
     }
 
     const payload = serialize(doc);
-    if (io) notifyUser(io, userId, 'notification:new', payload);
-    if (push) await queuePush(userId, doc);
 
-    return payload;
+    // Profile views: store full identity, but only deliver it to paid plans
+    let deliver = payload;
+    if (type === 'profile_view') {
+      try {
+        const { canSeeProfileViews } = require('./subscriptions');
+        const recipient = await User.findById(userId)
+          .select('subscriptionPlan subscriptionExpiresAt')
+          .lean();
+        if (!canSeeProfileViews(recipient)) {
+          deliver = redactProfileViewPayload(payload);
+        }
+      } catch {
+        deliver = redactProfileViewPayload(payload);
+      }
+    }
+
+    if (io) notifyUser(io, userId, 'notification:new', deliver);
+    if (push) {
+      // Push tray shows sharp images — never attach the DP when locked.
+      const pushDoc = {
+        ...(doc.toObject?.() || doc),
+        title: deliver.title,
+        body: deliver.body,
+        imageUrl: deliver.locked ? '' : deliver.imageUrl || '',
+        actorName: deliver.actorName || '',
+        actorPhoto: deliver.locked ? '' : deliver.actorPhoto || '',
+        actorId: deliver.actorId,
+        deepLink: deliver.deepLink,
+        data: deliver.data,
+      };
+      await queuePush(userId, pushDoc);
+    }
+
+    return deliver;
   } catch (err) {
     console.error('[Notifications] createNotification failed:', err.message);
     return null;
@@ -625,6 +822,7 @@ module.exports = {
   broadcastNotification,
   unreadCountFor,
   resolveDeepLink,
+  redactProfileViewPayload,
   TYPE_DEFAULTS,
   HIDE_FROM_CENTER,
 };

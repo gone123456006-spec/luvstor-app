@@ -3,15 +3,30 @@
  *
  * Redis mode (REDIS_URL set): shared across all API / socket nodes.
  * Memory mode: single-process Map (local / Expo tunnel).
+ *
+ * TTL is a crash-safety net only — clients refresh via chat:join / chat:heartbeat
+ * while the thread stays open (same idea as WhatsApp keeping a session alive).
  */
 const { getRedis, isReady } = require('./redis');
 
-const viewing = new Map(); // fallback
+const viewing = new Map(); // fallback: uid -> { otherIds: Set, expiresAt: number }
 const KEY_PREFIX = 'chatview:';
-const TTL_SEC = 60 * 60 * 6; // safety expiry if leave is missed
+/** Crash safety — refreshed by heartbeat while chat is open */
+const TTL_SEC = 30 * 60;
+const MEMORY_TTL_MS = TTL_SEC * 1000;
 
 function key(userId) {
   return `${KEY_PREFIX}${String(userId)}`;
+}
+
+function pruneMemory(uid) {
+  const entry = viewing.get(uid);
+  if (!entry) return null;
+  if (entry.expiresAt && Date.now() > entry.expiresAt) {
+    viewing.delete(uid);
+    return null;
+  }
+  return entry;
 }
 
 async function markViewing(userId, otherUserId) {
@@ -26,8 +41,33 @@ async function markViewing(userId, otherUserId) {
     return;
   }
 
-  if (!viewing.has(uid)) viewing.set(uid, new Set());
-  viewing.get(uid).add(other);
+  let entry = pruneMemory(uid);
+  if (!entry) {
+    entry = { otherIds: new Set(), expiresAt: Date.now() + MEMORY_TTL_MS };
+    viewing.set(uid, entry);
+  }
+  entry.otherIds.add(other);
+  entry.expiresAt = Date.now() + MEMORY_TTL_MS;
+}
+
+/** Refresh TTL if still viewing (heartbeat) — no-op if not in set */
+async function touchViewing(userId, otherUserId) {
+  const uid = String(userId);
+  const other = String(otherUserId);
+  if (!uid || !other) return false;
+
+  const redis = isReady() ? await getRedis() : null;
+  if (redis) {
+    const isMember = (await redis.sismember(key(uid), other)) === 1;
+    if (!isMember) return false;
+    await redis.expire(key(uid), TTL_SEC);
+    return true;
+  }
+
+  const entry = pruneMemory(uid);
+  if (!entry?.otherIds?.has(other)) return false;
+  entry.expiresAt = Date.now() + MEMORY_TTL_MS;
+  return true;
 }
 
 async function clearViewing(userId, otherUserId) {
@@ -43,11 +83,11 @@ async function clearViewing(userId, otherUserId) {
     return;
   }
 
-  const set = viewing.get(uid);
-  if (!set) return;
+  const entry = pruneMemory(uid);
+  if (!entry) return;
   if (otherUserId) {
-    set.delete(String(otherUserId));
-    if (set.size === 0) viewing.delete(uid);
+    entry.otherIds.delete(String(otherUserId));
+    if (entry.otherIds.size === 0) viewing.delete(uid);
   } else {
     viewing.delete(uid);
   }
@@ -62,7 +102,8 @@ async function isViewingChat(userId, otherUserId) {
     return (await redis.sismember(key(uid), other)) === 1;
   }
 
-  return !!viewing.get(uid)?.has(other);
+  const entry = pruneMemory(uid);
+  return !!entry?.otherIds?.has(other);
 }
 
 async function getViewingSet(userId) {
@@ -74,12 +115,15 @@ async function getViewingSet(userId) {
     return new Set(members);
   }
 
-  return viewing.get(uid) || new Set();
+  const entry = pruneMemory(uid);
+  return entry?.otherIds || new Set();
 }
 
 module.exports = {
   markViewing,
+  touchViewing,
   clearViewing,
   isViewingChat,
   getViewingSet,
+  TTL_SEC,
 };

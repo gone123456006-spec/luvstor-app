@@ -129,15 +129,21 @@ export function configureForegroundHandler(
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
       const data = (notification.request.content.data || {}) as Record<string, any>;
-      const duplicate =
-        data.type === 'chat' && isChatVisible(String(data.actorId || data.userId || ''));
+      const isChat = data.type === 'chat';
+      const onThatChat =
+        isChat &&
+        isChatVisible(String(data.actorId || data.userId || ''));
+
+      // Foreground: in-app toast handles chat; suppress system banner to avoid doubles.
+      // Still suppress entirely when that conversation is already open.
+      const showBanner = isChat ? false : !onThatChat;
 
       return {
-        shouldShowBanner: !duplicate,
-        shouldShowList: true,
-        shouldPlaySound: !duplicate,
+        shouldShowBanner: showBanner,
+        shouldShowList: !onThatChat,
+        shouldPlaySound: !onThatChat && !isChat,
         shouldSetBadge: true,
-        shouldShowAlert: !duplicate,
+        shouldShowAlert: showBanner,
       } as any;
     },
   });
@@ -362,7 +368,8 @@ export function routeForData(data: Record<string, any> = {}) {
       return userId ? `/messages/${userId}` : '/(tabs)/chat';
     case 'friend_request':
     case 'like':
-      return '/(tabs)/chat';
+    case 'profile_view':
+      return userId ? '/(tabs)' : '/notifications';
     case 'token':
     case 'token_purchase':
     case 'token_low':

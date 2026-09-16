@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -17,10 +18,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAppAlert } from "../components/AppAlert";
 import { ListRowSkeleton } from "../components/ScreenSkeleton";
+import UserProfileModal from "../components/UserProfileModal";
 import WhatsAppAvatar, { getDisplayName } from "../components/WhatsAppAvatar";
 import { useSocket } from "../contexts/SocketContext";
 import { API_BASE } from "../utils/api";
 import { getAuthToken } from "../utils/auth";
+import { sendLike } from "../utils/friends";
 import {
     AppNotification,
     clearAllNotifications,
@@ -30,21 +33,26 @@ import {
     markNotificationsUnread,
 } from "../utils/notifications";
 import { routeForData } from "../utils/push";
+import { fetchSubscriptionStatus } from "../utils/subscriptions";
 
 const PAGE_SIZE = 25;
 
 const C = {
-  purple: "#8E2DE2",
-  text: "#111B21",
+  purple: "#370372",
+  purpleSoft: "#EFE8F8",
+  purpleMid: "#5B2A9E",
+  text: "#1C1B1F",
   muted: "#667781",
   preview: "#667781",
   border: "#E9EDEF",
-  searchBg: "#F5F5F5",
-  pill: "#F5F5F5",
-  pillActive: "#F3E5F5",
+  searchBg: "#E4E6EB",
+  pill: "#E4E6EB",
+  pillActive: "#111111",
+  bg: "#F5F5F7",
+  gold: "#F5C518",
 };
 
-type FilterKey = "All" | "Unread";
+type FilterKey = "All" | "Unread" | "Profile View";
 
 type ListRow =
   | { kind: "section"; id: string; title: string }
@@ -83,14 +91,21 @@ function typeMeta(type: AppNotification["type"]) {
       return {
         icon: "people" as const,
         color: C.purple,
-        bg: "#F3E8FF",
+        bg: C.purpleSoft,
         label: "Friends",
+      };
+    case "profile_view":
+      return {
+        icon: "eye" as const,
+        color: C.purple,
+        bg: C.purpleSoft,
+        label: "Profile View",
       };
     case "chat":
       return {
         icon: "chatbubble" as const,
         color: C.purple,
-        bg: "#F3E8FF",
+        bg: C.purpleSoft,
         label: "Message",
       };
     case "call":
@@ -119,14 +134,14 @@ function typeMeta(type: AppNotification["type"]) {
       return {
         icon: "sparkles" as const,
         color: C.purple,
-        bg: "#F3E8FF",
+        bg: C.purpleSoft,
         label: "Spin",
       };
     case "subscription":
       return {
         icon: "ribbon" as const,
         color: C.purple,
-        bg: "#F3E8FF",
+        bg: C.purpleSoft,
         label: "Plan",
       };
     case "security":
@@ -147,14 +162,14 @@ function typeMeta(type: AppNotification["type"]) {
       return {
         icon: "compass" as const,
         color: C.purple,
-        bg: "#F3E8FF",
+        bg: C.purpleSoft,
         label: "For you",
       };
     default:
       return {
         icon: "notifications" as const,
         color: C.purple,
-        bg: "#F3E8FF",
+        bg: C.purpleSoft,
         label: "Update",
       };
   }
@@ -167,6 +182,7 @@ const PERSON_TYPES = new Set([
   "friends",
   "like",
   "match",
+  "profile_view",
 ]);
 
 function startOfDay(d: Date) {
@@ -200,19 +216,39 @@ function formatWhen(iso: string) {
   return d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
-function displayTitle(n: AppNotification) {
+function displayTitle(
+  n: AppNotification,
+  profileViewsUnlocked = true,
+) {
+  if (n.type === "profile_view") {
+    if (n.locked || !profileViewsUnlocked) {
+      return "Someone";
+    }
+    if (n.actorName) {
+      return getDisplayName(n.actorName);
+    }
+    return "Someone";
+  }
   if (PERSON_TYPES.has(n.type) && n.actorName) {
     return getDisplayName(n.actorName);
   }
   return n.title;
 }
 
-function displayBody(n: AppNotification) {
+function displayBody(
+  n: AppNotification,
+  profileViewsUnlocked = true,
+) {
   if (n.type === "friend_request") return n.body || "Liked you";
   if (n.type === "friends") return n.body || "You're now friends";
   if (n.type === "chat") return n.body || "New message";
   if (n.type === "match") return n.body || "It's a match!";
   if (n.type === "call") return n.body || "Incoming call";
+  if (n.type === "profile_view") {
+    return n.locked || !profileViewsUnlocked
+      ? "Viewed your profile · Subscribe to unlock"
+      : "Viewed your profile";
+  }
   return n.body || n.title;
 }
 
@@ -230,6 +266,19 @@ export default function NotificationsScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 56, right: 12 });
   const [selected, setSelected] = useState<AppNotification | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [likedActors, setLikedActors] = useState<Record<string, boolean>>({});
+  const [profileViewsUnlocked, setProfileViewsUnlocked] = useState(false);
+  const [viewerModalVisible, setViewerModalVisible] = useState(false);
+  const [viewerProfile, setViewerProfile] = useState<{
+    id: string;
+    name: string;
+    age: number;
+    bio: string;
+    photo: string;
+    gender: string;
+    interests: string[];
+  } | null>(null);
 
   const cursor = useRef<string | null>(null);
   const hasMore = useRef(true);
@@ -285,12 +334,51 @@ export default function NotificationsScreen() {
         const page = await fetchNotifications(token, {
           limit: PAGE_SIZE,
           filter: filter === "Unread" ? "unread" : "all",
+          type: filter === "Profile View" ? "profile_view" : undefined,
         });
 
-        setItems(page.notifications);
+        const unlockedFlag = !!page.profileViewsUnlocked;
+        setProfileViewsUnlocked(unlockedFlag);
+        setItems(
+          (page.notifications || []).map((n) =>
+            n.type === "profile_view" && !unlockedFlag
+              ? { ...n, locked: true }
+              : n,
+          ),
+        );
         cursor.current = page.nextCursor;
         hasMore.current = page.hasMore;
         await refreshNotifUnread();
+
+        // Double-check subscription in case list payload is stale
+        try {
+          const sub = await fetchSubscriptionStatus(token);
+          const unlocked = !!(
+            sub?.profileViews ||
+            (sub?.isActive &&
+              ["gold", "platinum", "black"].includes(String(sub?.plan || "")))
+          );
+          setProfileViewsUnlocked(unlocked);
+          if (unlocked && !unlockedFlag) {
+            // Just subscribed — reload to reveal viewer identities
+            const fresh = await fetchNotifications(token, {
+              limit: PAGE_SIZE,
+              filter: filter === "Unread" ? "unread" : "all",
+              type: filter === "Profile View" ? "profile_view" : undefined,
+            });
+            setItems(fresh.notifications || []);
+            cursor.current = fresh.nextCursor;
+            hasMore.current = fresh.hasMore;
+          } else if (!unlocked) {
+            setItems((prev) =>
+              prev.map((n) =>
+                n.type === "profile_view" ? { ...n, locked: true } : n,
+              ),
+            );
+          }
+        } catch {
+          /* keep list flag */
+        }
       } catch {
         /* keep whatever is already rendered */
       } finally {
@@ -315,12 +403,23 @@ export default function NotificationsScreen() {
         limit: PAGE_SIZE,
         cursor: cursor.current,
         filter: filter === "Unread" ? "unread" : "all",
+        type: filter === "Profile View" ? "profile_view" : undefined,
       });
 
       setItems((prev) => {
         const seen = new Set(prev.map((n) => n._id));
-        return [...prev, ...page.notifications.filter((n) => !seen.has(n._id))];
+        const incoming = page.notifications
+          .filter((n) => !seen.has(n._id))
+          .map((n) =>
+            n.type === "profile_view" && !profileViewsUnlocked
+              ? { ...n, locked: true }
+              : n,
+          );
+        return [...prev, ...incoming];
       });
+      if (typeof page.profileViewsUnlocked === "boolean") {
+        setProfileViewsUnlocked(page.profileViewsUnlocked);
+      }
       cursor.current = page.nextCursor;
       hasMore.current = page.hasMore;
     } catch {
@@ -329,7 +428,7 @@ export default function NotificationsScreen() {
       loadingRef.current = false;
       setLoadingMore(false);
     }
-  }, [filter]);
+  }, [filter, profileViewsUnlocked]);
 
   useFocusEffect(
     useCallback(() => {
@@ -340,16 +439,20 @@ export default function NotificationsScreen() {
 
   // Filtering by read state happens server-side; hide personal chats + search
   const filtered = useMemo(() => {
-    const noChat = items.filter((n) => n.type !== "chat");
+    // Profile View is its own tab — never mix into All / Unread
+    const scoped =
+      filter === "Profile View"
+        ? items.filter((n) => n.type === "profile_view")
+        : items.filter((n) => n.type !== "chat" && n.type !== "profile_view");
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return noChat;
-    return noChat.filter(
+    if (!q) return scoped;
+    return scoped.filter(
       (n) =>
         n.title.toLowerCase().includes(q) ||
         (n.body || "").toLowerCase().includes(q) ||
         (n.actorName || "").toLowerCase().includes(q),
     );
-  }, [items, searchQuery]);
+  }, [items, searchQuery, filter]);
 
   const rows: ListRow[] = useMemo(() => {
     const out: ListRow[] = [];
@@ -366,6 +469,12 @@ export default function NotificationsScreen() {
   }, [filtered]);
 
   const openNotification = async (n: AppNotification) => {
+    // Locked profile views → subscription upsell
+    if (n.type === "profile_view" && (n.locked || !profileViewsUnlocked)) {
+      router.push("/subscription" as any);
+      return;
+    }
+
     try {
       const token = await getAuthToken();
       if (token && !n.read) {
@@ -400,7 +509,81 @@ export default function NotificationsScreen() {
       });
       return;
     }
+
+    // Profile views → open viewer profile (not a message thread)
+    if (n.type === "profile_view" && n.actorId) {
+      setViewerProfile({
+        id: String(n.actorId),
+        name: n.actorName || "User",
+        age: 0,
+        bio: "",
+        photo: resolvePhoto(n.actorPhoto) || "",
+        gender: n.actorGender || "",
+        interests: [],
+      });
+      setViewerModalVisible(true);
+      return;
+    }
+
     router.push(route as any);
+  };
+
+  const markProfileViewRead = async (n: AppNotification) => {
+    if (n.read) return;
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      await markNotificationsRead(token, { ids: [n._id] });
+      setItems((prev) =>
+        prev.map((x) => (x._id === n._id ? { ...x, read: true } : x)),
+      );
+      refreshNotifUnread();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onProfileViewLike = async (n: AppNotification) => {
+    if (!n.actorId || actionBusyId) return;
+    const actorKey = String(n.actorId);
+    if (likedActors[actorKey]) return;
+
+    setActionBusyId(n._id);
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      await sendLike(token, actorKey);
+      setLikedActors((prev) => ({ ...prev, [actorKey]: true }));
+      await markProfileViewRead(n);
+      showAlert({
+        title: "Liked",
+        message: `You liked ${n.actorName || "them"}.`,
+        icon: "heart",
+      });
+    } catch (e: any) {
+      showAlert({
+        title: "Couldn't like",
+        message: e?.message || "Please try again.",
+        icon: "alert-circle",
+      });
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const onProfileViewChat = async (n: AppNotification) => {
+    if (!n.actorId) return;
+    await markProfileViewRead(n);
+    router.push({
+      pathname: "/messages/[id]",
+      params: {
+        id: String(n.actorId),
+        name: n.actorName || "User",
+        photo: resolvePhoto(n.actorPhoto) || "",
+        gender: n.actorGender || "",
+        isOnline: "false",
+      },
+    });
   };
 
   const markAll = async () => {
@@ -495,7 +678,12 @@ export default function NotificationsScreen() {
 
     const item = row.item;
     const meta = typeMeta(item.type);
-    const isPerson = PERSON_TYPES.has(item.type) && !!item.actorId;
+    const isLockedProfileView =
+      item.type === "profile_view" &&
+      (!!item.locked || !profileViewsUnlocked);
+    const isPerson =
+      PERSON_TYPES.has(item.type) &&
+      (!!item.actorId || isLockedProfileView);
     const unread = !item.read;
 
     return (
@@ -508,9 +696,28 @@ export default function NotificationsScreen() {
       >
         <View style={styles.avatarWrap}>
           <View style={styles.avatarClip}>
-            {isPerson ? (
+            {isLockedProfileView ? (
+              <View style={styles.lockedAvatarWrap}>
+                {resolvePhoto(item.actorPhoto || item.imageUrl) ? (
+                  <Image
+                    source={{
+                      uri: resolvePhoto(item.actorPhoto || item.imageUrl),
+                    }}
+                    style={styles.lockedAvatarImage}
+                    contentFit="cover"
+                    blurRadius={32}
+                    recyclingKey={`locked-pv-${item._id}`}
+                  />
+                ) : (
+                  <View style={styles.lockedAvatarPlaceholder}>
+                    <Ionicons name="person" size={28} color="#B0B8BE" />
+                  </View>
+                )}
+                <View style={styles.lockedAvatarFrost} />
+              </View>
+            ) : isPerson ? (
               <WhatsAppAvatar
-                photo={resolvePhoto(item.actorPhoto)}
+                photo={resolvePhoto(item.actorPhoto || item.imageUrl)}
                 name={item.actorName || item.title || "User"}
                 size={52}
               />
@@ -520,9 +727,14 @@ export default function NotificationsScreen() {
               </View>
             )}
           </View>
-          {isPerson && (
+          {isPerson && item.type !== "profile_view" && (
             <View style={[styles.typeBadge, { backgroundColor: meta.color }]}>
               <Ionicons name={meta.icon} size={11} color="#fff" />
+            </View>
+          )}
+          {item.type === "profile_view" && (
+            <View style={[styles.typeBadge, { backgroundColor: meta.color }]}>
+              <Ionicons name="eye" size={11} color="#fff" />
             </View>
           )}
         </View>
@@ -530,10 +742,17 @@ export default function NotificationsScreen() {
         <View style={styles.chatInfo}>
           <View style={styles.chatRow}>
             <View style={styles.nameRow}>
-              <Text style={[styles.chatName, unread && styles.chatNameUnread]}>
-                {displayTitle(item)}
+              <Text
+                style={[
+                  styles.chatName,
+                  unread && styles.chatNameUnread,
+                  isLockedProfileView && styles.lockedText,
+                ]}
+                numberOfLines={1}
+              >
+                {displayTitle(item, profileViewsUnlocked)}
               </Text>
-              {!isPerson && (
+              {!isPerson && item.type !== "profile_view" && (
                 <View style={styles.typeTag}>
                   <Text style={styles.typeTagText}>{meta.label}</Text>
                 </View>
@@ -546,20 +765,116 @@ export default function NotificationsScreen() {
 
           <View style={styles.messageRow}>
             <Text
-              style={[styles.lastMessage, unread && styles.lastMessageUnread]}
+              style={[
+                styles.lastMessage,
+                unread && styles.lastMessageUnread,
+                isLockedProfileView && styles.lockedText,
+              ]}
+              numberOfLines={1}
             >
-              {displayBody(item)}
+              {displayBody(item, profileViewsUnlocked)}
             </Text>
-            {unread ? (
+            {unread && item.type !== "profile_view" ? (
               <View style={styles.unreadBadge}>
                 <Text style={styles.unreadBadgeText}>1</Text>
               </View>
             ) : null}
           </View>
+
+          {item.type === "profile_view" &&
+          item.actorId &&
+          !isLockedProfileView ? (
+            <View style={styles.quickActions}>
+              <TouchableOpacity
+                style={[
+                  styles.quickBtn,
+                  styles.quickBtnLike,
+                  (likedActors[String(item.actorId)] ||
+                    actionBusyId === item._id) &&
+                    styles.quickBtnDisabled,
+                ]}
+                activeOpacity={0.75}
+                disabled={
+                  !!likedActors[String(item.actorId)] ||
+                  actionBusyId === item._id
+                }
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  void onProfileViewLike(item);
+                }}
+              >
+                {actionBusyId === item._id ? (
+                  <ActivityIndicator size="small" color="#FF4B6E" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name={
+                        likedActors[String(item.actorId)]
+                          ? "heart"
+                          : "heart-outline"
+                      }
+                      size={15}
+                      color="#FF4B6E"
+                    />
+                    <Text style={styles.quickBtnLikeText}>
+                      {likedActors[String(item.actorId)] ? "Liked" : "Like"}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.quickBtn, styles.quickBtnChat]}
+                activeOpacity={0.75}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  void onProfileViewChat(item);
+                }}
+              >
+                <Ionicons
+                  name="chatbubble-outline"
+                  size={15}
+                  color={C.purple}
+                />
+                <Text style={styles.quickBtnChatText}>Chat</Text>
+              </TouchableOpacity>
+
+              {unread ? <View style={styles.unreadDot} /> : null}
+            </View>
+          ) : null}
         </View>
       </TouchableOpacity>
     );
   };
+
+  const goSubscribe = useCallback(() => {
+    router.push("/subscription" as any);
+  }, [router]);
+
+  const unlockBanner = (
+    <TouchableOpacity
+      style={styles.unlockBanner}
+      activeOpacity={0.92}
+      onPress={goSubscribe}
+      accessibilityRole="button"
+      accessibilityLabel="Subscribe to unlock profile views"
+    >
+      <View style={styles.unlockBannerTextWrap}>
+        <Text style={styles.unlockBannerText} numberOfLines={2}>
+          Unlock your profile views{"\n"}and Crush today!
+        </Text>
+      </View>
+      <View style={styles.unlockSubscribePill}>
+        <Text style={styles.unlockSubscribeText}>Subscribe</Text>
+        <Ionicons name="chevron-forward" size={16} color={C.purple} />
+      </View>
+    </TouchableOpacity>
+  );
+
+  const unlockFooter =
+    !profileViewsUnlocked && filter === "Profile View" ? (
+      <View style={styles.unlockBannerWrap}>{unlockBanner}</View>
+    ) : null;
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -575,7 +890,7 @@ export default function NotificationsScreen() {
             accessibilityRole="button"
             accessibilityLabel="Go back"
           >
-            <Ionicons name="arrow-back" size={24} color="#111B21" />
+            <Ionicons name="arrow-back" size={24} color={C.text} />
           </TouchableOpacity>
 
           <Text style={styles.headerTitle} numberOfLines={1}>
@@ -592,7 +907,7 @@ export default function NotificationsScreen() {
               accessibilityRole="button"
               accessibilityLabel="More options"
             >
-              <Ionicons name="ellipsis-horizontal" size={22} color="#262626" />
+              <Ionicons name="ellipsis-vertical" size={22} color={C.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -603,13 +918,13 @@ export default function NotificationsScreen() {
         <Ionicons
           name="search"
           size={18}
-          color="#888"
+          color={C.muted}
           style={styles.searchIcon}
         />
         <TextInput
           style={styles.searchInput}
           placeholder="Search"
-          placeholderTextColor="#888"
+          placeholderTextColor={C.muted}
           value={searchQuery}
           onChangeText={setSearchQuery}
           returnKeyType="search"
@@ -617,24 +932,25 @@ export default function NotificationsScreen() {
         />
         {!!searchQuery && (
           <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
-            <Ionicons name="close-circle" size={18} color="#BBB" />
+            <Ionicons name="close-circle" size={18} color={C.muted} />
           </TouchableOpacity>
         )}
       </View>
 
       {/* Filters */}
       <View style={styles.filtersRow}>
-        {(["All", "Unread"] as FilterKey[]).map((key) => {
+        {(["All", "Unread", "Profile View"] as FilterKey[]).map((key) => {
           const active = filter === key;
           return (
             <TouchableOpacity
               key={key}
               style={[styles.filterPill, active && styles.filterPillActive]}
               onPress={() => setFilter(key)}
-              activeOpacity={0.7}
+              activeOpacity={1}
             >
               <Text
                 style={[styles.filterText, active && styles.filterTextActive]}
+                numberOfLines={1}
               >
                 {key}
               </Text>
@@ -645,7 +961,12 @@ export default function NotificationsScreen() {
                     active && styles.filterCountActive,
                   ]}
                 >
-                  <Text style={styles.filterCountText}>
+                  <Text
+                    style={[
+                      styles.filterCountText,
+                      active && styles.filterCountTextActive,
+                    ]}
+                  >
                     {notifUnreadCount > 99 ? "99+" : notifUnreadCount}
                   </Text>
                 </View>
@@ -684,20 +1005,41 @@ export default function NotificationsScreen() {
           maxToRenderPerBatch={12}
           windowSize={9}
           ListFooterComponent={
-            loadingMore ? (
-              <View style={styles.footerLoader}>
-                <ActivityIndicator size="small" color={C.purple} />
-              </View>
-            ) : null
+            <>
+              {loadingMore ? (
+                <View style={styles.footerLoader}>
+                  <ActivityIndicator size="small" color={C.purple} />
+                </View>
+              ) : null}
+              {unlockFooter}
+            </>
           }
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Ionicons name="notifications-outline" size={56} color="#DDD" />
-              <Text style={styles.emptyTitle}>
-                {filter === "Unread"
-                  ? "No unread notifications"
-                  : "No notifications yet"}
-              </Text>
+              {filter === "Profile View" && !profileViewsUnlocked ? (
+                <>
+                  <Ionicons name="eye-off-outline" size={56} color={C.muted} />
+                  <Text style={styles.emptyTitle}>Profile views are locked</Text>
+                  <Text style={styles.emptySub}>
+                    See who checked you out with Gold, Platinum, or Black.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons
+                    name="notifications-outline"
+                    size={56}
+                    color={C.muted}
+                  />
+                  <Text style={styles.emptyTitle}>
+                    {filter === "Unread"
+                      ? "No unread notifications"
+                      : filter === "Profile View"
+                        ? "No profile views yet"
+                        : "No notifications yet"}
+                  </Text>
+                </>
+              )}
             </View>
           }
         />
@@ -789,17 +1131,64 @@ export default function NotificationsScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      <UserProfileModal
+        visible={viewerModalVisible}
+        user={viewerProfile}
+        onClose={() => {
+          setViewerModalVisible(false);
+          setViewerProfile(null);
+        }}
+        onMessage={() => {
+          if (!viewerProfile) return;
+          setViewerModalVisible(false);
+          router.push({
+            pathname: "/messages/[id]",
+            params: {
+              id: viewerProfile.id,
+              name: viewerProfile.name,
+              photo: viewerProfile.photo || "",
+              gender: viewerProfile.gender || "",
+              isOnline: "false",
+            },
+          });
+        }}
+        onLike={() => {
+          if (!viewerProfile || actionBusyId) return;
+          void (async () => {
+            try {
+              const token = await getAuthToken();
+              if (!token) return;
+              await sendLike(token, viewerProfile.id);
+              setLikedActors((prev) => ({
+                ...prev,
+                [viewerProfile.id]: true,
+              }));
+              setViewerProfile((prev) =>
+                prev ? { ...prev, iLiked: true } as any : prev,
+              );
+            } catch (e: any) {
+              showAlert({
+                title: "Couldn't like",
+                message: e?.message || "Please try again.",
+                icon: "alert-circle",
+              });
+            }
+          })();
+        }}
+        likingInProgress={!!actionBusyId}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1, backgroundColor: C.bg },
   header: {
     paddingHorizontal: 4,
     paddingTop: 2,
     paddingBottom: 4,
-    backgroundColor: "#fff",
+    backgroundColor: C.bg,
     zIndex: 20,
   },
   headerTop: {
@@ -818,7 +1207,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 22,
     fontWeight: "700",
-    color: "#111B21",
+    color: C.text,
     letterSpacing: -0.3,
     marginLeft: 2,
     marginRight: 8,
@@ -837,17 +1226,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: C.searchBg,
-    marginHorizontal: 12,
-    paddingHorizontal: 12,
-    height: 40,
-    borderRadius: 10,
+    marginHorizontal: 16,
+    marginTop: 4,
     marginBottom: 10,
+    paddingHorizontal: 14,
+    height: 40,
+    borderRadius: 20,
   },
-  searchIcon: { marginRight: 8 },
+  searchIcon: { marginRight: 10 },
   searchInput: {
     flex: 1,
-    fontSize: 15,
-    color: "#333",
+    fontSize: 16,
+    color: C.text,
     paddingVertical: 0,
   },
   filtersRow: {
@@ -872,33 +1262,36 @@ const styles = StyleSheet.create({
   filterText: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#666",
+    color: C.muted,
   },
   filterTextActive: {
-    color: C.purple,
+    color: "#FFFFFF",
   },
   filterCount: {
     minWidth: 16,
     height: 16,
     borderRadius: 8,
     paddingHorizontal: 4,
-    backgroundColor: "#111",
+    backgroundColor: C.purple,
     alignItems: "center",
     justifyContent: "center",
   },
   filterCountActive: {
-    backgroundColor: "#111",
+    backgroundColor: "#FFFFFF",
   },
   filterCountText: {
     fontSize: 10,
     fontWeight: "700",
     color: "#fff",
   },
+  filterCountTextActive: {
+    color: "#111111",
+  },
   sectionHeader: {
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 6,
-    backgroundColor: "#fff",
+    backgroundColor: C.bg,
   },
   sectionTitle: {
     fontSize: 14,
@@ -912,7 +1305,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: "#fff",
+    backgroundColor: C.bg,
+    overflow: "hidden",
   },
   avatarWrap: {
     width: 52,
@@ -925,6 +1319,28 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     overflow: "hidden",
+  },
+  lockedAvatarWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    overflow: "hidden",
+    backgroundColor: "#DFE5E7",
+  },
+  lockedAvatarImage: {
+    width: 52,
+    height: 52,
+  },
+  lockedAvatarPlaceholder: {
+    width: 52,
+    height: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#DFE5E7",
+  },
+  lockedAvatarFrost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(255,255,255,0.32)",
   },
   iconCircle: {
     width: 52,
@@ -943,7 +1359,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
-    borderColor: "#fff",
+    borderColor: C.bg,
     zIndex: 3,
     elevation: 3,
   },
@@ -988,7 +1404,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 8,
-    backgroundColor: "#F3E5F5",
+    backgroundColor: C.purpleSoft,
   },
   typeTagText: {
     fontSize: 10,
@@ -1018,12 +1434,107 @@ const styles = StyleSheet.create({
     color: "#3B4A54",
     fontWeight: "600",
   },
+  quickActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 10,
+    gap: 8,
+  },
+  quickBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 18,
+  },
+  quickBtnLike: {
+    backgroundColor: "#FFE8EE",
+  },
+  quickBtnChat: {
+    backgroundColor: C.purpleSoft,
+  },
+  quickBtnDisabled: {
+    opacity: 0.65,
+  },
+  quickBtnLikeText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#FF4B6E",
+  },
+  quickBtnChatText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: C.purple,
+  },
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.purple,
+    marginLeft: 4,
+  },
+  lockedText: {
+    color: "#9AA3A9",
+  },
+  unlockBannerWrap: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 28,
+  },
+  unlockBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: C.purple,
+    borderRadius: 28,
+    paddingVertical: 14,
+    paddingLeft: 18,
+    paddingRight: 10,
+    minHeight: 72,
+    gap: 10,
+  },
+  unlockBannerTextWrap: {
+    flex: 1,
+    paddingRight: 4,
+  },
+  unlockBannerText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 20,
+    letterSpacing: -0.2,
+  },
+  unlockSubscribePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingVertical: 12,
+    paddingLeft: 16,
+    paddingRight: 12,
+    gap: 2,
+  },
+  unlockSubscribeText: {
+    color: C.purple,
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: -0.1,
+  },
+  emptySub: {
+    marginTop: 8,
+    fontSize: 14,
+    color: C.muted,
+    textAlign: "center",
+    paddingHorizontal: 24,
+    lineHeight: 20,
+  },
   unreadBadge: {
     minWidth: 20,
     height: 20,
     borderRadius: 10,
     paddingHorizontal: 5,
-    backgroundColor: "#111",
+    backgroundColor: C.purple,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 2,
@@ -1153,7 +1664,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 17,
     fontWeight: "600",
-    color: "#666",
+    color: C.muted,
     marginTop: 8,
   },
 });
