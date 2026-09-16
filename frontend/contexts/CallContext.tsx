@@ -12,7 +12,7 @@ import {
   AppStateStatus,
   Vibration,
 } from 'react-native';
-import { Audio } from 'expo-av';
+import { Audio, isAudioAvailable } from '../utils/expoAv';
 import { useAuth } from './AuthContext';
 import { useSocket } from './SocketContext';
 import { apiRequest } from '../utils/api';
@@ -242,6 +242,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   );
 
   const configureAudio = useCallback(async (speakerOn: boolean) => {
+    if (!isAudioAvailable() || !Audio) {
+      console.warn('[Call] audio mode skipped — expo-av native module missing');
+      return;
+    }
     try {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
