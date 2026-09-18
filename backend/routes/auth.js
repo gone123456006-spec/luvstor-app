@@ -78,6 +78,13 @@ async function bindDeviceAndRespond(res, user, deviceId, io = null) {
   await ensureUserPublicId(user);
   await user.save();
 
+  try {
+    const { setCachedActiveDevice } = require('../utils/deviceSessionCache');
+    setCachedActiveDevice(user._id, deviceId);
+  } catch {
+    /* cache is best-effort */
+  }
+
   if (isNewDevice) {
     // Alert first — the old device still has a live token at this point,
     // which is exactly who needs to hear about an unexpected sign-in
@@ -537,6 +544,13 @@ router.post('/logout', auth, async (req, res) => {
     user.isOnline = false;
     user.lastSeen = new Date();
     await user.save();
+
+    try {
+      const { invalidateActiveDevice } = require('../utils/deviceSessionCache');
+      invalidateActiveDevice(req.userId);
+    } catch {
+      /* cache is best-effort */
+    }
 
     // Stop pushing to a device that is no longer signed in
     try {

@@ -118,7 +118,7 @@ module.exports = function initSocket(io) {
     }
   });
 
-  io.on('connection', async (socket) => {
+  io.on('connection', (socket) => {
     const uid = socket.userId;
     console.log(`✅ Socket connected: ${uid}`);
 
@@ -130,63 +130,71 @@ module.exports = function initSocket(io) {
     onlineSockets.set(uid, existing);
     setPrimarySocket(uid);
 
-    const presenceState = await presence.socketConnected(uid);
-    const becameOnline = redisReady()
-      ? presenceState.becameOnline
-      : existing.size === 1;
+    /**
+     * Presence broadcast + delivery flush. Deliberately NOT awaited before the
+     * socket.on(...) registrations below: Socket.IO drops any event that arrives
+     * while no listener is attached, so awaiting Mongo here silently swallowed
+     * call:invite / chat:send / chat:join emitted right after connect.
+     */
+    const bootstrapPresence = async () => {
+      const presenceState = await presence.socketConnected(uid);
+      const becameOnline = redisReady()
+        ? presenceState.becameOnline
+        : existing.size === 1;
 
-    if (becameOnline) {
-      await User.findByIdAndUpdate(uid, { isOnline: true, lastSeen: new Date() });
-      // Instant presence for Discover / Chat / open chats (all other sockets)
-      socket.broadcast.emit('user:online', { userId: uid, isOnline: true });
+      if (becameOnline) {
+        await User.findByIdAndUpdate(uid, { isOnline: true, lastSeen: new Date() });
+        // Instant presence for Discover / Chat / open chats (all other sockets)
+        socket.broadcast.emit('user:online', { userId: uid, isOnline: true });
 
-      // Flush pending deliveries → single tick becomes double gray for senders
-      try {
-        const pending = await Message.find({
-          receiverId: uid,
-          delivered: { $ne: true },
-          undelivered: { $ne: true },
-          isDeleted: { $ne: true },
-          deletedFor: { $nin: [uid] },
-        })
-          .select('_id senderId')
-          .lean();
+        // Flush pending deliveries → single tick becomes double gray for senders
+        try {
+          const pending = await Message.find({
+            receiverId: uid,
+            delivered: { $ne: true },
+            undelivered: { $ne: true },
+            isDeleted: { $ne: true },
+            deletedFor: { $nin: [uid] },
+          })
+            .select('_id senderId')
+            .lean();
 
-        if (pending.length) {
-          const now = new Date();
-          const ids = pending.map((m) => m._id);
-          await Message.updateMany(
-            { _id: { $in: ids } },
-            { $set: { delivered: true, deliveredAt: now } },
-          );
+          if (pending.length) {
+            const now = new Date();
+            const ids = pending.map((m) => m._id);
+            await Message.updateMany(
+              { _id: { $in: ids } },
+              { $set: { delivered: true, deliveredAt: now } },
+            );
 
-          const bySender = new Map();
-          for (const m of pending) {
-            const sid = String(m.senderId);
-            if (!bySender.has(sid)) bySender.set(sid, []);
-            bySender.get(sid).push(String(m._id));
+            const bySender = new Map();
+            for (const m of pending) {
+              const sid = String(m.senderId);
+              if (!bySender.has(sid)) bySender.set(sid, []);
+              bySender.get(sid).push(String(m._id));
+            }
+            for (const [senderId, messageIds] of bySender.entries()) {
+              notifyUser(io, senderId, 'chat:delivered', { by: uid, messageIds });
+            }
           }
-          for (const [senderId, messageIds] of bySender.entries()) {
-            notifyUser(io, senderId, 'chat:delivered', { by: uid, messageIds });
-          }
+        } catch (err) {
+          console.error('flush deliveries error:', err.message);
         }
-      } catch (err) {
-        console.error('flush deliveries error:', err.message);
       }
-    }
 
-    // Also notify active chat rooms (skip blocked pairs — both look offline)
-    const activeChatSet = await getViewingSet(uid);
-    for (const otherUserId of activeChatSet) {
-      try {
-        const block = await getBlockState(uid, otherUserId);
-        if (block.blocked) continue;
-        const room = [String(uid), String(otherUserId)].sort().join('_');
-        io.to(room).emit('user:online', { userId: uid, isOnline: true });
-      } catch {
-        /* ignore */
+      // Also notify active chat rooms (skip blocked pairs — both look offline)
+      const activeChatSet = await getViewingSet(uid);
+      for (const otherUserId of activeChatSet) {
+        try {
+          const block = await getBlockState(uid, otherUserId);
+          if (block.blocked) continue;
+          const room = [String(uid), String(otherUserId)].sort().join('_');
+          io.to(room).emit('user:online', { userId: uid, isOnline: true });
+        } catch {
+          /* ignore */
+        }
       }
-    }
+    };
 
     // ── Join a chat room ──────────────────────────────
     socket.on('chat:join', async ({ otherUserId }) => {
@@ -1289,6 +1297,11 @@ module.exports = function initSocket(io) {
 
       console.log(`❌ Socket disconnected: ${uid}`);
     });
+
+    // Every listener is attached now — safe to do the async presence work.
+    bootstrapPresence().catch((err) =>
+      console.error('socket bootstrap error:', err.message),
+    );
   });
 
   return io;

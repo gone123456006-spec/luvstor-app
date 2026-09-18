@@ -121,6 +121,8 @@
     },
     "plugins": [
       "expo-router",
+      "expo-asset",
+      "expo-dev-client",
       [
         "expo-build-properties",
         {

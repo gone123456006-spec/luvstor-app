@@ -184,15 +184,16 @@ export async function syncProfileToServer(
       const ext = photoUrl.split('.').pop()?.toLowerCase() || 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
       const dataUri = `data:${mimeType};base64,${base64}`;
-      const { API_BASE } = await import('./api');
-      const res = await fetch(`${API_BASE}/api/upload/image`, {
+      const { getApiBase } = await import('./api');
+      const res = await fetch(`${getApiBase()}/api/upload/image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ base64: dataUri }),
       });
       const json = await res.json();
       if (json.url) {
-        photoUrl = json.url.startsWith('/') ? `${API_BASE}${json.url}` : json.url;
+        // Persist the relative path — an absolute host URL breaks on other devices
+        photoUrl = json.url;
       }
     } catch (e) {
       console.warn('Could not upload profile photo, using local URI as fallback', e);

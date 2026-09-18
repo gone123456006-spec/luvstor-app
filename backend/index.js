@@ -91,6 +91,12 @@ initSocket(io);
 
 // ── Express middleware ─────────────────────────────────────────────────
 app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
+// Gzip JSON/list responses (chat, friends, nearby) for faster mobile transfer
+try {
+  app.use(require('compression')({ threshold: 1024 }));
+} catch {
+  /* optional dependency */
+}
 // Raw photo upload must be parsed before the JSON body parser
 app.use(
   '/api/upload/image-bin',

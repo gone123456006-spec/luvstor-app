@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { MAX_PROFILE_GALLERY } from "../constants/profile";
+import { resolveMediaUrl } from "../utils/media";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const GRID_COLS = 3;
@@ -211,10 +212,11 @@ export default function ProfileInstagramSection({
                   delayLongPress={350}
                 >
                   <Image
-                    source={{ uri }}
+                    source={{ uri: resolveMediaUrl(uri) || uri }}
                     style={styles.gridImage}
                     contentFit="cover"
                     cachePolicy="none"
+                    recyclingKey={uri}
                   />
                   {busy ? (
                     <View style={styles.gridBusy}>
@@ -233,9 +235,12 @@ export default function ProfileInstagramSection({
                   onPress={() => onPhotoPress(index)}
                 >
                   <Image
-                    source={{ uri }}
+                    source={{ uri: resolveMediaUrl(uri) || uri }}
                     style={styles.gridImage}
                     contentFit="cover"
+                    cachePolicy="memory-disk"
+                    // Prevents a recycled cell from keeping the previous photo
+                    recyclingKey={uri}
                   />
                 </TouchableOpacity>
               ) : null,

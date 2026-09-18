@@ -101,61 +101,198 @@ async function countUnreadForPair(userId, otherUserId) {
 }
 
 async function enrichConversationRow(reqUserId, c) {
+  const [row] = await enrichConversationsBatch(reqUserId, [c]);
+  return row;
+}
+
+/**
+ * Batch-enrich conversation rows: 2–3 DB queries total instead of ~7 per chat.
+ * Uses aggregation sentByMe/receivedByMe for canSendMedia when present.
+ */
+async function enrichConversationsBatch(reqUserId, conversations) {
+  if (!conversations?.length) return [];
+
   const User = require('../models/User');
-  const msg = c.lastMessage;
-  const otherId =
-    String(msg.senderId) === reqUserId ? msg.receiverId : msg.senderId;
-  const other = await User.findById(otherId)
-    .select('name bio photo gender isOnline lastSeen')
-    .lean();
+  const me = String(reqUserId);
 
-  const safeOther = await applyBlockPrivacy(reqUserId, other);
-
-  const friendsStatus = await areFriends(reqUserId, otherId);
-  const { userA, userB } = Friendship.getSortedPair(reqUserId, otherId);
-  const friendship = await Friendship.findOne({ userA, userB }).lean();
-
-  let category = 'stranger';
-  if (friendsStatus) {
-    category = 'friend';
-  } else if (
-    friendship &&
-    (friendship.status === 'mutual_match' ||
-      (friendship.status === 'pending_like' &&
-        String(friendship.initiatedBy) !== reqUserId))
-  ) {
-    category = 'request';
+  const otherIds = [];
+  const otherIdByIndex = [];
+  for (const c of conversations) {
+    const msg = c.lastMessage;
+    const otherId =
+      String(msg.senderId) === me ? String(msg.receiverId) : String(msg.senderId);
+    otherIds.push(otherId);
+    otherIdByIndex.push(otherId);
   }
 
-  const iLiked =
-    friendsStatus ||
-    friendship?.status === 'mutual_match' ||
-    (friendship?.status === 'pending_like' &&
-      String(friendship.initiatedBy) === reqUserId);
+  const uniqueOtherIds = [...new Set(otherIds)];
 
-  const block = await getBlockState(reqUserId, otherId);
-  const otherForClient = safeOther
-    ? {
-        ...safeOther,
-        isOnline: block.blocked ? false : !!safeOther.isOnline,
-        lastSeen: block.blocked ? null : safeOther.lastSeen,
-      }
-    : null;
+  const friendshipOr = uniqueOtherIds.map((oid) => {
+    const { userA, userB } = Friendship.getSortedPair(me, oid);
+    return { userA, userB };
+  });
 
+  const [users, friendships] = await Promise.all([
+    User.find({ _id: { $in: uniqueOtherIds } })
+      .select('name bio photo gender isOnline lastSeen')
+      .lean(),
+    friendshipOr.length
+      ? Friendship.find({ $or: friendshipOr }).lean()
+      : Promise.resolve([]),
+  ]);
+
+  const userMap = new Map(users.map((u) => [String(u._id), u]));
+  const friendshipMap = new Map();
+  for (const f of friendships) {
+    friendshipMap.set(`${String(f.userA)}_${String(f.userB)}`, f);
+  }
+
+  // Rooms missing sent/received counts (e.g. archived) need one bidirectional check
+  const roomsNeedingMedia = [];
+  for (let i = 0; i < conversations.length; i++) {
+    const c = conversations[i];
+    if (typeof c.sentByMe === 'number' && typeof c.receivedByMe === 'number') {
+      continue;
+    }
+    roomsNeedingMedia.push(roomId(me, otherIdByIndex[i]));
+  }
+
+  const bidirectionalRooms = new Set();
+  if (roomsNeedingMedia.length) {
+    const Message = require('../models/Message');
+    const base = {
+      roomId: { $in: roomsNeedingMedia },
+      isDeleted: { $ne: true },
+      type: { $in: ['text', 'image', 'audio'] },
+    };
+    const [sentByMe, sentByOther] = await Promise.all([
+      Message.distinct('roomId', { ...base, senderId: me }),
+      Message.distinct('roomId', {
+        ...base,
+        senderId: { $in: uniqueOtherIds },
+      }),
+    ]);
+    const otherSet = new Set(sentByOther.map(String));
+    for (const r of sentByMe) {
+      if (otherSet.has(String(r))) bidirectionalRooms.add(String(r));
+    }
+  }
+
+  return conversations.map((c, i) => {
+    const otherId = otherIdByIndex[i];
+    const other = userMap.get(otherId) || null;
+    const { userA, userB } = Friendship.getSortedPair(me, otherId);
+    const friendship = friendshipMap.get(`${String(userA)}_${String(userB)}`) || null;
+
+    const block = blockFromFriendship(me, otherId, friendship);
+    const safeOther = applyBlockPrivacySync(other, block);
+
+    const friendsStatus =
+      !!friendship &&
+      (friendship.status === 'friends' || friendship.status === 'mutual_match');
+
+    let category = 'stranger';
+    if (friendsStatus) {
+      category = 'friend';
+    } else if (
+      friendship &&
+      (friendship.status === 'mutual_match' ||
+        (friendship.status === 'pending_like' &&
+          String(friendship.initiatedBy) !== me))
+    ) {
+      category = 'request';
+    }
+
+    const iLiked =
+      friendsStatus ||
+      friendship?.status === 'mutual_match' ||
+      (friendship?.status === 'pending_like' &&
+        String(friendship.initiatedBy) === me);
+
+    const otherForClient = safeOther
+      ? {
+          ...safeOther,
+          isOnline: block.blocked ? false : !!safeOther.isOnline,
+          lastSeen: block.blocked ? null : safeOther.lastSeen,
+        }
+      : null;
+
+    let canSendMedia = false;
+    if (typeof c.sentByMe === 'number' && typeof c.receivedByMe === 'number') {
+      canSendMedia = c.sentByMe > 0 && c.receivedByMe > 0;
+    } else {
+      canSendMedia = bidirectionalRooms.has(roomId(me, otherId));
+    }
+
+    return {
+      ...c,
+      otherUser: otherForClient,
+      category: block.blocked ? 'stranger' : category,
+      friendshipStatus: friendship?.status || 'none',
+      areFriends: friendsStatus && !block.blocked,
+      iLiked: !!iLiked && !block.blocked,
+      iBlocked: block.iBlocked,
+      theyBlocked: block.theyBlocked,
+      privacyHidden: !!safeOther?.privacyHidden,
+      blockedAt: block.blockedAt,
+      canCall: friendsStatus && !block.blocked,
+      canSendMedia: !block.blocked && canSendMedia,
+    };
+  });
+}
+
+function blockFromFriendship(viewerId, otherId, friendship) {
+  const empty = {
+    blocked: false,
+    iBlocked: false,
+    theyBlocked: false,
+    blockedAt: null,
+    blockedBy: null,
+  };
+  if (!friendship || friendship.status !== 'blocked') return empty;
+  const blockedBy = friendship.blockedBy ? String(friendship.blockedBy) : null;
   return {
-    ...c,
-    otherUser: otherForClient,
-    category: block.blocked ? 'stranger' : category,
-    friendshipStatus: friendship?.status || 'none',
-    areFriends: friendsStatus && !block.blocked,
-    iLiked: !!iLiked && !block.blocked,
-    iBlocked: block.iBlocked,
-    theyBlocked: block.theyBlocked,
-    privacyHidden: !!safeOther?.privacyHidden,
+    blocked: true,
+    iBlocked: blockedBy === String(viewerId),
+    theyBlocked: blockedBy === String(otherId),
+    blockedAt: friendship.blockedAt || null,
+    blockedBy,
+  };
+}
+
+/** Sync version of applyBlockPrivacy when block state is already known. */
+function applyBlockPrivacySync(otherUser, block) {
+  if (!otherUser) return null;
+  if (!block?.blocked) {
+    return {
+      ...otherUser,
+      iBlocked: false,
+      theyBlocked: false,
+      blockedAt: null,
+      privacyHidden: false,
+    };
+  }
+  if (block.theyBlocked) {
+    return {
+      ...otherUser,
+      photo: '',
+      photos: [],
+      isOnline: false,
+      lastSeen: null,
+      iBlocked: false,
+      theyBlocked: true,
+      blockedAt: block.blockedAt,
+      privacyHidden: true,
+    };
+  }
+  return {
+    ...otherUser,
+    isOnline: false,
+    lastSeen: null,
+    iBlocked: true,
+    theyBlocked: false,
     blockedAt: block.blockedAt,
-    canCall: friendsStatus && !block.blocked,
-    canSendMedia:
-      !block.blocked && (await hasBidirectionalChat(reqUserId, otherId)),
+    privacyHidden: false,
   };
 }
 
@@ -387,9 +524,7 @@ router.get('/conversations', auth, async (req, res) => {
       return !archivedIds.has(otherId) && !clearedIds.has(otherId);
     });
 
-    const enriched = await Promise.all(
-      visible.map((c) => enrichConversationRow(req.userId, c)),
-    );
+    const enriched = await enrichConversationsBatch(req.userId, visible);
 
     res.json(enriched);
   } catch (err) {
@@ -1073,6 +1208,7 @@ router.get('/archived', auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
     const ConversationState = require('../models/ConversationState');
+    const User = require('../models/User');
     const myObjId = new mongoose.Types.ObjectId(req.userId);
 
     const archivedStates = await ConversationState.find({
@@ -1087,61 +1223,148 @@ router.get('/archived', auth, async (req, res) => {
       return res.json([]);
     }
 
-    const rows = await Promise.all(
-      archivedStates.map(async (state) => {
-        const otherUserId = String(state.otherUserId);
-        const room = roomId(req.userId, otherUserId);
-        const lastMessage = await Message.findOne({
-          roomId: room,
-          isDeleted: { $ne: true },
-          deletedFor: { $nin: [myObjId] },
-          $or: [
-            { undelivered: { $ne: true } },
-            { senderId: myObjId },
-          ],
-        })
-          .sort({ createdAt: -1 })
-          .lean();
-
-        if (!lastMessage) {
-          const User = require('../models/User');
-          const other = await User.findById(otherUserId)
-            .select('name photo gender isOnline lastSeen')
-            .lean();
-          const safeOther = await applyBlockPrivacy(req.userId, other);
-          const block = await getBlockState(req.userId, otherUserId);
-          return {
-            _id: room,
-            lastMessage: {
-              _id: `archived_${otherUserId}`,
-              senderId: myObjId,
-              receiverId: otherUserId,
-              text: 'Archived chat',
-              type: 'text',
-              createdAt: state.archivedAt || state.updatedAt,
-            },
-            unreadCount: await countUnreadForPair(req.userId, otherUserId),
-            otherUser: safeOther
-              ? {
-                  ...safeOther,
-                  isOnline: block.blocked ? false : !!safeOther.isOnline,
-                }
-              : null,
-            archivedAt: state.archivedAt,
-          };
-        }
-
-        const unreadCount = await countUnreadForPair(req.userId, otherUserId);
-        const enriched = await enrichConversationRow(req.userId, {
-          _id: room,
-          lastMessage,
-          unreadCount,
-        });
-        return { ...enriched, archivedAt: state.archivedAt };
-      }),
+    const rooms = archivedStates.map((s) =>
+      roomId(req.userId, String(s.otherUserId)),
     );
 
-    res.json(rows.filter(Boolean));
+    // One query for latest message per archived room
+    const lastMessages = await Message.aggregate([
+      {
+        $match: {
+          roomId: { $in: rooms },
+          isDeleted: { $ne: true },
+          deletedFor: { $nin: [myObjId] },
+          $or: [{ undelivered: { $ne: true } }, { senderId: myObjId }],
+        },
+      },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: '$roomId',
+          lastMessage: { $first: '$$ROOT' },
+          unreadCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$read', false] },
+                    { $eq: ['$receiverId', myObjId] },
+                    { $ne: ['$undelivered', true] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          sentByMe: {
+            $sum: { $cond: [{ $eq: ['$senderId', myObjId] }, 1, 0] },
+          },
+          receivedByMe: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$receiverId', myObjId] },
+                    { $ne: ['$undelivered', true] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const lastByRoom = new Map(lastMessages.map((r) => [String(r._id), r]));
+
+    const withMsg = [];
+    const withoutMsg = [];
+    for (const state of archivedStates) {
+      const otherUserId = String(state.otherUserId);
+      const room = roomId(req.userId, otherUserId);
+      const agg = lastByRoom.get(room);
+      if (agg?.lastMessage) {
+        withMsg.push({
+          _id: room,
+          lastMessage: agg.lastMessage,
+          unreadCount: agg.unreadCount || 0,
+          sentByMe: agg.sentByMe || 0,
+          receivedByMe: agg.receivedByMe || 0,
+          archivedAt: state.archivedAt,
+        });
+      } else {
+        withoutMsg.push({ state, otherUserId, room });
+      }
+    }
+
+    const enrichedWithMsg = await enrichConversationsBatch(req.userId, withMsg);
+
+    let emptyRows = [];
+    if (withoutMsg.length) {
+      const ids = withoutMsg.map((x) => x.otherUserId);
+      const users = await User.find({ _id: { $in: ids } })
+        .select('name photo gender isOnline lastSeen')
+        .lean();
+      const userMap = new Map(users.map((u) => [String(u._id), u]));
+      const friendshipOr = ids.map((oid) => {
+        const { userA, userB } = Friendship.getSortedPair(req.userId, oid);
+        return { userA, userB };
+      });
+      const friendships = friendshipOr.length
+        ? await Friendship.find({ $or: friendshipOr }).lean()
+        : [];
+      const fMap = new Map(
+        friendships.map((f) => [`${String(f.userA)}_${String(f.userB)}`, f]),
+      );
+
+      emptyRows = withoutMsg.map(({ state, otherUserId, room }) => {
+        const { userA, userB } = Friendship.getSortedPair(
+          req.userId,
+          otherUserId,
+        );
+        const friendship = fMap.get(`${String(userA)}_${String(userB)}`);
+        const block = blockFromFriendship(req.userId, otherUserId, friendship);
+        const other = userMap.get(otherUserId) || null;
+        const safeOther = applyBlockPrivacySync(other, block);
+        return {
+          _id: room,
+          lastMessage: {
+            _id: `archived_${otherUserId}`,
+            senderId: myObjId,
+            receiverId: otherUserId,
+            text: 'Archived chat',
+            type: 'text',
+            createdAt: state.archivedAt || state.updatedAt,
+          },
+          unreadCount: 0,
+          otherUser: safeOther
+            ? {
+                ...safeOther,
+                isOnline: block.blocked ? false : !!safeOther.isOnline,
+              }
+            : null,
+          archivedAt: state.archivedAt,
+        };
+      });
+    }
+
+    const byRoom = new Map(
+      enrichedWithMsg.map((r) => [
+        String(r._id),
+        { ...r, archivedAt: r.archivedAt },
+      ]),
+    );
+    for (const row of emptyRows) byRoom.set(String(row._id), row);
+
+    // Preserve archived sort order
+    const rows = archivedStates
+      .map((s) => byRoom.get(roomId(req.userId, String(s.otherUserId))))
+      .filter(Boolean);
+
+    res.json(rows);
   } catch (err) {
     console.error('chat/archived error:', err);
     res.status(500).json({ error: 'Server error' });

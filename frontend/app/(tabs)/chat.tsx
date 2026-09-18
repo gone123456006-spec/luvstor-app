@@ -24,7 +24,8 @@ import WhatsAppAvatar, {
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
-import { API_BASE, apiRequest } from "../../utils/api";
+import { apiRequest } from "../../utils/api";
+import { resolveMediaUrl } from "../../utils/media";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import {
     archiveConversation,
@@ -88,12 +89,12 @@ const C = {
 };
 
 /**
- * Convert relative photo URL to absolute URL
+ * Convert relative photo URL to absolute URL.
+ * Resolved at call time so physical devices use the LAN host, not localhost.
  */
 function resolvePhotoUrl(photo: string): string {
   if (!photo) return "";
-  if (photo.startsWith("http") || photo.startsWith("data:")) return photo;
-  return `${API_BASE}${photo}`;
+  return resolveMediaUrl(photo) || "";
 }
 
 type ChatCategory = "friend" | "request" | "stranger";
@@ -174,7 +175,9 @@ function apiConversationToItem(c: any, myId: string): ConversationItem | null {
     gender: other.gender || "",
     isOnline: blockedEither ? false : !!other.isOnline,
     lastMessage: msg.text || (msg.type === "image" ? "📷 Photo" : "🎵 Voice"),
-    lastMessageAt: new Date(msg.createdAt).getTime(),
+    lastMessageAt: Number.isFinite(new Date(msg.createdAt).getTime())
+      ? new Date(msg.createdAt).getTime()
+      : Date.now(),
     unread: c.unreadCount || 0,
     category,
     relationshipStatus: c.friendshipStatus || "none",
@@ -275,6 +278,8 @@ export default function ChatScreen() {
   const [profileModalVisible, setProfileModalVisible] = React.useState(false);
   const [profileUser, setProfileUser] = React.useState<NearbyUser | null>(null);
   const [profileLiking, setProfileLiking] = React.useState(false);
+  /** Guards against a slow profile fetch overwriting a newer selection */
+  const profileRequestIdRef = React.useRef(0);
   const refreshInterval = React.useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
@@ -1172,6 +1177,8 @@ export default function ChatScreen() {
 
   const openUserProfile = async (item: ConversationItem) => {
     const seedPhoto = item.photo || "";
+    // Only the most recent open may apply its late fetch result
+    const requestId = ++profileRequestIdRef.current;
     setProfileUser({
       id: item.otherId,
       name: item.name,
@@ -1194,7 +1201,7 @@ export default function ChatScreen() {
       const token = await getAuthToken();
       if (!token) return;
       const { user } = await fetchUserProfile(token, item.otherId);
-      if (user) {
+      if (user && requestId === profileRequestIdRef.current) {
         setProfileUser({
           ...user,
           isOnline: item.isOnline,
@@ -1658,7 +1665,8 @@ export default function ChatScreen() {
     return renderUnreadBadge(item);
   };
 
-  const renderConversation = (item: ConversationItem) => (
+  const renderConversation = React.useCallback(
+    (item: ConversationItem) => (
     <TouchableOpacity
       style={styles.chatItem}
       activeOpacity={0.55}
@@ -1744,6 +1752,42 @@ export default function ChatScreen() {
       </View>
       ) : null}
     </TouchableOpacity>
+    ),
+    [
+      activeFilter,
+      goToChat,
+      showChatActions,
+      openUserProfile,
+      renderTrailing,
+      renderRequestActions,
+    ],
+  );
+
+  const renderConversationItem = React.useCallback(
+    ({ item }: { item: ConversationItem }) => renderConversation(item),
+    [renderConversation],
+  );
+
+  /** Memoized so the unread sum isn't recomputed over the whole list each render */
+  const listExtraData = React.useMemo(
+    () =>
+      `${activeFilter}:${filtered.length}:${chatPreviewTick}:${presenceTick}:${friendTick}:${archiveUnread}:${filtered.reduce(
+        (s, r) => s + (r.unread || 0),
+        0,
+      )}:${filtered[0]?.otherId || ""}:${filtered[0]?.lastMessageAt || 0}`,
+    [
+      activeFilter,
+      filtered,
+      chatPreviewTick,
+      presenceTick,
+      friendTick,
+      archiveUnread,
+    ],
+  );
+
+  const keyExtractConversation = React.useCallback(
+    (item: ConversationItem) => item.otherId,
+    [],
   );
 
   const empty = emptyCopy();
@@ -1937,9 +1981,9 @@ export default function ChatScreen() {
         ) : (
           <FlatList
             data={filtered}
-            keyExtractor={(item) => item.otherId}
-            extraData={`${activeFilter}:${filtered.length}:${chatPreviewTick}:${presenceTick}:${friendTick}:${archiveUnread}:${filtered.reduce((s, r) => s + (r.unread || 0), 0)}:${filtered[0]?.otherId || ""}:${filtered[0]?.lastMessageAt || 0}`}
-            renderItem={({ item }) => renderConversation(item)}
+            keyExtractor={keyExtractConversation}
+            extraData={listExtraData}
+            renderItem={renderConversationItem}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 110 }}
             initialNumToRender={14}

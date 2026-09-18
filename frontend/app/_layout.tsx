@@ -38,17 +38,17 @@ function RootLayoutContent() {
             freezeOnBlur: false,
           }}
         />
-        <Stack.Screen name="welcome" options={stackScreenOptions} />
-        <Stack.Screen name="login" options={stackScreenOptions} />
+        <Stack.Screen name="welcome" options={fadeScreenOptions} />
+        <Stack.Screen name="login" options={instantScreenOptions} />
         <Stack.Screen
           name="otp"
           options={{
-            ...stackScreenOptions,
+            ...instantScreenOptions,
             gestureEnabled: false,
             fullScreenGestureEnabled: false,
           }}
         />
-        <Stack.Screen name="create-profile" options={stackScreenOptions} />
+        <Stack.Screen name="create-profile" options={fadeScreenOptions} />
         <Stack.Screen
           name="messages/[id]"
           options={{

@@ -3,7 +3,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  Modal,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -67,6 +68,8 @@ export default function AccountSettingsScreen() {
     authProvider: 'email',
   });
   const [loading, setLoading] = useState(true);
+  const [logoutVisible, setLogoutVisible] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -116,23 +119,65 @@ export default function AccountSettingsScreen() {
   const displayName = info.name || '—';
   const displayEmail = info.email || '—';
 
-  const onLogout = () => {
-    Alert.alert('Log out?', 'Are you sure you want to log out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Logout',
-        style: 'destructive',
-        onPress: async () => {
-          await signOut();
-          router.replace('/login' as any);
-        },
-      },
-    ]);
+  const onLogout = () => setLogoutVisible(true);
+
+  const confirmLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await signOut();
+      setLogoutVisible(false);
+      router.replace('/login' as any);
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+
+      <Modal
+        visible={logoutVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !loggingOut && setLogoutVisible(false)}
+      >
+        <View style={styles.logoutOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => !loggingOut && setLogoutVisible(false)}
+          />
+          <View style={styles.logoutCard}>
+            <Text style={styles.logoutTitle}>Log out?</Text>
+            <Text style={styles.logoutMessage}>
+              Are you sure you want to log out?
+            </Text>
+            <View style={styles.logoutActions}>
+              <TouchableOpacity
+                style={[styles.logoutBtn, styles.logoutCancelBtn]}
+                activeOpacity={0.8}
+                disabled={loggingOut}
+                onPress={() => setLogoutVisible(false)}
+              >
+                <Text style={styles.logoutCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.logoutBtn, styles.logoutConfirmBtn]}
+                activeOpacity={0.8}
+                disabled={loggingOut}
+                onPress={confirmLogout}
+              >
+                {loggingOut ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.logoutConfirmText}>Logout</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -388,4 +433,62 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 17, fontWeight: '400', color: WA.text },
   rowLabelFlex: { flex: 1, fontSize: 17, fontWeight: '400' },
   rowSub: { fontSize: 13, color: WA.secondary, marginTop: 2 },
+  logoutOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 28,
+  },
+  logoutCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: WA.white,
+    borderRadius: 16,
+    paddingTop: 22,
+    paddingBottom: 16,
+    paddingHorizontal: 18,
+  },
+  logoutTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: WA.text,
+    textAlign: 'center',
+  },
+  logoutMessage: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+    color: WA.secondary,
+    textAlign: 'center',
+  },
+  logoutActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 20,
+  },
+  logoutBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoutCancelBtn: {
+    backgroundColor: '#EFE8F8',
+  },
+  logoutConfirmBtn: {
+    backgroundColor: WA.primary,
+  },
+  logoutCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: WA.primary,
+  },
+  logoutConfirmText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+  },
 });

@@ -20,7 +20,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { io, Socket } from 'socket.io-client';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from './AuthContext';
-import { API_BASE, apiRequest } from '../utils/api';
+import { apiRequest, getApiBase } from '../utils/api';
 import { getAuthToken } from '../utils/auth';
 import { fetchNotificationUnread } from '../utils/notifications';
 import {
@@ -128,7 +128,9 @@ type SocketContextValue = {
 const SocketContext = createContext<SocketContextValue | null>(null);
 
 function socketBaseUrl() {
-  return API_BASE.replace(/\/api\/?$/, '') || API_BASE;
+  // Resolved at connect time — an import-time snapshot can still be localhost on device
+  const base = getApiBase();
+  return base.replace(/\/api\/?$/, '') || base;
 }
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
@@ -283,13 +285,20 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     [hideToast, toastAnim],
   );
 
+  /**
+   * Only the id matters for the socket session. Depending on the whole user
+   * object tore down and reconnected the socket on unrelated profile/token
+   * updates, which delayed messages and duplicated listeners.
+   */
+  const authUserId = user?.id ? String(user.id) : null;
+
   // Keep global authenticated socket alive
   useEffect(() => {
     let cancelled = false;
     let active: Socket | null = null;
 
     (async () => {
-      if (!user) {
+      if (!authUserId) {
         setSocket(null);
         setUnreadCount(0);
         setNotifUnreadCount(0);
@@ -364,10 +373,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
       active.on('chat:message', (msg: any) => {
         // Blocked / undelivered messages must not bump unread for the recipient
-        if (msg?.undelivered && String(msg.receiverId) === String(user.id)) {
+        if (msg?.undelivered && String(msg.receiverId) === authUserId) {
           return;
         }
-        const myId = String(user.id);
+        const myId = authUserId;
         const senderId = String(msg.senderId || '');
         const receiverId = String(msg.receiverId || '');
         const otherId = senderId === myId ? receiverId : senderId;
@@ -497,7 +506,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       setSocket(null);
     };
   }, [
-    user,
+    authUserId,
     sessionVersion,
     bumpChatList,
     bumpChatPreview,

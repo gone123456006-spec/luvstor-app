@@ -248,12 +248,12 @@ async function hydrateUsers(viewer, rankedSlice, now) {
 
   const ids = rankedSlice.map((r) => r.id);
   const oids = ids.map(toObjectId).filter(Boolean);
-  const docs = await User.find({ _id: { $in: oids } })
-    .select(FOR_YOU_SELECT)
-    .lean();
+  // Independent queries — one wave instead of two sequential round-trips
+  const [docs, friendships] = await Promise.all([
+    User.find({ _id: { $in: oids } }).select(FOR_YOU_SELECT).lean(),
+    getFriendshipMap(viewer._id, ids),
+  ]);
   const byId = new Map(docs.map((d) => [String(d._id), d]));
-
-  const friendships = await getFriendshipMap(viewer._id, ids);
   const metaById = new Map(rankedSlice.map((r) => [r.id, r]));
 
   return ids

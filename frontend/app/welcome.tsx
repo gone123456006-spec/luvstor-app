@@ -1,23 +1,23 @@
-import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React from "react";
 import {
   Dimensions,
+  Image,
+  ImageBackground,
+  Platform,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import Animated, {
-  FadeIn,
-  FadeInDown,
-  FadeInUp,
-} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width: W, height: H } = Dimensions.get("window");
+const BRAND = "#370372";
+
+const BG = require("../assets/images/explore-girl.png");
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -25,80 +25,64 @@ export default function WelcomeScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <StatusBar barStyle="light-content" backgroundColor="#000" translucent />
 
-      {/* Full-bleed photo plane */}
-      <View style={styles.hero}>
-        <Animated.View
-          entering={FadeIn.duration(900)}
-          style={styles.heroCol}
-        >
-          <Image
-            source={require("../assets/images/girls-image.png")}
-            style={styles.heroImage}
-            contentFit="cover"
-          />
-        </Animated.View>
-        <Animated.View
-          entering={FadeIn.duration(900).delay(120)}
-          style={styles.heroCol}
-        >
-          <Image
-            source={require("../assets/images/boy-image.png")}
-            style={styles.heroImage}
-            contentFit="cover"
-          />
-        </Animated.View>
-        <View style={styles.heroDivider} />
-      </View>
-
-      <LinearGradient
-        colors={[
-          "rgba(0,0,0,0.35)",
-          "rgba(0,0,0,0.15)",
-          "rgba(0,0,0,0.55)",
-          "rgba(0,0,0,0.92)",
-        ]}
-        locations={[0, 0.28, 0.62, 1]}
-        style={StyleSheet.absoluteFillObject}
-      />
-
-      <View
-        style={[
-          styles.content,
-          {
-            paddingTop: Math.max(insets.top, 16) + 12,
-            paddingBottom: Math.max(insets.bottom, 20) + 8,
-          },
-        ]}
+      <ImageBackground
+        source={BG}
+        style={styles.bg}
+        imageStyle={styles.bgImage}
+        resizeMode="cover"
       >
-        <Animated.View
-          entering={FadeInDown.duration(700).delay(200)}
-          style={styles.brandBlock}
+        {/* Soft purple + black fade */}
+        <View style={styles.purpleWash} pointerEvents="none" />
+        <LinearGradient
+          colors={[
+            "rgba(0,0,0,0.75)",
+            "rgba(55,3,114,0.28)",
+            "rgba(0,0,0,0.08)",
+            "transparent",
+          ]}
+          locations={[0, 0.35, 0.7, 1]}
+          style={styles.topFade}
+          pointerEvents="none"
+        />
+        <LinearGradient
+          colors={[
+            "transparent",
+            "rgba(55,3,114,0.18)",
+            "rgba(0,0,0,0.65)",
+            "rgba(0,0,0,0.88)",
+            "rgba(0,0,0,0.94)",
+          ]}
+          locations={[0, 0.22, 0.48, 0.72, 1]}
+          style={styles.bottomFade}
+          pointerEvents="none"
+        />
+
+        <View
+          style={[
+            styles.content,
+            {
+              paddingTop: Math.max(insets.top, 12) + 14,
+              paddingBottom: Math.max(insets.bottom, 16) + 12,
+            },
+          ]}
         >
-          <Image
-            source={require("../assets/images/luvstoer logo.png")}
-            style={styles.logo}
-            contentFit="contain"
-            tintColor="#FFFFFF"
-          />
-        </Animated.View>
+          <View style={styles.brandBlock}>
+            <Image
+              source={require("../assets/images/luvstor-wordmark.png")}
+              style={styles.logo}
+              resizeMode="contain"
+              tintColor="#FFFFFF"
+            />
+          </View>
 
-        <View style={styles.bottomBlock}>
-          <Animated.Text
-            entering={FadeInUp.duration(650).delay(350)}
-            style={styles.headline}
-          >
-            Find your people.
-          </Animated.Text>
-          <Animated.Text
-            entering={FadeInUp.duration(650).delay(450)}
-            style={styles.subhead}
-          >
-            Meet nearby. Chat freely. Start something real.
-          </Animated.Text>
+          <View style={styles.bottomBlock}>
+            <Text style={styles.headline}>Find your people.</Text>
+            <Text style={styles.subhead}>
+              Meet nearby. Chat freely. Start something real.
+            </Text>
 
-          <Animated.View entering={FadeInUp.duration(650).delay(550)}>
             <TouchableOpacity
               style={styles.primaryBtn}
               activeOpacity={0.88}
@@ -106,9 +90,7 @@ export default function WelcomeScreen() {
             >
               <Text style={styles.primaryBtnText}>Get started</Text>
             </TouchableOpacity>
-          </Animated.View>
 
-          <Animated.View entering={FadeInUp.duration(650).delay(650)}>
             <TouchableOpacity
               style={styles.secondaryBtn}
               activeOpacity={0.7}
@@ -119,9 +101,9 @@ export default function WelcomeScreen() {
                 <Text style={styles.secondaryBtnLink}>Log in</Text>
               </Text>
             </TouchableOpacity>
-          </Animated.View>
+          </View>
         </View>
-      </View>
+      </ImageBackground>
     </View>
   );
 }
@@ -129,70 +111,88 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: "#1a0a24",
   },
-  hero: {
-    ...StyleSheet.absoluteFillObject,
-    flexDirection: "row",
-  },
-  heroCol: {
+  bg: {
     flex: 1,
+    width: W,
     height: H,
   },
-  heroImage: {
+  bgImage: {
     width: "100%",
     height: "100%",
   },
-  heroDivider: {
+  purpleWash: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(55, 3, 114, 0.18)",
+  },
+  topFade: {
     position: "absolute",
     top: 0,
+    left: 0,
+    right: 0,
+    height: H * 0.36,
+  },
+  bottomFade: {
+    position: "absolute",
+    left: 0,
+    right: 0,
     bottom: 0,
-    left: W / 2 - StyleSheet.hairlineWidth,
-    width: StyleSheet.hairlineWidth * 2,
-    backgroundColor: "rgba(255,255,255,0.18)",
+    height: H * 0.58,
   },
   content: {
     flex: 1,
     justifyContent: "space-between",
-    paddingHorizontal: 28,
+    paddingHorizontal: 24,
+    zIndex: 2,
   },
   brandBlock: {
     alignItems: "center",
   },
   logo: {
-    width: Math.min(188, W * 0.48),
-    height: 56,
+    width: Math.min(176, W * 0.48),
+    height: 52,
   },
   bottomBlock: {
     width: "100%",
+    alignItems: "center",
   },
   headline: {
     color: "#FFFFFF",
-    fontSize: 34,
+    fontSize: 36,
     fontWeight: "700",
-    letterSpacing: -0.8,
-    lineHeight: 40,
+    letterSpacing: -0.9,
+    lineHeight: 42,
     textAlign: "center",
     marginBottom: 10,
+    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+    ...Platform.select({
+      android: { includeFontPadding: false },
+      default: {},
+    }),
   },
   subhead: {
-    color: "rgba(255,255,255,0.78)",
+    color: "rgba(255,255,255,0.9)",
     fontSize: 15,
-    fontWeight: "400",
+    fontWeight: "500",
     lineHeight: 22,
     textAlign: "center",
-    marginBottom: 28,
+    marginBottom: 26,
+    paddingHorizontal: 6,
   },
   primaryBtn: {
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: "#0095F6",
+    width: "100%",
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: BRAND,
     alignItems: "center",
     justifyContent: "center",
   },
   primaryBtnText: {
     color: "#FFFFFF",
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "700",
     letterSpacing: 0.1,
   },
@@ -202,7 +202,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   secondaryBtnText: {
-    color: "rgba(255,255,255,0.72)",
+    color: "rgba(255,255,255,0.85)",
     fontSize: 14,
     fontWeight: "400",
   },

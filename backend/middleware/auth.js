@@ -1,5 +1,9 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const {
+  getCachedActiveDevice,
+  setCachedActiveDevice,
+} = require('../utils/deviceSessionCache');
 
 module.exports = async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -16,13 +20,18 @@ module.exports = async function authMiddleware(req, res, next) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    const user = await User.findById(userId).select('activeDeviceId');
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
+    let activeDeviceId = getCachedActiveDevice(userId);
+    if (activeDeviceId === undefined) {
+      const user = await User.findById(userId).select('activeDeviceId').lean();
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+      }
+      activeDeviceId = user.activeDeviceId ? String(user.activeDeviceId) : null;
+      setCachedActiveDevice(userId, activeDeviceId);
     }
 
     // Single-device enforcement: JWT device must match the account's active device
-    if (!deviceId || !user.activeDeviceId || user.activeDeviceId !== deviceId) {
+    if (!deviceId || !activeDeviceId || activeDeviceId !== deviceId) {
       return res.status(401).json({
         error: 'Session invalidated. Please log in again.',
         code: 'DEVICE_MISMATCH',

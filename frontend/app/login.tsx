@@ -27,6 +27,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { mapGoogleSignInError, useGoogleAuth } from "../hooks/useGoogleAuth";
 import { ApiError, apiGoogleLogin, apiSendOTP } from "../utils/api";
 import { resolvePostLoginRoute } from "../utils/auth";
+import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
 
@@ -224,7 +225,12 @@ export default function LoginScreen() {
         `/otp?email=${encodeURIComponent(trimmed)}&cooldown=${cooldown}${redirectQ}` as any,
       );
     } catch (err: any) {
-      setError(err.message || "Could not send OTP. Check your connection.");
+      setError(
+        emailLoginErrorMessage(
+          err,
+          "Could not send OTP. Check your connection.",
+        ),
+      );
     } finally {
       setOtpLoading(false);
     }

@@ -815,11 +815,15 @@ function rememberDiscoveryPrefs(userId, current, next) {
 // ─────────────────────────────────────────────
 router.get("/nearby", auth, async (req, res) => {
   try {
-    await syncExpiredSubscription(req.userId);
-    await ensureDiscoverTopSpot(req.userId);
-    const me = await User.findById(req.userId)
-      .select("location gender showMe discoveryPrefs")
-      .lean();
+    // These three reads are independent — run them in one wave instead of
+    // three sequential round-trips before the geo query even starts.
+    const [me] = await Promise.all([
+      User.findById(req.userId)
+        .select("location gender showMe discoveryPrefs")
+        .lean(),
+      syncExpiredSubscription(req.userId),
+      ensureDiscoverTopSpot(req.userId),
+    ]);
     if (!me) return res.status(404).json({ error: "User not found" });
 
     if (!hasRealLocation(me.location?.coordinates)) {

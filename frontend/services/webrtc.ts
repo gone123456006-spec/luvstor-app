@@ -5,7 +5,12 @@
  */
 
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
+import {
+  NativeModules,
+  PermissionsAndroid,
+  Platform,
+  TurboModuleRegistry,
+} from 'react-native';
 
 export type CallMediaType = 'voice' | 'video';
 
@@ -102,6 +107,48 @@ export function getWebRTCUnavailableMessage(): string {
   return 'Voice/video calls are not available on this install. Update to the latest APK.';
 }
 
+export class CallPermissionError extends Error {
+  kind: 'microphone' | 'camera';
+  constructor(kind: 'microphone' | 'camera') {
+    super(
+      kind === 'microphone'
+        ? 'Microphone permission is required to call.'
+        : 'Camera permission is required for video calls.'
+    );
+    this.name = 'CallPermissionError';
+    this.kind = kind;
+  }
+}
+
+/**
+ * Android does not reliably prompt from inside getUserMedia, so ask explicitly.
+ * Without this the call silently fails to produce a local stream.
+ */
+export async function ensureCallPermissions(
+  callType: CallMediaType
+): Promise<void> {
+  if (Platform.OS !== 'android') return;
+
+  const needed = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
+  if (callType === 'video') needed.push(PermissionsAndroid.PERMISSIONS.CAMERA);
+
+  const granted = await PermissionsAndroid.requestMultiple(needed);
+
+  if (
+    granted[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] !==
+    PermissionsAndroid.RESULTS.GRANTED
+  ) {
+    throw new CallPermissionError('microphone');
+  }
+  if (
+    callType === 'video' &&
+    granted[PermissionsAndroid.PERMISSIONS.CAMERA] !==
+      PermissionsAndroid.RESULTS.GRANTED
+  ) {
+    throw new CallPermissionError('camera');
+  }
+}
+
 function getRTC() {
   if (Platform.OS === 'web') {
     return {
@@ -167,6 +214,8 @@ export class CallPeer {
             }
           : false,
     };
+
+    await ensureCallPermissions(this.callType);
 
     this.localStream = await mediaDevices.getUserMedia(constraints);
     this.handlers.onLocalStream?.(this.localStream);
@@ -389,6 +438,14 @@ export class CallPeer {
       /* ignore */
     }
     try {
+      // Detach first so late native events can't fire into a closed peer
+      if (this.pc) {
+        this.pc.onicecandidate = null;
+        this.pc.ontrack = null;
+        this.pc.onconnectionstatechange = null;
+        this.pc.oniceconnectionstatechange = null;
+        this.pc.onnegotiationneeded = null;
+      }
       this.pc?.close?.();
     } catch {
       /* ignore */

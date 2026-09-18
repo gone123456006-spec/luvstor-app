@@ -44,14 +44,14 @@ if (ip) {
   console.log('📱 Connect phones on the SAME Wi‑Fi as this PC');
   console.log(`   Expo URL:  exp://${ip}:8081`);
   console.log(`   Backend:   http://${ip}:5000`);
-  console.log('   Scan the QR in Expo Go (Android) or Camera (iOS)');
+  console.log('   Open in the Luvstor DEV CLIENT (not store Expo Go for SDK 57)');
   console.log('');
 } else {
   console.warn('⚠️  Could not detect LAN IP — QR may not work on physical devices.');
-  console.warn('   Try: npx expo start --tunnel --go');
+  console.warn('   Try: npx expo start --tunnel');
 }
 
-const child = spawn('npx', ['expo', 'start', '--lan', '--go', '--port', String(EXPO_PORT), ...process.argv.slice(2)], {
+const child = spawn('npx', ['expo', 'start', '--lan', '--dev-client', '--port', String(EXPO_PORT), ...process.argv.slice(2)], {
   stdio: 'inherit',
   shell: true,
   env,

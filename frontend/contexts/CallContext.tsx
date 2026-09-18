@@ -21,6 +21,7 @@ import {
   CallPeer,
   CallMediaType,
   NetworkQuality,
+  ensureCallPermissions,
   isWebRTCAvailable,
   getWebRTCUnavailableMessage,
 } from '../services/webrtc';
@@ -373,6 +374,21 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // Ask before ringing — otherwise a denied mic leaves the caller on a
+      // ringing screen that can never connect.
+      try {
+        await ensureCallPermissions(opts.callType);
+      } catch (err) {
+        patch({
+          error: (err as Error).message || 'Microphone permission required.',
+          phase: 'ended',
+          endReason: 'error',
+          peer,
+        });
+        resetSoon();
+        return;
+      }
+
       await configureAudio(true);
 
       socket.emit('call:invite', {
@@ -395,6 +411,14 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     Vibration.cancel();
+    try {
+      await ensureCallPermissions(s.callType);
+    } catch (err) {
+      patch({ error: (err as Error).message || 'Microphone permission required.' });
+      socket.emit('call:decline', { callId: s.callId });
+      finishCall('error');
+      return;
+    }
     patch({ phase: 'connecting' });
     await configureAudio(s.speakerOn);
     socket.emit('call:accept', { callId: s.callId });
@@ -700,12 +724,21 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       patch({
         error: payload?.error || 'Call failed',
         phase: 'ended',
-        endReason: payload?.code || 'error',
+        // Overlay matches lowercase reasons ('offline', 'busy')
+        endReason: String(payload?.code || 'error').toLowerCase(),
       });
       disposePeer();
       stopHeartbeat();
       Vibration.cancel();
       resetSoon();
+    };
+
+    /** Callee was already in a call — surface it instead of silently dropping */
+    const onMissedBusy = (payload: any) => {
+      if (stateRef.current.phase !== 'idle' && stateRef.current.phase !== 'ended') {
+        return;
+      }
+      patch({ error: payload?.error || 'You missed a call while busy.' });
     };
 
     const onConnected = () => {
@@ -725,6 +758,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     socket.on('call:ended', onEnded);
     socket.on('call:error', onError);
     socket.on('call:connected', onConnected);
+    socket.on('call:missed_busy', onMissedBusy);
 
     return () => {
       socket.off('call:ringing', onRinging);
@@ -737,6 +771,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       socket.off('call:ended', onEnded);
       socket.off('call:error', onError);
       socket.off('call:connected', onConnected);
+      socket.off('call:missed_busy', onMissedBusy);
     };
   }, [
     createPeer,

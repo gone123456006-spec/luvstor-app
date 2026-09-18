@@ -80,7 +80,8 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useCall } from "../../contexts/CallContext";
 import { usePush } from "../../contexts/PushContext";
 import { useSocket } from "../../contexts/SocketContext";
-import { API_BASE, apiRequest } from "../../utils/api";
+import { apiRequest, getApiBase } from "../../utils/api";
+import { resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import {
     ChatAccessStatus,
@@ -125,29 +126,14 @@ const CHAT_KEYBOARD_GAP = 4;
 /** Inverted list: offset.y below this = user is reading recent messages */
 const NEAR_BOTTOM_THRESHOLD = 80;
 const IMAGE_PREVIEW_SIZE = Math.min(88, Math.max(64, SCREEN_WIDTH * 0.22));
-/** Turn relative /uploads/... or wrong-host absolute URLs into a loadable API_BASE URL */
+/** Matches the backend default page size for /api/chat/history */
+const HISTORY_PAGE_SIZE = 50;
+/**
+ * Media URLs must resolve against the host at render time — a snapshot taken at
+ * import can still be localhost on a physical device.
+ */
 function resolveMediaUrl(url?: string | null): string | null {
-  if (!url) return null;
-  if (
-    url.startsWith("file://") ||
-    url.startsWith("content://") ||
-    url.startsWith("data:")
-  ) {
-    return url;
-  }
-  if (url.startsWith("/")) {
-    return `${API_BASE}${url}`;
-  }
-  // Absolute URL from another host/localhost → rewrite path onto this device's API_BASE
-  try {
-    const parsed = new URL(url);
-    if (parsed.pathname.startsWith("/uploads/")) {
-      return `${API_BASE}${parsed.pathname}`;
-    }
-  } catch {
-    /* ignore */
-  }
-  return url;
+  return resolveSharedMediaUrl(url);
 }
 
 const { width: screenWidth } = Dimensions.get("window");
@@ -1593,7 +1579,9 @@ export default function MessageScreen() {
   const [chatMuted, setChatMuted] = useState(false);
   const [profileUser, setProfileUser] = useState<NearbyUser | null>(null);
   const [displayName, setDisplayName] = useState(name || "User");
-  const [displayPhoto, setDisplayPhoto] = useState(photo || "");
+  const [displayPhoto, setDisplayPhoto] = useState(
+    resolveSharedMediaUrl(photo) || photo || "",
+  );
   const [displayGender, setDisplayGender] = useState(gender || "");
   const [displayBio, setDisplayBio] = useState("");
   const [privacyHidden, setPrivacyHidden] = useState(false);
@@ -1607,6 +1595,10 @@ export default function MessageScreen() {
   const socketRef = useRef<Socket | null>(null);
   /** Latest message timestamp for WhatsApp-style reconnect catch-up */
   const messagesLatestAtRef = useRef(0);
+  /** Oldest loaded timestamp — cursor for paging older history */
+  const oldestLoadedAtRef = useRef<number | null>(null);
+  const hasMoreOlderRef = useRef(true);
+  const loadingOlderRef = useRef(false);
   const flatListRef = useRef<FlatList>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
@@ -1680,7 +1672,7 @@ export default function MessageScreen() {
       const token = await getAuthToken();
       if (!token) return;
       const res = await fetch(
-        `${API_BASE}/api/chat/conversation-status/${id}`,
+        `${getApiBase()}/api/chat/conversation-status/${id}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -2350,7 +2342,7 @@ export default function MessageScreen() {
       !!friendshipStatus?.theyBlocked || privacyHiddenParam === "true";
     setPrivacyHidden(hidden);
     setDisplayName(name || "User");
-    setDisplayPhoto(hidden ? "" : photo || "");
+    setDisplayPhoto(hidden ? "" : resolveMediaUrl(photo) || photo || "");
     setDisplayGender(gender || "");
     if (blocked || hidden) {
       setOtherUserOnline(false);
@@ -2437,7 +2429,9 @@ export default function MessageScreen() {
         const { user } = await fetchUserProfile(token, String(id));
         if (cancelled || !user) return;
         setDisplayName(user.name || "User");
-        if (user.photo) setDisplayPhoto(user.photo);
+        if (user.photo) {
+          setDisplayPhoto(resolveMediaUrl(user.photo) || user.photo);
+        }
         if (user.gender) setDisplayGender(user.gender);
         setDisplayBio(user.bio || "");
         setProfileUser((prev) => ({
@@ -2610,6 +2604,54 @@ export default function MessageScreen() {
   // WhatsApp-style: newest first + inverted list → latest always at bottom on open
   const listData = useMemo(() => [...messages].reverse(), [messages]);
 
+  /** O(1) selection lookups instead of Array.includes per row */
+  const selectedMessageSet = useMemo(
+    () => new Set(selectedMessages),
+    [selectedMessages],
+  );
+
+  /** Inverted list: reaching the end means scrolling into older history */
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingOlderRef.current || !hasMoreOlderRef.current || !id) return;
+    const before = oldestLoadedAtRef.current;
+    if (!before || !Number.isFinite(before)) return;
+    loadingOlderRef.current = true;
+    try {
+      const token = await getAuthToken();
+      const authUser = await getCurrentAuthUser();
+      if (!token || !authUser) return;
+      const older: any[] = await apiRequest(
+        `/api/chat/history/${id}?limit=${HISTORY_PAGE_SIZE}&before=${encodeURIComponent(
+          new Date(before).toISOString(),
+        )}`,
+        token,
+      );
+      if (!Array.isArray(older) || !older.length) {
+        hasMoreOlderRef.current = false;
+        return;
+      }
+      const mapped = older.map((m) => mapMsg(m, authUser.id));
+      hasMoreOlderRef.current = older.length >= HISTORY_PAGE_SIZE;
+      oldestLoadedAtRef.current = mapped.reduce(
+        (min, m) => Math.min(min, m.createdAt || Infinity),
+        before,
+      );
+      setMessages((prev) => {
+        const byId = new Map(prev.map((m) => [m._id, m]));
+        for (const m of mapped) {
+          if (!byId.has(m._id)) byId.set(m._id, m);
+        }
+        return Array.from(byId.values()).sort(
+          (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+        );
+      });
+    } catch {
+      /* keep existing history on failure; retry on next scroll */
+    } finally {
+      loadingOlderRef.current = false;
+    }
+  }, [id]);
+
   const jumpToRepliedMessage = useCallback(
     (messageId: string) => {
       const index = listData.findIndex(
@@ -2644,6 +2686,8 @@ export default function MessageScreen() {
   useEffect(() => {
     return () => {
       if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+      // Otherwise a pending typing emit fires after leaving the thread
+      if (typingTimeout.current) clearTimeout(typingTimeout.current);
     };
   }, []);
 
@@ -2717,7 +2761,10 @@ export default function MessageScreen() {
       replyTo,
       viewOnce: !!m.viewOnce,
       viewOnceOpened: !!m.viewOnceOpened,
-      createdAt: new Date(m.createdAt).getTime(),
+      // Invalid timestamps would become NaN and corrupt ordering
+      createdAt: Number.isFinite(new Date(m.createdAt).getTime())
+        ? new Date(m.createdAt).getTime()
+        : Date.now(),
       pending: false,
       undelivered: !!m.undelivered,
       // Back-compat: older messages had no `delivered` field — treat as delivered
@@ -2851,6 +2898,40 @@ export default function MessageScreen() {
     setFullScreenImage(null);
   };
 
+  /**
+   * Stable renderItem so typing / unrelated state changes don't rebuild every
+   * bubble. MessageItem is memoized, so identity here matters.
+   */
+  const renderMessageItem = useCallback(
+    ({ item }: { item: ChatMsg }) => (
+      <MessageItem
+        item={item}
+        onReply={handleReplyToMessage}
+        onJumpToReply={jumpToRepliedMessage}
+        onImagePress={handleImagePress}
+        onViewOnceOpen={openViewOncePhoto}
+        onToggleSelect={handleToggleSelect}
+        isSelected={selectedMessageSet.has(item._id)}
+        selectionMode={selectionMode}
+        highlighted={highlightedMessageId === item._id}
+        otherName={displayName || "User"}
+      />
+    ),
+    [
+      handleReplyToMessage,
+      jumpToRepliedMessage,
+      handleImagePress,
+      openViewOncePhoto,
+      handleToggleSelect,
+      selectedMessageSet,
+      selectionMode,
+      highlightedMessageId,
+      displayName,
+    ],
+  );
+
+  const keyExtractMessage = useCallback((item: ChatMsg) => item._id, []);
+
   // Block screenshots / screen recording while a view-once photo is visible
   const protectViewOnceCapture =
     !!fullScreenImage?.viewOnce || (!!pendingPhoto && pendingViewOnce);
@@ -2952,8 +3033,26 @@ export default function MessageScreen() {
           token,
         );
         if (cancelled) return;
+        if (!Array.isArray(history)) throw new Error("Bad history payload");
         const mapped = history.map((m) => mapMsg(m, authUser.id));
-        setMessages(mapped);
+        oldestLoadedAtRef.current = mapped.length
+          ? mapped.reduce(
+              (min, m) => Math.min(min, m.createdAt || Infinity),
+              Infinity,
+            )
+          : null;
+        hasMoreOlderRef.current = history.length >= HISTORY_PAGE_SIZE;
+        // Merge instead of replace so messages sent while history was in flight survive
+        setMessages((prev) => {
+          if (!prev.length) return mapped;
+          const byId = new Map(prev.map((m) => [m._id, m]));
+          for (const m of mapped) {
+            byId.set(m._id, { ...byId.get(m._id), ...m });
+          }
+          return Array.from(byId.values()).sort(
+            (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+          );
+        });
         messagesLatestAtRef.current = mapped.reduce(
           (max, m) => Math.max(max, m.createdAt || 0),
           0,
@@ -3469,7 +3568,7 @@ export default function MessageScreen() {
             : ext === "webp"
               ? "image/webp"
               : "image/jpeg";
-      const url = `${API_BASE}/api/upload/image-bin`;
+      const url = `${getApiBase()}/api/upload/image-bin`;
       const headers: Record<string, string> = {
         Authorization: `Bearer ${token}`,
         "Content-Type": mimeType,
@@ -3483,8 +3582,13 @@ export default function MessageScreen() {
           sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
         });
         if (result.status >= 200 && result.status < 300 && result.body) {
-          const json = JSON.parse(result.body);
-          return json.url || json.absoluteUrl || null;
+          try {
+            const json = JSON.parse(result.body);
+            return json.url || json.absoluteUrl || null;
+          } catch {
+            console.error("Image upload returned non-JSON body");
+            return null;
+          }
         }
         console.error("Image upload failed", result.status, result.body);
         return null;
@@ -3860,7 +3964,7 @@ export default function MessageScreen() {
                   : "audio/m4a";
       const dataUri = `data:${mimeType};base64,${base64}`;
 
-      const res = await fetch(`${API_BASE}/api/upload/audio`, {
+      const res = await fetch(`${getApiBase()}/api/upload/audio`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -4372,21 +4476,10 @@ export default function MessageScreen() {
             ref={flatListRef}
             data={listData}
             inverted
-            renderItem={({ item }) => (
-              <MessageItem
-                item={item}
-                onReply={handleReplyToMessage}
-                onJumpToReply={jumpToRepliedMessage}
-                onImagePress={handleImagePress}
-                onViewOnceOpen={openViewOncePhoto}
-                onToggleSelect={handleToggleSelect}
-                isSelected={selectedMessages.includes(item._id)}
-                selectionMode={selectionMode}
-                highlighted={highlightedMessageId === item._id}
-                otherName={displayName || "User"}
-              />
-            )}
-            keyExtractor={(item) => item._id}
+            renderItem={renderMessageItem}
+            keyExtractor={keyExtractMessage}
+            onEndReached={loadOlderMessages}
+            onEndReachedThreshold={0.4}
             contentContainerStyle={styles.messagesList}
             showsVerticalScrollIndicator={false}
             onScroll={handleListScroll}
@@ -4410,7 +4503,7 @@ export default function MessageScreen() {
               const dy = Math.abs(e.nativeEvent.pageY - start.y);
               if (dx < 12 && dy < 12) dismissChatKeyboard();
             }}
-            removeClippedSubviews={false}
+            removeClippedSubviews={Platform.OS === "android"}
             initialNumToRender={18}
             maxToRenderPerBatch={10}
             updateCellsBatchingPeriod={50}
@@ -4474,7 +4567,8 @@ export default function MessageScreen() {
                       profileUser?.name ||
                       profileUser?.publicId ||
                       "User",
-                    photo: displayPhoto || profileUser?.photo || "",
+                    photo:
+                      resolveMediaUrl(displayPhoto || profileUser?.photo) || "",
                     gender: profileUser?.gender || "",
                     publicId: profileUser?.publicId || "",
                     callType: "voice",

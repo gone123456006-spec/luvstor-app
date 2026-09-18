@@ -170,22 +170,24 @@ router.get('/requests', auth, async (req, res) => {
       ],
     }).sort({ updatedAt: -1 }).lean();
 
-    // Populate the other user's info
-    const enriched = await Promise.all(
-      matches.map(async (m) => {
-        const otherId = String(m.userA) === req.userId ? m.userB : m.userA;
-        const other = await User.findById(otherId)
-          .select('name photo gender age bio isOnline lastSeen')
-          .lean();
-        return {
-          ...m,
-          otherUser: other || null,
-          otherId: String(otherId),
-          requestType: m.status === 'pending_like' ? 'incoming_like' : 'mutual_match',
-          acceptedByMe: (m.acceptedBy || []).some((id) => String(id) === req.userId),
-        };
-      })
+    // Populate the other user's info (one User query, not N)
+    const otherIds = matches.map((m) =>
+      String(m.userA) === req.userId ? m.userB : m.userA,
     );
+    const others = await User.find({ _id: { $in: otherIds } })
+      .select('name photo gender age bio isOnline lastSeen')
+      .lean();
+    const otherMap = new Map(others.map((u) => [String(u._id), u]));
+    const enriched = matches.map((m) => {
+      const otherId = String(m.userA) === req.userId ? m.userB : m.userA;
+      return {
+        ...m,
+        otherUser: otherMap.get(String(otherId)) || null,
+        otherId: String(otherId),
+        requestType: m.status === 'pending_like' ? 'incoming_like' : 'mutual_match',
+        acceptedByMe: (m.acceptedBy || []).some((id) => String(id) === req.userId),
+      };
+    });
 
     res.json(enriched);
   } catch (err) {
@@ -321,20 +323,22 @@ router.get('/list', auth, async (req, res) => {
       ],
     }).lean();
 
-    // Populate the other user's info
-    const enriched = await Promise.all(
-      friendships.map(async (f) => {
-        const otherId = String(f.userA) === req.userId ? f.userB : f.userA;
-        const other = await User.findById(otherId)
-          .select('name photo gender age bio isOnline lastSeen')
-          .lean();
-        return {
-          ...f,
-          otherUser: other || null,
-          otherId: String(otherId),
-        };
-      })
+    // Populate the other user's info (one User query, not N)
+    const otherIds = friendships.map((f) =>
+      String(f.userA) === req.userId ? f.userB : f.userA,
     );
+    const others = await User.find({ _id: { $in: otherIds } })
+      .select('name photo gender age bio isOnline lastSeen')
+      .lean();
+    const otherMap = new Map(others.map((u) => [String(u._id), u]));
+    const enriched = friendships.map((f) => {
+      const otherId = String(f.userA) === req.userId ? f.userB : f.userA;
+      return {
+        ...f,
+        otherUser: otherMap.get(String(otherId)) || null,
+        otherId: String(otherId),
+      };
+    });
 
     res.json(enriched);
   } catch (err) {
@@ -360,21 +364,23 @@ router.get('/likes', auth, async (req, res) => {
       .sort({ likedAt: -1, updatedAt: -1 })
       .lean();
 
-    const enriched = await Promise.all(
-      likes.map(async (m) => {
-        const otherId = String(m.userA) === req.userId ? m.userB : m.userA;
-        const other = await User.findById(otherId)
-          .select('name photo gender age bio isOnline lastSeen')
-          .lean();
-        return {
-          ...m,
-          otherUser: other || null,
-          otherId: String(otherId),
-          requestType: 'outgoing_like',
-          iLiked: true,
-        };
-      })
+    const otherIds = likes.map((m) =>
+      String(m.userA) === req.userId ? m.userB : m.userA,
     );
+    const others = await User.find({ _id: { $in: otherIds } })
+      .select('name photo gender age bio isOnline lastSeen')
+      .lean();
+    const otherMap = new Map(others.map((u) => [String(u._id), u]));
+    const enriched = likes.map((m) => {
+      const otherId = String(m.userA) === req.userId ? m.userB : m.userA;
+      return {
+        ...m,
+        otherUser: otherMap.get(String(otherId)) || null,
+        otherId: String(otherId),
+        requestType: 'outgoing_like',
+        iLiked: true,
+      };
+    });
 
     res.json(enriched);
   } catch (err) {
@@ -400,40 +406,43 @@ router.get('/blocked', auth, async (req, res) => {
       .sort({ blockedAt: -1 })
       .lean();
 
-    const blocked = await Promise.all(
-      rows.map(async (f) => {
-        const otherId = String(f.userA) === req.userId ? f.userB : f.userA;
-        const other = await User.findById(otherId)
-          .select('name photo gender age bio publicId isOnline')
-          .lean();
-        return {
-          _id: String(f._id),
-          otherId: String(otherId),
-          blockedAt: f.blockedAt || f.updatedAt,
-          otherUser: other
-            ? {
-                id: String(other._id),
-                name: other.name || '',
-                photo: other.photo || '',
-                gender: other.gender || '',
-                age: other.age ?? null,
-                bio: other.bio || '',
-                publicId: other.publicId || '',
-                isOnline: !!other.isOnline,
-              }
-            : {
-                id: String(otherId),
-                name: 'Deleted user',
-                photo: '',
-                gender: '',
-                age: null,
-                bio: '',
-                publicId: '',
-                isOnline: false,
-              },
-        };
-      }),
+    const otherIds = rows.map((f) =>
+      String(f.userA) === req.userId ? f.userB : f.userA,
     );
+    const others = await User.find({ _id: { $in: otherIds } })
+      .select('name photo gender age bio publicId isOnline')
+      .lean();
+    const otherMap = new Map(others.map((u) => [String(u._id), u]));
+    const blocked = rows.map((f) => {
+      const otherId = String(f.userA) === req.userId ? f.userB : f.userA;
+      const other = otherMap.get(String(otherId));
+      return {
+        _id: String(f._id),
+        otherId: String(otherId),
+        blockedAt: f.blockedAt || f.updatedAt,
+        otherUser: other
+          ? {
+              id: String(other._id),
+              name: other.name || '',
+              photo: other.photo || '',
+              gender: other.gender || '',
+              age: other.age ?? null,
+              bio: other.bio || '',
+              publicId: other.publicId || '',
+              isOnline: !!other.isOnline,
+            }
+          : {
+              id: String(otherId),
+              name: 'Deleted user',
+              photo: '',
+              gender: '',
+              age: null,
+              bio: '',
+              publicId: '',
+              isOnline: false,
+            },
+      };
+    });
 
     res.json({ blocked });
   } catch (err) {

@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppAlert } from '../components/AppAlert';
 import { ListRowSkeleton } from '../components/ScreenSkeleton';
 import WhatsAppAvatar, { getDisplayName } from '../components/WhatsAppAvatar';
-import { API_BASE } from '../utils/api';
+import { resolveMediaUrl } from '../utils/media';
 import { getAuthToken } from '../utils/auth';
 import {
   BlockedUser,
@@ -37,8 +37,7 @@ const WA = {
 
 function resolvePhoto(photo?: string) {
   if (!photo) return '';
-  if (photo.startsWith('http') || photo.startsWith('data:')) return photo;
-  return `${API_BASE}${photo}`;
+  return resolveMediaUrl(photo) || '';
 }
 
 function formatBlockedAt(iso?: string) {

@@ -266,10 +266,13 @@ export default function WhatsAppAvatar({
 }: Props) {
   const [photoFailed, setPhotoFailed] = useState(false);
   const photoKey = String(photo || "").trim();
+  const resolvedKey = resolveMediaUrl(photoKey) || photoKey;
 
+  // Retry when the resolved URL changes too — an early failure against a stale
+  // host would otherwise pin the default DP for the whole session.
   useEffect(() => {
     setPhotoFailed(false);
-  }, [photoKey]);
+  }, [photoKey, resolvedKey]);
 
   const liveBadge = useLiveSubscriptionBadge(badge, badgeExpiresAt);
   const hasPlanBadge = !privacyHidden && !!liveBadge;
@@ -277,9 +280,7 @@ export default function WhatsAppAvatar({
 
   const hasPhoto =
     !privacyHidden && !photoFailed && hasProfilePhoto(photoKey);
-  const photoUri = hasPhoto
-    ? resolveMediaUrl(photoKey) || photoKey
-    : "";
+  const photoUri = hasPhoto ? resolvedKey : "";
 
   return (
     <View style={[{ width: size, height: size, overflow: "visible" }, style]}>

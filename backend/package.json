@@ -12,6 +12,7 @@
     "bytes": "^3.1.2",
     "call-bind-apply-helpers": "^1.0.2",
     "call-bound": "^1.0.4",
+    "compression": "^1.8.2",
     "content-disposition": "^1.1.0",
     "content-type": "^1.0.5",
     "cookie": "^0.7.2",
@@ -98,6 +99,7 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "socket.io-client": "^4.8.3"
   }
 }

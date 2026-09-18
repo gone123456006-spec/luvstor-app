@@ -1,4 +1,4 @@
-import { API_BASE } from './api';
+import { getApiBase } from './api';
 
 export interface FriendshipStatus {
   status: 'stranger' | 'pending_like' | 'mutual_match' | 'friends' | 'declined' | 'blocked' | 'self';
@@ -39,7 +39,7 @@ export interface FriendRequest {
  * Send a like to another user
  */
 export async function sendLike(token: string, userId: string): Promise<{ message: string; status: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/like`, {
+  const res = await fetch(`${getApiBase()}/api/friends/like`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -60,7 +60,7 @@ export async function sendLike(token: string, userId: string): Promise<{ message
  * Undo a like or remove friendship
  */
 export async function unlikeUser(token: string, userId: string): Promise<{ message: string; status: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/unlike`, {
+  const res = await fetch(`${getApiBase()}/api/friends/unlike`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -122,7 +122,7 @@ export async function getFriendshipStatus(token: string, userId: string): Promis
  * Get list of friend requests (mutual matches)
  */
 export async function getFriendRequests(token: string): Promise<FriendRequest[]> {
-  const res = await fetch(`${API_BASE}/api/friends/requests`, {
+  const res = await fetch(`${getApiBase()}/api/friends/requests`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -141,7 +141,7 @@ export async function getFriendRequests(token: string): Promise<FriendRequest[]>
  * Accept a friend request
  */
 export async function acceptFriendRequest(token: string, userId: string): Promise<{ message: string; status: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/accept`, {
+  const res = await fetch(`${getApiBase()}/api/friends/accept`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -162,7 +162,7 @@ export async function acceptFriendRequest(token: string, userId: string): Promis
  * Decline a friend request
  */
 export async function declineFriendRequest(token: string, userId: string): Promise<{ message: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/decline`, {
+  const res = await fetch(`${getApiBase()}/api/friends/decline`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -183,7 +183,7 @@ export async function declineFriendRequest(token: string, userId: string): Promi
  * Get list of friends
  */
 export async function getFriendsList(token: string): Promise<FriendRequest[]> {
-  const res = await fetch(`${API_BASE}/api/friends/list`, {
+  const res = await fetch(`${getApiBase()}/api/friends/list`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -202,7 +202,7 @@ export async function getFriendsList(token: string): Promise<FriendRequest[]> {
  * Outgoing likes I sent (waiting for them to like back)
  */
 export async function getOutgoingLikes(token: string): Promise<FriendRequest[]> {
-  const res = await fetch(`${API_BASE}/api/friends/likes`, {
+  const res = await fetch(`${getApiBase()}/api/friends/likes`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -221,7 +221,7 @@ export async function getOutgoingLikes(token: string): Promise<FriendRequest[]> 
  * Unfriend a user
  */
 export async function unfriend(token: string, userId: string): Promise<{ message: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/unfriend`, {
+  const res = await fetch(`${getApiBase()}/api/friends/unfriend`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
@@ -253,7 +253,7 @@ export async function blockUser(
   token: string,
   userId: string,
 ): Promise<{ message: string; status: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/block`, {
+  const res = await fetch(`${getApiBase()}/api/friends/block`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -277,7 +277,7 @@ export async function unblockUser(
   token: string,
   userId: string,
 ): Promise<{ message: string; status: string }> {
-  const res = await fetch(`${API_BASE}/api/friends/unblock`, {
+  const res = await fetch(`${getApiBase()}/api/friends/unblock`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -314,7 +314,7 @@ export type BlockedUser = {
  * List users the current account has blocked
  */
 export async function getBlockedUsers(token: string): Promise<BlockedUser[]> {
-  const res = await fetch(`${API_BASE}/api/friends/blocked`, {
+  const res = await fetch(`${getApiBase()}/api/friends/blocked`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
@@ -336,7 +336,7 @@ export async function reportUser(
   reason: ReportReason,
   opts: { details?: string; alsoBlock?: boolean } = {},
 ): Promise<{ message: string; blocked: boolean }> {
-  const res = await fetch(`${API_BASE}/api/friends/report`, {
+  const res = await fetch(`${getApiBase()}/api/friends/report`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

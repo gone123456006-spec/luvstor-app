@@ -4,6 +4,7 @@ import {
   getChatListCache,
   setChatListCache,
 } from './chatListCache';
+import { resolveMediaUrl } from './media';
 
 export type ChatPreviewPatch = {
   otherUserId: string;
@@ -44,11 +45,16 @@ function bumpRow(
   return [row, ...rest];
 }
 
+/**
+ * Returns the original array when the row is absent, so React can bail out of
+ * re-rendering lists that did not actually change.
+ */
 function patchRows(
   rows: ConversationItem[],
   otherId: string,
   update: Partial<ConversationItem>,
 ): ConversationItem[] {
+  if (!rows.some((r) => r.otherId === otherId)) return rows;
   return rows.map((r) => (r.otherId === otherId ? { ...r, ...update } : r));
 }
 
@@ -91,13 +97,16 @@ export function applyChatListPreviewPatch(
     return prev;
   };
 
+  // Socket payloads carry relative /uploads paths — resolve before caching
+  const patchPhoto = patch.photo ? resolveMediaUrl(patch.photo) || '' : '';
+
   const rowUpdate: Partial<ConversationItem> = {
     unread: unreadFor(existing?.unread ?? 0),
     ...(touchPreview && lastMessage != null
       ? { lastMessage, lastMessageAt: at }
       : null),
     ...(patch.name ? { name: patch.name } : null),
-    ...(patch.photo ? { photo: patch.photo } : null),
+    ...(patchPhoto ? { photo: patchPhoto } : null),
     ...(patch.gender ? { gender: patch.gender } : null),
   };
 
@@ -131,7 +140,7 @@ export function applyChatListPreviewPatch(
     : {
         otherId,
         name: patch.name || 'User',
-        photo: patch.photo || '',
+        photo: patchPhoto,
         gender: patch.gender || '',
         isOnline: false,
         lastMessage: lastMessage || 'Message',

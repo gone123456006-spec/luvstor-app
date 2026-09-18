@@ -107,15 +107,37 @@ export function setOnSessionInvalid(handler: SessionInvalidHandler | null) {
   onSessionInvalid = handler;
 }
 
+const DEFAULT_FETCH_TIMEOUT_MS = 12_000;
+
 async function apiFetch(path: string, options: RequestInit = {}) {
   const url = `${getApiBase()}${path}`;
   let res: Response;
+  const timeoutMs = DEFAULT_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const externalSignal = options.signal;
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    res = await fetch(url, options);
-  } catch {
+    res = await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    const aborted =
+      (err instanceof Error && err.name === 'AbortError') ||
+      controller.signal.aborted;
+    if (aborted && !externalSignal?.aborted) {
+      throw new Error(
+        `Server took too long at ${getApiBase()}. Check Wi‑Fi and that the backend is running.`
+      );
+    }
     throw new Error(
       `Cannot reach server at ${getApiBase()}. Run "npm run dev" in backend, use "npm start" in frontend, and ensure phone + PC share the same Wi‑Fi.`
     );
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 
   let data: Record<string, unknown> = {};

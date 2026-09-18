@@ -21,6 +21,7 @@ import DeviceTransferModal from "../components/DeviceTransferModal";
 import { useAuth } from "../contexts/AuthContext";
 import { ApiError, apiSendOTP, apiVerifyOTP } from "../utils/api";
 import { resolvePostLoginRoute } from "../utils/auth";
+import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
 
@@ -232,7 +233,7 @@ export default function OtpScreen() {
         setDeviceConflict(true);
         setError(err.message);
       } else {
-        setError(err.message || "Verification failed");
+        setError(emailLoginErrorMessage(err, "Verification failed"));
       }
     } finally {
       setVerifying(false);
@@ -275,7 +276,7 @@ export default function OtpScreen() {
       inputs.current[0]?.focus();
       setResendCooldown(result.resendCooldownSeconds ?? 60);
     } catch (err: any) {
-      setError(err.message || "Could not resend code");
+      setError(emailLoginErrorMessage(err, "Could not resend code"));
     } finally {
       setResending(false);
     }

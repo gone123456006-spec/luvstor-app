@@ -31,7 +31,7 @@ import WhatsAppAvatar, {
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
-import { API_BASE } from "../../utils/api";
+import { resolveMediaUrl } from "../../utils/media";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -148,7 +148,7 @@ const STAGGER_SLOW_MS = 380;
 const STAGGER_STEP_MS = 48;
 
 /** Horizontal Nearby row — slides up from bottom when staggered. */
-function NearbyListRow({
+function NearbyListRowBase({
   item,
   index,
   stagger,
@@ -278,6 +278,14 @@ function NearbyListRow({
   );
 }
 
+/**
+ * Memoized so presence/like ticks only repaint the row whose data changed
+ * instead of every visible cell.
+ */
+const NearbyListRow = React.memo(NearbyListRowBase);
+
+const ItemSeparator = () => <View style={styles.separator} />;
+
 export default function DiscoverScreen() {
   const router = useRouter();
   const { showAlert } = useAppAlert();
@@ -383,6 +391,13 @@ export default function DiscoverScreen() {
     let cancelled = false;
     // On an account switch, hold the feed until the new account's filters land.
     setPrefsHydrated(false);
+    // Also drop the previous account's feed, otherwise the focus effect sees a
+    // non-empty list and skips reloading for the new account.
+    initialLoadedRef.current = false;
+    nearbyUsersRef.current = [];
+    forYouUsersRef.current = [];
+    setNearbyUsers([]);
+    setForYouUsers([]);
     (async () => {
       try {
         const token = await getAuthToken();
@@ -701,6 +716,9 @@ export default function DiscoverScreen() {
             gender: prefs.gender,
             activeWithinMinutes: prefs.activeWithinMinutes,
             mode: "initial",
+            // Paint from the last saved location and refresh GPS in parallel
+            // instead of blocking first render on a GPS fix.
+            refreshFast: true,
           });
 
           if (cancelled) return;
@@ -734,8 +752,7 @@ export default function DiscoverScreen() {
     const u = lastProfileUpdate;
     const resolve = (photo?: string) => {
       if (!photo) return "";
-      if (photo.startsWith("http") || photo.startsWith("data:")) return photo;
-      return `${API_BASE}${photo}`;
+      return resolveMediaUrl(photo) || "";
     };
     const patch = (user: NearbyUser): NearbyUser => {
       if (user.id !== u.userId) return user;
@@ -1185,7 +1202,8 @@ export default function DiscoverScreen() {
   };
 
   // ── Render horizontal WhatsApp-style row ───────────────────────
-  const renderItem = ({ item, index }: { item: NearbyUser; index: number }) => {
+  const renderItem = React.useCallback(
+    ({ item, index }: { item: NearbyUser; index: number }) => {
     const liked =
       relationshipById[item.id]?.iLiked ||
       relationshipById[item.id]?.areFriends;
@@ -1233,7 +1251,26 @@ export default function DiscoverScreen() {
         }}
       />
     );
-  };
+    },
+    [
+      relationshipById,
+      staggerReveal,
+      likingId,
+      feedTab,
+      dismissSearchKeyboard,
+      router,
+      openProfile,
+      toggleLike,
+    ],
+  );
+
+  const keyExtractUser = React.useCallback((item: NearbyUser) => item.id, []);
+
+  /** Stable identity so the list doesn't repaint on every parent render */
+  const listExtraData = React.useMemo(
+    () => `${feedTab}:${likingId ?? ""}:${staggerReveal}:${relationshipById}`,
+    [feedTab, likingId, staggerReveal, relationshipById],
+  );
 
   const activeUsers = feedTab === "for_you" ? forYouUsers : nearbyUsers;
 
@@ -1587,9 +1624,9 @@ export default function DiscoverScreen() {
         ) : (
           <FlatList
             data={displayUsers}
-            extraData={{ relationshipById, likingId, feedTab, staggerReveal }}
+            extraData={listExtraData}
             renderItem={renderItem}
-            keyExtractor={(item) => item.id}
+            keyExtractor={keyExtractUser}
             contentContainerStyle={[
               styles.listContent,
               displayUsers.length === 0 ? { flexGrow: 1 } : null,
@@ -1611,7 +1648,7 @@ export default function DiscoverScreen() {
                 tintColor={D.purple}
               />
             }
-            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            ItemSeparatorComponent={ItemSeparator}
             ListEmptyComponent={ListEmpty}
             ListFooterComponent={
               displayUsers.length ? (

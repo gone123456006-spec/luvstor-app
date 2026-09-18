@@ -22,10 +22,13 @@ const forYouRedisGuard = redisRateLimit({
  */
 router.get('/for-you', auth, forYouRedisGuard, readLimiter, async (req, res) => {
   try {
-    await syncExpiredSubscription(req.userId);
-    const viewer = await User.findById(req.userId).select(
-      'location distance interests gender showMe discoveryPrefs subscriptionPlan subscriptionExpiresAt',
-    );
+    // Independent of each other — one wave instead of two sequential reads
+    const [viewer] = await Promise.all([
+      User.findById(req.userId).select(
+        'location distance interests gender showMe discoveryPrefs subscriptionPlan subscriptionExpiresAt',
+      ),
+      syncExpiredSubscription(req.userId),
+    ]);
     if (!viewer) return res.status(404).json({ error: 'User not found' });
 
     const page = Math.max(1, Number(req.query.page) || 1);

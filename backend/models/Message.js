@@ -45,6 +45,9 @@ messageSchema.index({ roomId: 1, createdAt: -1 });
 messageSchema.index({ senderId: 1, createdAt: -1 });
 messageSchema.index({ receiverId: 1, createdAt: -1 });
 messageSchema.index({ receiverId: 1, delivered: 1, undelivered: 1 });
+// Unread badge counts per room / per user
+messageSchema.index({ receiverId: 1, read: 1, createdAt: -1 });
+messageSchema.index({ roomId: 1, senderId: 1, isDeleted: 1 });
 
 // Validation: senderId cannot equal receiverId
 // Mongoose 9: pre hooks are async/sync without next() callback
