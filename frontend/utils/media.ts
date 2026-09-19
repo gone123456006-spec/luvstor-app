@@ -6,22 +6,15 @@ export const PRODUCTION_MEDIA_BASE = 'https://luvstor-api.onrender.com';
 /**
  * Optional CDN / production origin for `/uploads/...` when the API host
  * differs from where files actually live (common in local-dev + Atlas).
+ *
+ * Default: same host as the API (so a photo you just uploaded locally
+ * actually loads). `mediaUrlCandidates` still tries production as failover
+ * when Mongo still points at Render-hosted files.
  */
 function getMediaBase(): string {
   const fromEnv = process.env.EXPO_PUBLIC_MEDIA_BASE_URL?.trim().replace(/\/$/, '');
   if (fromEnv) return fromEnv;
-
-  const api = getApiBase();
-  try {
-    // Local / emulator / LAN API usually has an empty uploads/ folder while
-    // Mongo still points at files that live on Render.
-    if (isLocalOrEmulatorHost(new URL(api).hostname)) {
-      return PRODUCTION_MEDIA_BASE;
-    }
-  } catch {
-    /* fall through */
-  }
-  return api;
+  return getApiBase();
 }
 
 function isLocalOrEmulatorHost(hostname: string): boolean {
@@ -170,11 +163,7 @@ export function mediaUrlCandidates(url?: string | null): string[] {
     push(`${PRODUCTION_MEDIA_BASE}${path}`);
     try {
       const api = getApiBase();
-      // Skip local/LAN API when files live on production — trying it only
-      // causes a failed load → candidate hop → visible blink.
-      if (!isLocalOrEmulatorHost(new URL(api).hostname)) {
-        push(`${api}${path}`);
-      }
+      push(`${api}${path}`);
     } catch {
       /* ignore */
     }

@@ -4,7 +4,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const path = require('path');
 
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -116,14 +115,22 @@ app.use((req, res, next) => {
   });
 });
 
+const { ensureUploadsDir } = require('./utils/uploadsPath');
+const UPLOADS_DIR = ensureUploadsDir();
 app.use(
   '/uploads',
-  express.static(path.join(__dirname, 'uploads'), {
+  express.static(UPLOADS_DIR, {
     maxAge: '7d',
     etag: true,
     lastModified: true,
+    // Allow RN / Expo Image to fetch cross-origin without opaque failures
+    setHeaders(res) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
   })
 );
+console.log(`📁 Serving uploads from ${UPLOADS_DIR}`);
 
 // ── Routes ─────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
@@ -280,6 +287,20 @@ mongoose.connection.on('connected', () => {
       console.warn('referralCode index repair failed:', err.message),
     );
   }
+  // Clear stuck "Active now" flags from missed disconnects / crashes
+  const { STALE_MS } = require('./utils/onlineStatus');
+  const User = require('./models/User');
+  const cutoff = new Date(Date.now() - STALE_MS);
+  User.updateMany(
+    { isOnline: true, $or: [{ lastSeen: { $lt: cutoff } }, { lastSeen: null }] },
+    { $set: { isOnline: false } },
+  )
+    .then((r) => {
+      if (r.modifiedCount) {
+        console.log(`🧹 Cleared stale isOnline on ${r.modifiedCount} user(s)`);
+      }
+    })
+    .catch((err) => console.warn('stale isOnline cleanup failed:', err.message));
 });
 mongoose.connection.on('disconnected', () => {
   console.warn('⚠️  MongoDB disconnected — retrying, API stays up');

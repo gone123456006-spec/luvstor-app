@@ -141,7 +141,14 @@ async function enrichConversationsBatch(reqUserId, conversations) {
       : Promise.resolve([]),
   ]);
 
-  const userMap = new Map(users.map((u) => [String(u._id), u]));
+  const { resolveOnlineMap } = require('../utils/onlineStatus');
+  const onlineMap = await resolveOnlineMap(users);
+  const userMap = new Map(
+    users.map((u) => {
+      const id = String(u._id);
+      return [id, { ...u, isOnline: onlineMap.get(id) === true }];
+    }),
+  );
   const friendshipMap = new Map();
   for (const f of friendships) {
     friendshipMap.set(`${String(f.userA)}_${String(f.userB)}`, f);
@@ -1308,7 +1315,14 @@ router.get('/archived', auth, async (req, res) => {
       const users = await User.find({ _id: { $in: ids } })
         .select('name photo gender isOnline lastSeen')
         .lean();
-      const userMap = new Map(users.map((u) => [String(u._id), u]));
+      const { resolveOnlineMap } = require('../utils/onlineStatus');
+      const onlineMap = await resolveOnlineMap(users);
+      const userMap = new Map(
+        users.map((u) => {
+          const id = String(u._id);
+          return [id, { ...u, isOnline: onlineMap.get(id) === true }];
+        }),
+      );
       const friendshipOr = ids.map((oid) => {
         const { userA, userB } = Friendship.getSortedPair(req.userId, oid);
         return { userA, userB };

@@ -10,9 +10,10 @@ import React, {
 import {
   AppState,
   AppStateStatus,
+  Alert,
+  Linking,
   Vibration,
 } from 'react-native';
-import { setAudioModeAsync } from 'expo-audio';
 import { useAuth } from './AuthContext';
 import { useSocket } from './SocketContext';
 import { apiRequest } from '../utils/api';
@@ -20,6 +21,7 @@ import { getAuthToken } from '../utils/auth';
 import {
   CallPeer,
   CallMediaType,
+  CallPermissionError,
   NetworkQuality,
   ensureCallPermissions,
   isWebRTCAvailable,
@@ -30,6 +32,34 @@ import {
   dismissCallNotifications,
   presentIncomingCallLocalNotification,
 } from '../utils/push';
+import {
+  clearPendingIncomingCall,
+  getPendingIncomingCall,
+  setPendingIncomingCall,
+  subscribePendingIncomingCall,
+} from '../utils/pendingIncomingCall';
+import {
+  reinforceCallAudio,
+  setCallMicMuted,
+  setCallSpeaker,
+  startCallAudio,
+  startCallRingback,
+  startIncomingRingtone,
+  stopCallAudio,
+  stopCallRingback,
+  stopIncomingRingtone,
+} from '../utils/callAudio';
+
+function generateClientCallId(): string {
+  const rand =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+      : `${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`.slice(
+          0,
+          12,
+        );
+  return `c_${Date.now().toString(36)}_${rand}`;
+}
 
 export type CallPhase =
   | 'idle'
@@ -106,7 +136,7 @@ const initialState: CallState = {
   isExplore: false,
   muted: false,
   cameraOff: false,
-  speakerOn: true,
+  speakerOn: false,
   minimized: false,
   connectedAt: null,
   endReason: null,
@@ -189,6 +219,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const endClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remoteDescSet = useRef(false);
   const acceptCallRef = useRef<() => Promise<void>>(async () => {});
+  const declineCallRef = useRef<() => void>(() => {});
+  /** Cancel tapped before call:ringing arrived */
+  const pendingCancelRef = useRef(false);
+  /** ICE servers from ringing — used when creating offer after accept */
+  const iceServersRef = useRef<any[]>([]);
+  /** Auto accept/decline once from notification button */
+  const pendingNotifIntentRef = useRef<'accept' | 'decline' | null>(null);
 
   useEffect(() => {
     stateRef.current = state;
@@ -236,10 +273,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const finishCall = useCallback(
     (endReason: string | null) => {
       const endedId = stateRef.current.callId;
+      pendingCancelRef.current = false;
+      iceServersRef.current = [];
       stopHeartbeat();
       disposePeer();
       Vibration.cancel();
+      stopCallRingback();
+      stopIncomingRingtone();
       void dismissCallNotifications(endedId);
+      clearPendingIncomingCall(endedId);
+      void stopCallAudio();
       patch({
         phase: 'ended',
         endReason,
@@ -251,20 +294,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     },
     [disposePeer, patch, resetSoon, stopHeartbeat]
   );
-
-  const configureAudio = useCallback(async (speakerOn: boolean) => {
-    try {
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-        shouldPlayInBackground: true,
-        interruptionMode: 'doNotMix',
-        shouldRouteThroughEarpiece: !speakerOn,
-      });
-    } catch (err) {
-      console.warn('[Call] audio mode:', (err as Error).message);
-    }
-  }, []);
 
   const createPeer = useCallback(
     async (opts: {
@@ -302,6 +331,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             if (conn === 'connected' || conn === 'completed') {
               patch({ phase: 'connected', connectedAt: Date.now() });
               socket?.emit('call:connected', { callId: opts.callId });
+              // WebRTC overwrites the audio session — re-apply speaker/earpiece
+              void reinforceCallAudio(stateRef.current.speakerOn);
             } else if (conn === 'connecting') {
               patch({ phase: 'connecting' });
             } else if (conn === 'disconnected') {
@@ -320,6 +351,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
                 phase: 'connected',
                 connectedAt: stateRef.current.connectedAt || Date.now(),
               });
+              void reinforceCallAudio(stateRef.current.speakerOn);
             }
           },
           onError: (err) => patch({ error: err.message }),
@@ -346,66 +378,101 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // ── Outgoing ──────────────────────────────────────────
   const startCall = useCallback(
     async (opts: StartCallOpts) => {
-      if (!socket?.connected) {
-        patch({ error: 'Not connected. Try again.' });
-        return;
-      }
       if (stateRef.current.phase !== 'idle' && stateRef.current.phase !== 'ended') {
         patch({ error: 'Already in a call' });
         return;
       }
 
-      if (endClearTimer.current) clearTimeout(endClearTimer.current);
-
-      const peer = peerFromOpts(opts);
-
-      // Always show the other person's DP/name first (WhatsApp-style), even if setup fails
-      setState({
-        ...initialState,
-        webrtcReady: isWebRTCAvailable(),
-        phase: 'outgoing',
-        callType: opts.callType,
-        direction: 'outgoing',
-        peer,
-        speakerOn: opts.callType === 'video',
-        cameraOff: opts.callType !== 'video',
-        minimized: false,
-      });
-
-      if (!isWebRTCAvailable()) {
-        patch({
-          error: getWebRTCUnavailableMessage(),
-          phase: 'ended',
-          endReason: 'error',
-          peer,
-        });
-        resetSoon();
+      if (!socket?.connected) {
+        Alert.alert('Not connected', 'Check your internet and try again.');
         return;
       }
 
-      // Ask before ringing — otherwise a denied mic leaves the caller on a
-      // ringing screen that can never connect.
+      if (!isWebRTCAvailable()) {
+        Alert.alert('Calls unavailable', getWebRTCUnavailableMessage());
+        return;
+      }
+
+      // 1) Mic (+ speaker/Bluetooth) permission BEFORE calling UI — like WhatsApp
       try {
         await ensureCallPermissions(opts.callType);
       } catch (err) {
-        patch({
-          error: (err as Error).message || 'Microphone permission required.',
-          phase: 'ended',
-          endReason: 'error',
-          peer,
-        });
-        resetSoon();
+        const needsSettings =
+          err instanceof CallPermissionError && err.needsSettings;
+        Alert.alert(
+          'Permission needed',
+          (err as Error).message ||
+            'Allow microphone access to place voice calls.',
+          needsSettings
+            ? [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Open Settings',
+                  onPress: () => {
+                    void Linking.openSettings();
+                  },
+                },
+              ]
+            : [{ text: 'OK' }],
+        );
         return;
       }
 
-      await configureAudio(true);
+      if (endClearTimer.current) clearTimeout(endClearTimer.current);
 
+      // 2) Client callId up front — cancel works even before call:ringing
+      const callId = generateClientCallId();
+      pendingCancelRef.current = false;
+      iceServersRef.current = [];
+
+      const peer = peerFromOpts(opts);
+      const speakerOn = opts.callType === 'video';
+
+      setState({
+        ...initialState,
+        webrtcReady: true,
+        phase: 'outgoing',
+        callId,
+        callType: opts.callType,
+        direction: 'outgoing',
+        peer,
+        speakerOn,
+        cameraOff: opts.callType !== 'video',
+        minimized: false,
+        error: null,
+        peerOffline: false,
+      });
+
+      // Prefetch DP so blur + center render without a pop-in
+      const photoUrl = resolveMediaUrl(opts.photo || '') || opts.photo;
+      if (photoUrl) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { Image: ExpoImage } = require('expo-image');
+          void ExpoImage.prefetch?.(photoUrl);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // 3) Audio + ring in background
+      void (async () => {
+        try {
+          await startCallAudio({ callType: opts.callType, speakerOn });
+          void startCallRingback(speakerOn);
+        } catch {
+          /* non-fatal for UI open */
+        }
+      })();
+
+      // 4) Ring them (same callId so cancel races are safe)
       socket.emit('call:invite', {
         receiverId: opts.userId,
         callType: opts.callType,
+        callId,
       });
     },
-    [configureAudio, patch, resetSoon, socket]
+    [patch, socket]
   );
 
   const acceptCall = useCallback(async () => {
@@ -420,6 +487,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     Vibration.cancel();
+    stopIncomingRingtone();
     try {
       await ensureCallPermissions(s.callType);
     } catch (err) {
@@ -429,9 +497,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     patch({ phase: 'connecting' });
-    await configureAudio(s.speakerOn);
+    await startCallAudio({
+      callType: s.callType,
+      speakerOn: s.speakerOn,
+    });
     socket.emit('call:accept', { callId: s.callId });
-  }, [configureAudio, finishCall, patch, socket]);
+  }, [finishCall, patch, socket]);
 
   acceptCallRef.current = acceptCall;
 
@@ -443,13 +514,14 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     finishCall('decline');
   }, [finishCall, socket]);
 
+  declineCallRef.current = declineCall;
+
   const cancelCall = useCallback(() => {
     const s = stateRef.current;
-    if (!s.callId) {
-      finishCall('cancel');
-      return;
+    pendingCancelRef.current = true;
+    if (s.callId) {
+      socket?.emit('call:cancel', { callId: s.callId });
     }
-    socket?.emit('call:cancel', { callId: s.callId });
     finishCall('cancel');
   }, [finishCall, socket]);
 
@@ -463,6 +535,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setState((s) => {
       const muted = !s.muted;
       peerRef.current?.setMuted(muted);
+      setCallMicMuted(muted);
       if (s.callId) {
         socket?.emit('call:media-state', { callId: s.callId, muted });
       }
@@ -483,11 +556,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const toggleSpeaker = useCallback(async () => {
     const next = !stateRef.current.speakerOn;
-    await configureAudio(next);
+    await setCallSpeaker(next);
     patch({ speakerOn: next });
     const callId = stateRef.current.callId;
     if (callId) socket?.emit('call:media-state', { callId, speaker: next });
-  }, [configureAudio, patch, socket]);
+  }, [patch, socket]);
 
   const switchCamera = useCallback(async () => {
     await peerRef.current?.switchCamera();
@@ -532,6 +605,18 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const onRinging = async (payload: any) => {
       const callId = payload?.callId;
       if (!callId) return;
+
+      // User already hung up while invite was in flight
+      if (
+        pendingCancelRef.current ||
+        (stateRef.current.phase === 'ended' &&
+          stateRef.current.callId === callId)
+      ) {
+        pendingCancelRef.current = false;
+        socket.emit('call:cancel', { callId });
+        return;
+      }
+
       const callType: CallMediaType =
         payload.callType === 'video' ? 'video' : 'voice';
       const speakerOn = callType === 'video';
@@ -543,6 +628,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
               formatPeer(payload.callee, payload.receiverId),
             )
           : stateRef.current.peer;
+
+      iceServersRef.current = payload.iceServers || [];
+
       patch({
         phase: 'ringing',
         callId,
@@ -555,22 +643,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         peerOffline: payload.calleeOnline === false,
       });
 
+      // Keep ringback; create WebRTC offer only after callee accepts
+      startCallRingback(speakerOn);
       try {
-        if (!isWebRTCAvailable()) return;
-        await configureAudio(speakerOn);
-        const peer = await createPeer({
-          iceServers: payload.iceServers || [],
-          isCaller: true,
-          callType,
-          callId,
-        });
-        const offer = await peer.createOffer();
-        socket.emit('call:offer', { callId, sdp: offer });
-        startHeartbeat(callId);
-      } catch (err) {
-        patch({ error: (err as Error).message || 'Camera/mic unavailable' });
-        socket.emit('call:cancel', { callId });
-        finishCall('error');
+        await startCallAudio({ callType, speakerOn });
+      } catch {
+        /* non-fatal */
       }
     };
 
@@ -589,8 +667,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         ? formatExplorePeer(payload.caller)
         : formatPeer(payload.caller || {}, payload.from);
 
+      clearPendingIncomingCall(payload?.callId);
+      iceServersRef.current = payload.iceServers || [];
+
       if (!explore) {
         Vibration.vibrate([0, 500, 400, 500], true);
+        void startIncomingRingtone();
         // App backgrounded / screen off: show a local tray alert (FCM covers fully-killed)
         if (AppState.currentState !== 'active') {
           void presentIncomingCallLocalNotification({
@@ -621,6 +703,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setTimeout(() => {
           void acceptCallRef.current();
         }, 500);
+      } else if (pendingNotifIntentRef.current === 'accept') {
+        pendingNotifIntentRef.current = null;
+        setTimeout(() => {
+          void acceptCallRef.current();
+        }, 250);
+      } else if (pendingNotifIntentRef.current === 'decline') {
+        pendingNotifIntentRef.current = null;
+        setTimeout(() => {
+          declineCallRef.current();
+        }, 100);
       }
     };
 
@@ -628,10 +720,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       const callId = payload?.callId || stateRef.current.callId;
       if (!callId) return;
       Vibration.cancel();
+      stopCallRingback();
+      stopIncomingRingtone();
       patch({ phase: 'connecting', callId });
 
       const iceServers =
         payload.iceServers ||
+        iceServersRef.current ||
         (onIncoming as any)._ice ||
         [];
 
@@ -655,7 +750,21 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             await flushCandidates();
           }
         } else {
-          // Caller already has peer + offer sent
+          // Caller: create peer + offer now that callee is ready
+          if (!isWebRTCAvailable()) {
+            patch({ error: getWebRTCUnavailableMessage() });
+            socket.emit('call:end', { callId });
+            finishCall('error');
+            return;
+          }
+          await createPeer({
+            iceServers,
+            isCaller: true,
+            callType: stateRef.current.callType,
+            callId,
+          });
+          const offer = await peerRef.current?.createOffer();
+          if (offer) socket.emit('call:offer', { callId, sdp: offer });
           startHeartbeat(callId);
         }
       } catch (err) {
@@ -740,15 +849,28 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     };
 
     const onError = (payload: any) => {
-      patch({
-        error: payload?.error || 'Call failed',
-        phase: 'ended',
-        // Overlay matches lowercase reasons ('offline', 'busy')
-        endReason: String(payload?.code || 'error').toLowerCase(),
-      });
+      // Expected when cancel raced ahead of invite — don't flash an error
+      if (payload?.code === 'CANCELLED') {
+        if (stateRef.current.phase !== 'idle') finishCall('cancel');
+        return;
+      }
+      pendingCancelRef.current = false;
+      const code = String(payload?.code || 'error').toLowerCase();
+      // WhatsApp-style: stop ringing immediately and show Busy / Offline
+      stopCallRingback();
+      stopIncomingRingtone();
+      Vibration.cancel();
       disposePeer();
       stopHeartbeat();
-      Vibration.cancel();
+      void stopCallAudio();
+      patch({
+        error:
+          code === 'busy'
+            ? 'Busy on another call'
+            : payload?.error || 'Call failed',
+        phase: 'ended',
+        endReason: code,
+      });
       resetSoon();
     };
 
@@ -765,6 +887,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         phase: 'connected',
         connectedAt: stateRef.current.connectedAt || Date.now(),
       });
+      void reinforceCallAudio(stateRef.current.speakerOn);
     };
 
     socket.on('call:ringing', onRinging);
@@ -802,8 +925,81 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     socket,
     startHeartbeat,
     stopHeartbeat,
-    configureAudio,
   ]);
+
+  // Push wake / app reopen — re-request ringing incoming from server
+  useEffect(() => {
+    if (!socket?.connected) return;
+
+    const applyPendingIntent = (pending: ReturnType<typeof getPendingIncomingCall>) => {
+      if (!pending) return;
+      if (pending.intent === 'decline') {
+        socket.emit('call:decline', { callId: pending.callId });
+        clearPendingIncomingCall(pending.callId);
+        pendingNotifIntentRef.current = null;
+        if (stateRef.current.callId === pending.callId) {
+          finishCall('decline');
+        }
+        return;
+      }
+      if (pending.intent === 'accept') {
+        pendingNotifIntentRef.current = 'accept';
+      }
+      const phase = stateRef.current.phase;
+      if (phase === 'incoming' && stateRef.current.callId === pending.callId) {
+        if (pending.intent === 'accept') {
+          clearPendingIncomingCall(pending.callId);
+          void acceptCallRef.current();
+        }
+        return;
+      }
+      if (phase === 'idle' || phase === 'ended') {
+        socket.emit('call:sync');
+      }
+    };
+
+    const syncIncoming = () => {
+      const pending = getPendingIncomingCall();
+      if (pending) {
+        applyPendingIntent(pending);
+        return;
+      }
+      const phase = stateRef.current.phase;
+      if (phase !== 'idle' && phase !== 'ended') return;
+      socket.emit('call:sync');
+    };
+
+    syncIncoming();
+
+    const unsub = subscribePendingIncomingCall((pending) => {
+      if (!pending) return;
+      applyPendingIntent(pending);
+    });
+
+    const onChange = (next: AppStateStatus) => {
+      if (next === 'active') syncIncoming();
+      // App backgrounded while ringing → WhatsApp-style tray with Accept / Decline
+      if (
+        (next === 'background' || next === 'inactive') &&
+        stateRef.current.phase === 'incoming' &&
+        stateRef.current.callId &&
+        !stateRef.current.isExplore
+      ) {
+        const peer = stateRef.current.peer;
+        void presentIncomingCallLocalNotification({
+          callId: String(stateRef.current.callId),
+          callerName: peer?.name || 'Incoming call',
+          callType: stateRef.current.callType,
+          callerId: String(peer?.id || ''),
+        });
+      }
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => {
+      unsub();
+      sub.remove();
+    };
+  }, [finishCall, socket, socket?.connected]);
 
   // Restore active call UI hint after reopen (signaling still on socket)
   useEffect(() => {

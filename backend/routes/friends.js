@@ -177,7 +177,14 @@ router.get('/requests', auth, async (req, res) => {
     const others = await User.find({ _id: { $in: otherIds } })
       .select('name photo gender age bio isOnline lastSeen')
       .lean();
-    const otherMap = new Map(others.map((u) => [String(u._id), u]));
+    const { resolveOnlineMap } = require('../utils/onlineStatus');
+    const onlineMap = await resolveOnlineMap(others);
+    const otherMap = new Map(
+      others.map((u) => {
+        const id = String(u._id);
+        return [id, { ...u, isOnline: onlineMap.get(id) === true }];
+      }),
+    );
     const enriched = matches.map((m) => {
       const otherId = String(m.userA) === req.userId ? m.userB : m.userA;
       return {
@@ -330,7 +337,14 @@ router.get('/list', auth, async (req, res) => {
     const others = await User.find({ _id: { $in: otherIds } })
       .select('name photo gender age bio isOnline lastSeen')
       .lean();
-    const otherMap = new Map(others.map((u) => [String(u._id), u]));
+    const { resolveOnlineMap } = require('../utils/onlineStatus');
+    const onlineMap = await resolveOnlineMap(others);
+    const otherMap = new Map(
+      others.map((u) => {
+        const id = String(u._id);
+        return [id, { ...u, isOnline: onlineMap.get(id) === true }];
+      }),
+    );
     const enriched = friendships.map((f) => {
       const otherId = String(f.userA) === req.userId ? f.userB : f.userA;
       return {

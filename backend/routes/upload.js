@@ -4,12 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const auth = require('../middleware/auth');
 const Upload = require('../models/Upload');
+const { ensureUploadsDir } = require('../utils/uploadsPath');
 
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
-
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
+const UPLOADS_DIR = ensureUploadsDir();
 
 function parseDataUri(base64) {
   const matches = String(base64 || '').match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);

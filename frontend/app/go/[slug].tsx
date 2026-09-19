@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getApiBase } from '../../utils/api';
+import { fetchWithTimeout, getApiBase } from '../../utils/api';
 import { setPendingReferralCode } from '../../utils/pendingReferral';
 import { useAuth } from '../../contexts/AuthContext';
 import { resolvePostLoginRoute } from '../../utils/auth';
@@ -29,7 +29,9 @@ export default function GoShortLinkScreen() {
         return;
       }
       try {
-        const res = await fetch(`${getApiBase()}/api/share/resolve/${slug}`);
+        const res = await fetchWithTimeout(
+          `${getApiBase()}/api/share/resolve/${slug}`,
+        );
         const data = res.ok ? await res.json() : null;
         if (cancelled) return;
 

@@ -1035,7 +1035,7 @@ const styles = StyleSheet.create({
 
   /* Prefs sheet — in-tree so footer tabs stay visible */
   sheetHost: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 2000,
     elevation: 2000,
     justifyContent: "flex-end",
@@ -1103,10 +1103,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 14,
     fontWeight: "600",
-    color: T.primary,
+    color: T.text,
   },
   subBuyBtn: {
-    backgroundColor: T.primary,
+    backgroundColor: T.text,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
@@ -1148,12 +1148,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 8,
     borderRadius: 20,
-    backgroundColor: T.primarySoft,
+    backgroundColor: "#E8E8ED",
     alignItems: "center",
     justifyContent: "center",
   },
   chipOn: {
-    backgroundColor: T.primary,
+    backgroundColor: T.text,
   },
   chipLocked: {
     opacity: 0.55,

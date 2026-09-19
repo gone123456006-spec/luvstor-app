@@ -3,11 +3,13 @@ import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActionSheetIOS,
     ActivityIndicator,
     Alert,
+    Animated,
+    Easing,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -141,6 +143,18 @@ export default function ProfileScreen() {
   const [ticketCategory, setTicketCategory] = useState("Account");
   const supportScrollRef = useRef<ScrollView>(null);
   const [photoOptionsVisible, setPhotoOptionsVisible] = useState(false);
+  /** All DP UI stays on Edit Profile: menu → remove confirm → notice */
+  const [photoSheetStep, setPhotoSheetStep] = useState<
+    "menu" | "remove" | "notice"
+  >("menu");
+  const [photoSheetNotice, setPhotoSheetNotice] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
+  const photoSheetAnim = useRef(new Animated.Value(0)).current;
+  const photoSheetClosingRef = useRef(false);
+  /** Open DP sheet after Edit Profile finishes presenting */
+  const pendingPhotoSheetRef = useRef(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [editVisible, setEditVisible] = useState(false);
   const [infoVisible, setInfoVisible] = useState(false);
@@ -230,6 +244,13 @@ export default function ProfileScreen() {
   const toRelative = (url?: string | null) => {
     if (!url) return "";
     const clean = url.split("?")[0];
+    if (
+      clean.startsWith("file://") ||
+      clean.startsWith("content://") ||
+      clean.startsWith("data:")
+    ) {
+      return "";
+    }
     try {
       const parsed = new URL(clean);
       if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
@@ -279,8 +300,11 @@ export default function ProfileScreen() {
         return null;
       }
 
+      // Prefer relative path — resolve at display time against current API host
       const absoluteUrl = toAbsolute(url);
-      const busted = `${absoluteUrl}?t=${Date.now()}`;
+      const busted = absoluteUrl
+        ? `${absoluteUrl.split("?")[0]}?t=${Date.now()}`
+        : uri;
 
       // Update profile with new photo URL on backend
       await apiRequest("/api/users/me", token, {
@@ -288,25 +312,35 @@ export default function ProfileScreen() {
         body: JSON.stringify({ photo: url }),
       });
 
-      // Update local profile immediately
+      // Update local profile immediately (store relative when possible)
       const authUser = await getCurrentAuthUser();
       if (authUser?.email) {
         const currentProfile = await getLocalProfile(authUser.email);
         await saveLocalProfile(authUser.email, {
           ...currentProfile,
-          photo: absoluteUrl,
+          photo: toRelative(url) || url,
         });
       }
 
-      setProfile((prev: any) => (prev ? { ...prev, photo: busted } : prev));
-      updateCachedProfile({ photo: busted });
-      setEditPhotoUri(busted);
+      // Keep local file as display until remote is ready — never blank the DP
+      const displayPhoto = busted || uri;
+      setProfile((prev: any) =>
+        prev ? { ...prev, photo: displayPhoto } : prev,
+      );
+      const prevSnap = getCachedProfile();
+      updateCachedProfile({
+        profile: {
+          ...(prevSnap?.profile || profile || {}),
+          photo: displayPhoto,
+        } as any,
+      });
+      setEditPhotoUri(displayPhoto);
 
       if (authUser) {
         bumpProfileLocal({
           userId: String(authUser.id || profile?.id || ""),
           name: profile?.name,
-          photo: busted,
+          photo: displayPhoto,
           gender: profile?.gender,
         });
       }
@@ -316,18 +350,101 @@ export default function ProfileScreen() {
     } catch (error: any) {
       console.error("Upload error:", error);
       setEditPhotoUri(null);
-      Alert.alert("Upload Error", error?.message || "Failed to upload photo");
+      if (editVisible) {
+        showDpNotice(
+          "Upload Error",
+          error?.message || "Failed to upload photo",
+        );
+      } else {
+        Alert.alert("Upload Error", error?.message || "Failed to upload photo");
+      }
       setUploadingPhoto(false);
       return null;
     }
   };
 
+  const showDpNotice = (title: string, message: string) => {
+    // DP notices only as Edit Profile bottom sheet — never Profile AppAlert
+    setPhotoSheetNotice({ title, message });
+    setPhotoSheetStep("notice");
+    if (!editVisible) {
+      pendingPhotoSheetRef.current = true;
+      return;
+    }
+    photoSheetClosingRef.current = false;
+    photoSheetAnim.setValue(0);
+    setPhotoOptionsVisible(true);
+  };
+
+  const openPhotoSheet = useCallback(() => {
+    if (!editVisible) {
+      pendingPhotoSheetRef.current = true;
+      return;
+    }
+    photoSheetClosingRef.current = false;
+    setPhotoSheetNotice(null);
+    setPhotoSheetStep("menu");
+    photoSheetAnim.setValue(0);
+    setPhotoOptionsVisible(true);
+  }, [editVisible, photoSheetAnim]);
+
+  const closePhotoSheet = useCallback(() => {
+    if (photoSheetClosingRef.current) return;
+    photoSheetClosingRef.current = true;
+    Animated.timing(photoSheetAnim, {
+      toValue: 0,
+      duration: 220,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setPhotoOptionsVisible(false);
+        setPhotoSheetStep("menu");
+        setPhotoSheetNotice(null);
+        photoSheetClosingRef.current = false;
+      }
+    });
+  }, [photoSheetAnim]);
+
+  useEffect(() => {
+    if (!editVisible) {
+      setPhotoOptionsVisible(false);
+      return;
+    }
+    if (pendingPhotoSheetRef.current) {
+      pendingPhotoSheetRef.current = false;
+      photoSheetClosingRef.current = false;
+      photoSheetAnim.setValue(0);
+      setPhotoOptionsVisible(true);
+    }
+  }, [editVisible, photoSheetAnim]);
+
+  useEffect(() => {
+    if (!(editVisible && photoOptionsVisible)) return;
+    photoSheetClosingRef.current = false;
+    photoSheetAnim.setValue(0);
+    Animated.spring(photoSheetAnim, {
+      toValue: 1,
+      damping: 18,
+      stiffness: 220,
+      mass: 0.85,
+      useNativeDriver: true,
+    }).start();
+  }, [editVisible, photoOptionsVisible, photoSheetAnim]);
+
+  const handlePhotoPress = () => {
+    openPhotoSheet();
+  };
+
   const takePhoto = async () => {
     setPhotoOptionsVisible(false);
+    photoSheetAnim.setValue(0);
+    photoSheetClosingRef.current = false;
+    setPhotoSheetStep("menu");
 
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert(
+      showDpNotice(
         "Permission needed",
         "Please allow camera access to take photos",
       );
@@ -346,17 +463,23 @@ export default function ProfileScreen() {
       setEditPhotoUri(localUri);
       const photoUrl = await uploadPhotoToBackend(localUri);
       if (!photoUrl) {
-        Alert.alert("Error", "Failed to upload photo. Please try again.");
+        showDpNotice(
+          "Upload failed",
+          "Failed to upload photo. Please try again.",
+        );
       }
     }
   };
 
   const chooseFromGallery = async () => {
     setPhotoOptionsVisible(false);
+    photoSheetAnim.setValue(0);
+    photoSheetClosingRef.current = false;
+    setPhotoSheetStep("menu");
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission needed", "Please allow photo library access");
+      showDpNotice("Permission needed", "Please allow photo library access");
       return;
     }
 
@@ -372,62 +495,60 @@ export default function ProfileScreen() {
       setEditPhotoUri(localUri);
       const photoUrl = await uploadPhotoToBackend(localUri);
       if (!photoUrl) {
-        Alert.alert("Error", "Failed to upload photo. Please try again.");
+        showDpNotice(
+          "Upload failed",
+          "Failed to upload photo. Please try again.",
+        );
       }
     }
   };
 
-  const removePhoto = async () => {
-    setPhotoOptionsVisible(false);
+  const removePhoto = () => {
+    // Stay on Edit page — same bottom sheet, confirm step
+    setPhotoSheetStep("remove");
+  };
 
-    Alert.alert(
-      "Remove Photo",
-      "Are you sure you want to remove your profile picture?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const token = await getAuthToken();
-              if (!token) return;
+  const confirmRemovePhoto = async () => {
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        showDpNotice("Error", "Please sign in again");
+        return;
+      }
 
-              // Update backend
-              await apiRequest("/api/users/me", token, {
-                method: "PUT",
-                body: JSON.stringify({ photo: "" }),
-              });
+      await apiRequest("/api/users/me", token, {
+        method: "PUT",
+        body: JSON.stringify({ photo: "" }),
+      });
 
-              // Update local profile
-              const authUser = await getCurrentAuthUser();
-              if (authUser?.email) {
-                const currentProfile = await getLocalProfile(authUser.email);
-                await saveLocalProfile(authUser.email, {
-                  ...currentProfile,
-                  photo: "",
-                });
-              }
-              setProfile((prev: any) => (prev ? { ...prev, photo: "" } : prev));
-              setEditPhotoUri(null);
-              updateCachedProfile({ photo: "" });
-              if (authUser) {
-                bumpProfileLocal({
-                  userId: String(authUser.id || profile?.id || ""),
-                  name: profile?.name,
-                  photo: "",
-                  gender: profile?.gender,
-                });
-              }
-
-              Alert.alert("Success", "Profile picture removed");
-            } catch (error) {
-              Alert.alert("Error", "Failed to remove photo");
-            }
-          },
-        },
-      ],
-    );
+      const authUser = await getCurrentAuthUser();
+      if (authUser?.email) {
+        const currentProfile = await getLocalProfile(authUser.email);
+        await saveLocalProfile(authUser.email, {
+          ...currentProfile,
+          photo: "",
+        });
+      }
+      setProfile((prev: any) => (prev ? { ...prev, photo: "" } : prev));
+      setEditPhotoUri(null);
+      updateCachedProfile({
+        profile: {
+          ...(getCachedProfile()?.profile || {}),
+          photo: "",
+        } as any,
+      });
+      if (authUser) {
+        bumpProfileLocal({
+          userId: String(authUser.id || profile?.id || ""),
+          name: profile?.name,
+          photo: "",
+          gender: profile?.gender,
+        });
+      }
+      closePhotoSheet();
+    } catch {
+      showDpNotice("Error", "Failed to remove photo");
+    }
   };
 
   const showPhotoViewer = (uris: string[], index: number, title = "Photos") => {
@@ -440,6 +561,7 @@ export default function ProfileScreen() {
 
   const viewPhoto = () => {
     setPhotoOptionsVisible(false);
+    photoSheetAnim.setValue(0);
     const avatar = editPhotoUri || profile?.photo;
     if (!avatar) return;
     const uris = gallery.filter(Boolean);
@@ -451,47 +573,6 @@ export default function ProfileScreen() {
       return;
     }
     showPhotoViewer([avatar], 0, "Profile photo");
-  };
-
-  const handlePhotoPress = () => {
-    if (Platform.OS === "ios") {
-      // iOS Action Sheet
-      const hasPhoto = !!(editPhotoUri || profile?.photo);
-      const options = hasPhoto
-        ? [
-            "View Photo",
-            "Take Photo",
-            "Choose from Library",
-            "Remove Photo",
-            "Cancel",
-          ]
-        : ["Take Photo", "Choose from Library", "Cancel"];
-
-      const destructiveIndex = hasPhoto ? 3 : -1;
-      const cancelIndex = hasPhoto ? 4 : 2;
-
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options,
-          cancelButtonIndex: cancelIndex,
-          destructiveButtonIndex: destructiveIndex,
-        },
-        (buttonIndex) => {
-          if (hasPhoto) {
-            if (buttonIndex === 0) viewPhoto();
-            else if (buttonIndex === 1) takePhoto();
-            else if (buttonIndex === 2) chooseFromGallery();
-            else if (buttonIndex === 3) removePhoto();
-          } else {
-            if (buttonIndex === 0) takePhoto();
-            else if (buttonIndex === 1) chooseFromGallery();
-          }
-        },
-      );
-    } else {
-      // Android Modal
-      setPhotoOptionsVisible(true);
-    }
   };
 
   // ── Cover (independent from DP + posts) ───────────────────────
@@ -663,7 +744,14 @@ export default function ProfileScreen() {
   const persistGallery = async (next: string[]) => {
     const token = await getAuthToken();
     if (!token) return;
-    const relative = next.map(toRelative).filter(Boolean);
+    const relative = next
+      .map(toRelative)
+      .filter((u) => u.startsWith("/uploads/"));
+
+    // Don't wipe server photos if we only have local previews still uploading
+    if (!relative.length && next.some((u) => String(u).startsWith("file:"))) {
+      return;
+    }
 
     const res = await apiRequest("/api/users/me", token, {
       method: "PUT",
@@ -712,18 +800,32 @@ export default function ProfileScreen() {
 
     if (result.canceled || !result.assets?.[0]) return;
 
+    const localUri = result.assets[0].uri;
     setGallerySlotBusy(index);
+    // Show the picked image immediately (file://) — don't wait on upload
+    setGallery((prev) => {
+      const optimistic = [...prev];
+      while (optimistic.length <= index) optimistic.push("");
+      optimistic[index] = localUri;
+      return optimistic.filter(Boolean).slice(0, MAX_PROFILE_GALLERY);
+    });
     try {
-      const url = await uploadImage(result.assets[0].uri);
+      const url = await uploadImage(localUri);
       if (!url) throw new Error("Upload failed");
 
-      const next = [...gallery];
-      next[index] = toAbsolute(url);
-      const compact = next.filter(Boolean).slice(0, MAX_PROFILE_GALLERY);
-
-      setGallery(compact);
+      const remote = toAbsolute(url) || localUri;
+      let compact: string[] = [];
+      setGallery((prev) => {
+        const next = [...prev];
+        while (next.length <= index) next.push("");
+        next[index] = remote;
+        compact = next.filter(Boolean).slice(0, MAX_PROFILE_GALLERY);
+        return compact;
+      });
       await persistGallery(compact);
+      updateCachedProfile({ gallery: compact });
     } catch (e: any) {
+      // Keep the local preview visible even if upload failed
       Alert.alert("Upload failed", e?.message || "Please try again.");
     } finally {
       setGallerySlotBusy(null);
@@ -1004,15 +1106,21 @@ export default function ProfileScreen() {
         applyProfileSnapshot(cached);
       }
 
-      void preloadProfile({ force: true }).then((snapshot) => {
+      // Soft refresh — force only if cache is empty / very stale
+      void preloadProfile({ force: !cached }).then((snapshot) => {
         if (snapshot && !coverBusyRef.current) {
           applyProfileSnapshot(snapshot);
         }
       });
 
-      // Direct /me cover sync — bypasses stale empty cache races
+      // Direct /me cover sync — at most once per minute while hopping tabs
       void (async () => {
         try {
+          const now = Date.now();
+          const last = (globalThis as any).__luvstorProfileMeAt || 0;
+          if (now - last < 60_000 && cached?.profile?.coverPhoto) return;
+          (globalThis as any).__luvstorProfileMeAt = now;
+
           const token = await getAuthToken();
           if (!token || coverBusyRef.current) return;
           const me: any = await apiRequest("/api/users/me", token);
@@ -1104,15 +1212,10 @@ export default function ProfileScreen() {
           <View style={[styles.coverWrap, { height: coverHeight }]}>
             {coverUri ? (
               <MediaImage
-                uri={coverUri}
+                uri={coverPhoto || profile?.coverPhoto || coverUri}
                 style={{ width: "100%", height: coverHeight }}
                 contentFit="cover"
                 cachePolicy="memory-disk"
-                onExhausted={() => {
-                  // Drop broken cover so gradient placeholder shows
-                  coverPhotoRef.current = "";
-                  setCoverPhoto("");
-                }}
               />
             ) : (
               <LinearGradient
@@ -1159,13 +1262,19 @@ export default function ProfileScreen() {
             <TouchableOpacity
               style={styles.avatarWrap}
               onPress={() => {
-                if (profile?.photo) viewPhoto();
+                if (editPhotoUri || profile?.photo) {
+                  viewPhoto();
+                  return;
+                }
+                // DP add/edit only on Edit Profile — never Profile-tab alerts
+                pendingPhotoSheetRef.current = true;
+                openEditProfile();
               }}
-              activeOpacity={profile?.photo ? 0.85 : 1}
-              disabled={uploadingPhoto || !profile?.photo}
+              activeOpacity={0.85}
+              disabled={uploadingPhoto}
             >
               <WhatsAppAvatar
-                photo={profile?.photo}
+                photo={editPhotoUri || profile?.photo}
                 name={profile?.name}
                 publicId={profile?.publicId}
                 size={78}
@@ -1273,12 +1382,15 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
 
-      {/* ── Edit Profile (Instagram-style) ── */}
+      {/* ── Edit Profile (Instagram-style) — DP sheets live inside this page ── */}
       <Modal
         animationType="slide"
         visible={editVisible}
         onRequestClose={() => {
           if (savingEdit) return;
+          setPhotoOptionsVisible(false);
+          setPhotoSheetStep("menu");
+          setPhotoSheetNotice(null);
           setEditPhotoUri(null);
           setEditVisible(false);
         }}
@@ -1292,6 +1404,9 @@ export default function ProfileScreen() {
               <TouchableOpacity
                 onPress={() => {
                   if (savingEdit) return;
+                  setPhotoOptionsVisible(false);
+                  setPhotoSheetStep("menu");
+                  setPhotoSheetNotice(null);
                   setEditPhotoUri(null);
                   setEditVisible(false);
                 }}
@@ -1582,6 +1697,172 @@ export default function ProfileScreen() {
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
+
+          {/* DP bottom sheet — only on Edit Profile (tabs stay hidden) */}
+          {photoOptionsVisible ? (
+            <View
+              style={styles.photoSheetHost}
+              pointerEvents="box-none"
+              collapsable={false}
+            >
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.photoModalDimFill,
+                  {
+                    opacity: photoSheetAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, 1],
+                    }),
+                  },
+                ]}
+              />
+              <Pressable
+                style={StyleSheet.absoluteFill}
+                onPress={closePhotoSheet}
+              />
+              <Animated.View
+                style={[
+                  styles.photoOptionsContainer,
+                  {
+                    paddingBottom: 12 + Math.max(insets.bottom, 0),
+                    transform: [
+                      {
+                        translateY: photoSheetAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [420, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.photoSheetHandle} />
+                {photoSheetStep === "remove" ? (
+                  <>
+                    <Text style={styles.photoOptionsTitle}>Remove Photo</Text>
+                    <Text style={styles.photoSheetMessage}>
+                      Are you sure you want to remove your profile picture?
+                    </Text>
+                    <View style={styles.dpConfirmDivider} />
+                    <View style={styles.dpConfirmRow}>
+                      <TouchableOpacity
+                        style={styles.dpConfirmBtn}
+                        onPress={confirmRemovePhoto}
+                        activeOpacity={0.55}
+                      >
+                        <Text style={styles.dpConfirmRemove}>Remove</Text>
+                      </TouchableOpacity>
+                      <View style={styles.dpConfirmVDivider} />
+                      <TouchableOpacity
+                        style={styles.dpConfirmBtn}
+                        onPress={() => setPhotoSheetStep("menu")}
+                        activeOpacity={0.55}
+                      >
+                        <Text style={styles.dpConfirmCancel}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : photoSheetStep === "notice" ? (
+                  <>
+                    <Text style={styles.photoOptionsTitle}>
+                      {photoSheetNotice?.title || "Notice"}
+                    </Text>
+                    {!!photoSheetNotice?.message && (
+                      <Text style={styles.photoSheetMessage}>
+                        {photoSheetNotice.message}
+                      </Text>
+                    )}
+                    <View style={styles.dpConfirmDivider} />
+                    <TouchableOpacity
+                      style={styles.dpConfirmBtn}
+                      onPress={closePhotoSheet}
+                      activeOpacity={0.55}
+                    >
+                      <Text style={styles.dpConfirmCancel}>OK</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.photoOptionsTitle}>Profile Photo</Text>
+
+                    {(editPhotoUri || profile?.photo) && (
+                      <TouchableOpacity
+                        style={styles.photoOption}
+                        onPress={viewPhoto}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons
+                          name="eye-outline"
+                          size={22}
+                          color={C.primary}
+                        />
+                        <Text style={styles.photoOptionText}>View Photo</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.photoOption}
+                      onPress={takePhoto}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name="camera-outline"
+                        size={22}
+                        color={C.primary}
+                      />
+                      <Text style={styles.photoOptionText}>Take Photo</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.photoOption}
+                      onPress={chooseFromGallery}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name="images-outline"
+                        size={22}
+                        color={C.primary}
+                      />
+                      <Text style={styles.photoOptionText}>
+                        Choose from Gallery
+                      </Text>
+                    </TouchableOpacity>
+
+                    {(editPhotoUri || profile?.photo) && (
+                      <TouchableOpacity
+                        style={[styles.photoOption, styles.photoOptionDanger]}
+                        onPress={removePhoto}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={22}
+                          color="#f44336"
+                        />
+                        <Text
+                          style={[
+                            styles.photoOptionText,
+                            styles.photoOptionDangerText,
+                          ]}
+                        >
+                          Remove Photo
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.photoOptionCancel}
+                      onPress={closePhotoSheet}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.photoOptionCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </Animated.View>
+            </View>
+          ) : null}
         </View>
       </Modal>
 
@@ -2135,76 +2416,6 @@ export default function ProfileScreen() {
       />
     </SafeAreaView>
 
-      {/* Sheets outside SafeArea so they sit flush above the tab bar */}
-      {photoOptionsVisible ? (
-        <View style={styles.photoSheetHost} pointerEvents="box-none">
-          <Pressable
-            style={[styles.photoModalDim, { bottom: tabClearance }]}
-            onPress={() => setPhotoOptionsVisible(false)}
-          />
-          <View
-            style={[
-              styles.photoOptionsContainer,
-              { marginBottom: tabClearance },
-            ]}
-          >
-            <Text style={styles.photoOptionsTitle}>Profile Photo</Text>
-
-            {(editPhotoUri || profile?.photo) && (
-              <TouchableOpacity
-                style={styles.photoOption}
-                onPress={viewPhoto}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="eye-outline" size={22} color={C.primary} />
-                <Text style={styles.photoOptionText}>View Photo</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={styles.photoOption}
-              onPress={takePhoto}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="camera-outline" size={22} color={C.primary} />
-              <Text style={styles.photoOptionText}>Take Photo</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.photoOption}
-              onPress={chooseFromGallery}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="images-outline" size={22} color={C.primary} />
-              <Text style={styles.photoOptionText}>Choose from Gallery</Text>
-            </TouchableOpacity>
-
-            {(editPhotoUri || profile?.photo) && (
-              <TouchableOpacity
-                style={[styles.photoOption, styles.photoOptionDanger]}
-                onPress={removePhoto}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="trash-outline" size={22} color="#f44336" />
-                <Text
-                  style={[styles.photoOptionText, styles.photoOptionDangerText]}
-                >
-                  Remove Photo
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={styles.photoOptionCancel}
-              onPress={() => setPhotoOptionsVisible(false)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.photoOptionCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
-
       {coverOptionsVisible ? (
         <View style={styles.photoSheetHost} pointerEvents="box-none">
           <Pressable
@@ -2682,6 +2893,8 @@ const styles = StyleSheet.create({
   igEditRoot: {
     flex: 1,
     backgroundColor: "#F5F5F7",
+    position: "relative",
+    overflow: "hidden",
   },
   igEditHeader: {
     flexDirection: "row",
@@ -3466,8 +3679,13 @@ const styles = StyleSheet.create({
   // Photo options sheet — full window, flush toward footer tabs
   photoSheetHost: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 2000,
-    elevation: 2000,
+    zIndex: 100000,
+    elevation: 100000,
+    justifyContent: "flex-end",
+  },
+  /** Modal root must use flex:1 so the sheet pins to the bottom */
+  photoSheetModalRoot: {
+    flex: 1,
     justifyContent: "flex-end",
   },
   photoModalDim: {
@@ -3477,15 +3695,77 @@ const styles = StyleSheet.create({
     right: 0,
     backgroundColor: "rgba(0,0,0,0.5)",
   },
+  photoModalDimFill: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  photoSheetHandle: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#C7C7CC",
+    marginBottom: 12,
+  },
+  photoSheetMessage: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: C.onSurfaceVariant,
+    textAlign: "center",
+    marginBottom: 16,
+    paddingHorizontal: 8,
+  },
+  dpConfirmCard: {
+    backgroundColor: "#E4E6EB",
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 4,
+  },
+  dpConfirmDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(60, 60, 67, 0.29)",
+    marginHorizontal: -16,
+  },
+  dpConfirmRow: {
+    flexDirection: "row",
+    minHeight: 56,
+    alignItems: "stretch",
+    marginHorizontal: -16,
+    marginBottom: -8,
+  },
+  dpConfirmBtn: {
+    flex: 1,
+    minHeight: 56,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  dpConfirmVDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: "stretch",
+    backgroundColor: "rgba(60, 60, 67, 0.29)",
+  },
+  dpConfirmRemove: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#FF3B30",
+  },
+  dpConfirmCancel: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#007AFF",
+  },
   photoOptionsContainer: {
     backgroundColor: "#E4E6EB",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    paddingTop: 16,
+    paddingTop: 10,
     paddingHorizontal: 16,
     paddingBottom: 8,
     zIndex: 1,
     elevation: 8,
+    width: "100%",
+    alignSelf: "stretch",
   },
   photoOptionsTitle: {
     fontSize: 16,

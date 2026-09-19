@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
 import { getAuthToken, isValidPublicId } from './auth';
-import { getApiBase } from './api';
+import { fetchWithTimeout, getApiBase } from './api';
 
 /** Custom app scheme (app.json → scheme) */
 export const APP_SCHEME = 'luvstor';
@@ -65,7 +65,7 @@ export async function fetchBrandedProfileShareUrl(
           `/api/share/profile/${id}`
         : `/api/share/profile/${id}`;
 
-    const res = await fetch(`${getApiBase()}${path}`, { headers });
+    const res = await fetchWithTimeout(`${getApiBase()}${path}`, { headers });
     if (!res.ok) return buildProfileHttpsUrl(id);
     const data = await res.json();
     return String(data.shareUrl || '').trim() || buildProfileHttpsUrl(id);

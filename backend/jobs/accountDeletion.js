@@ -123,7 +123,8 @@ async function permanentlyDeleteAccounts() {
         await DeviceToken.deleteMany({ userId });
 
         // Delete user's upload folder if exists
-        const uploadDir = path.join(__dirname, '../uploads', String(userId));
+        const { getUploadsDir } = require('../utils/uploadsPath');
+        const uploadDir = path.join(getUploadsDir(), String(userId));
         try {
           await fs.rm(uploadDir, { recursive: true, force: true });
           console.log(`[Permanent Deletion] Deleted upload folder: ${uploadDir}`);

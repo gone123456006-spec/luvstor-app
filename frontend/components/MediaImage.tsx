@@ -1,7 +1,11 @@
 import { Image, type ImageContentFit, type ImageProps } from "expo-image";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleProp, ViewStyle } from "react-native";
-import { mediaIdentity, resolveMediaUrl } from "../utils/media";
+import {
+  mediaIdentity,
+  mediaUrlCandidates,
+  resolveMediaUrl,
+} from "../utils/media";
 
 type Props = {
   uri?: string | null;
@@ -13,7 +17,7 @@ type Props = {
   cachePolicy?: ImageProps["cachePolicy"];
   onLoad?: ImageProps["onLoad"];
   onError?: ImageProps["onError"];
-  /** Called when the resolved URL fails to load */
+  /** Called when every candidate URL fails to load */
   onExhausted?: () => void;
 };
 
@@ -21,15 +25,15 @@ type Props = {
  * Warm disk cache so DP / cover / posts stay visible offline once seen.
  */
 export function prefetchMedia(uri?: string | null): void {
-  const resolved = resolveMediaUrl(uri);
-  if (!resolved) return;
-  Image.prefetch(resolved, "memory-disk").catch(() => {});
+  for (const candidate of mediaUrlCandidates(uri)) {
+    Image.prefetch(candidate, "memory-disk").catch(() => {});
+  }
 }
 
 /**
- * Single-URL media image — no candidate hopping / remounts.
- * Multi-URL failover was causing blink-blink-blink as each failed URL
- * triggered a setState and a blank frame.
+ * Loads profile / post / cover media with quiet host failover.
+ * Tries production + API bases for `/uploads/...` without blanking the
+ * previous frame between hops (recyclingKey stays on media identity).
  */
 export default function MediaImage({
   uri,
@@ -42,8 +46,18 @@ export default function MediaImage({
   onError,
   onExhausted,
 }: Props) {
-  const resolved = useMemo(() => resolveMediaUrl(uri) || "", [uri]);
-  const identity = useMemo(() => mediaIdentity(uri) || resolved, [uri, resolved]);
+  const candidates = useMemo(() => mediaUrlCandidates(uri), [uri]);
+  const identity = useMemo(
+    () => mediaIdentity(uri) || candidates[0] || "",
+    [uri, candidates],
+  );
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [identity]);
+
+  const resolved = candidates[index] || resolveMediaUrl(uri) || "";
 
   if (!resolved) return null;
 
@@ -55,11 +69,16 @@ export default function MediaImage({
       cachePolicy={cachePolicy}
       transition={transition}
       {...(recyclingKey
-        ? { recyclingKey: `${recyclingKey}:${identity}` }
+        ? { recyclingKey: `${recyclingKey}:${identity}:c${index}` }
         : null)}
       onLoad={onLoad}
       onError={(e) => {
         onError?.(e);
+        const next = index + 1;
+        if (next < candidates.length) {
+          setIndex(next);
+          return;
+        }
         onExhausted?.();
       }}
     />

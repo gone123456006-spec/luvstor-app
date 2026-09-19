@@ -33,11 +33,24 @@ export function emailLoginErrorMessage(err: unknown, fallback?: string): string 
   }
 
   const lower = raw.toLowerCase();
+
+  // Email transport misconfig on Render — don't hide behind "high demand"
+  if (
+    /brevo|smtp|email blocked|email is not configured|cannot reach smtp|verification email/i.test(
+      lower,
+    )
+  ) {
+    return (
+      'Email OTP is not available right now (mail service not configured on the server). ' +
+      GOOGLE_HINT
+    );
+  }
+
   const looksLikeServerOrNetwork =
     status >= 500 ||
     status === 429 ||
     status === 408 ||
-    /network|timeout|timed out|failed to fetch|fetch failed|econnrefused|unavailable|high demand|too many|server error|overload|gateway|bad gateway|service unavailable|internal server|connection/i.test(
+    /network|timeout|timed out|failed to fetch|fetch failed|econnrefused|unavailable|high demand|too many|server error|overload|gateway|bad gateway|service unavailable|internal server|connection|took too long/i.test(
       lower,
     ) ||
     status === 0;

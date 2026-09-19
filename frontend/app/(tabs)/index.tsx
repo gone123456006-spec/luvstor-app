@@ -31,6 +31,7 @@ import WhatsAppAvatar, {
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
+import { useStableBottomInset } from "../../hooks/useStableBottomInset";
 import { mediaIdentity, resolveMediaUrl } from "../../utils/media";
 import {
     getAuthToken,
@@ -61,8 +62,8 @@ import {
     RECENT_SEARCH_HOME,
     type RecentSearchPerson,
 } from "../../utils/recentSearches";
-
-const FALLBACK_AVATAR = require("../../assets/images/boy-image.png");
+import { getCachedProfile, preloadProfile } from "../../utils/profileCache";
+import { apiRequest } from "../../utils/api";
 
 /** Discover theme — deep purple + black */
 const D = {
@@ -289,7 +290,7 @@ const ItemSeparator = () => <View style={styles.separator} />;
 export default function DiscoverScreen() {
   const router = useRouter();
   const { showAlert } = useAppAlert();
-  const { sessionVersion } = useAuth();
+  const { sessionVersion, user } = useAuth();
   const {
     profileTick,
     lastProfileUpdate,
@@ -300,7 +301,10 @@ export default function DiscoverScreen() {
     lastFriendUpdate,
   } = useSocket();
 
-  const [profilePhoto, setProfilePhoto] = React.useState<string | null>(null);
+  const [profilePhoto, setProfilePhoto] = React.useState<string | null>(() => {
+    const cached = getCachedProfile()?.profile?.photo;
+    return resolveMediaUrl(cached) || cached || null;
+  });
   const [nearbyUsers, setNearbyUsers] = React.useState<NearbyUser[]>([]);
   const [forYouUsers, setForYouUsers] = React.useState<NearbyUser[]>([]);
   const [feedTab, setFeedTab] = React.useState<"nearby" | "for_you">("nearby");
@@ -501,22 +505,69 @@ export default function DiscoverScreen() {
     };
   }, [debouncedSearch]);
 
-  // ── Load own profile photo ──────────────────────────────────────
+  // ── Load own profile photo for top-nav DP ───────────────────────
+  const applyOwnPhoto = React.useCallback((raw?: string | null) => {
+    const resolved = resolveMediaUrl(raw) || (raw ? String(raw).trim() : "");
+    setProfilePhoto(resolved || null);
+  }, []);
+
   useFocusEffect(
     React.useCallback(() => {
+      let cancelled = false;
       const load = async () => {
         try {
+          // Instant: in-memory cache from Profile tab
+          const cached = getCachedProfile();
+          if (cached?.profile?.photo && !cancelled) {
+            applyOwnPhoto(cached.profile.photo);
+          }
+
           const authUser = await getCurrentAuthUser();
-          if (!authUser?.email) return;
-          const parsed = await getLocalProfile(authUser.email);
-          setProfilePhoto(parsed?.photo || null);
+          if (!authUser?.email || cancelled) return;
+
+          // Disk: local profile (may be relative /uploads/…)
+          const local = await getLocalProfile(authUser.email);
+          if (local?.photo && !cancelled) {
+            applyOwnPhoto(local.photo);
+          }
+
+          // Soft network refresh so Discover stays in sync after DP upload
+          const token = await getAuthToken();
+          if (!token || cancelled) return;
+          const snap = await preloadProfile({ force: !cached?.profile?.photo });
+          if (cancelled) return;
+          if (snap?.profile?.photo) {
+            applyOwnPhoto(snap.profile.photo);
+            return;
+          }
+          // Last resort: /me (handles cache miss / empty local)
+          try {
+            const me: any = await apiRequest("/api/users/me", token);
+            if (!cancelled) applyOwnPhoto(me?.photo || null);
+          } catch {
+            if (!local?.photo && !cancelled) applyOwnPhoto(null);
+          }
         } catch (e) {
-          console.error("Failed to load profile", e);
+          console.error("Failed to load profile photo", e);
         }
       };
-      load();
-    }, [sessionVersion]),
+      void load();
+      return () => {
+        cancelled = true;
+      };
+    }, [sessionVersion, applyOwnPhoto]),
   );
+
+  // Live update when Profile tab changes the DP
+  React.useEffect(() => {
+    if (profileTick === 0 || !lastProfileUpdate) return;
+    const myId = String(user?.id || getCachedProfile()?.profile?.userId || "");
+    const updatedId = String(lastProfileUpdate.userId || "");
+    if (myId && updatedId && myId !== updatedId) return;
+    if (lastProfileUpdate.photo !== undefined) {
+      applyOwnPhoto(lastProfileUpdate.photo || null);
+    }
+  }, [profileTick, lastProfileUpdate, applyOwnPhoto, user?.id]);
 
   // ── Force reload (Retry / pull-to-refresh) ──────────────────────
   const reloadForYou = React.useCallback(async (forceRefresh = false) => {
@@ -545,24 +596,6 @@ export default function DiscoverScreen() {
       setForYouPage(1);
       setForYouHasMore(hasMore);
       applyRelationships(setRelationshipById, users);
-
-      // After spinner ends, rebuild rankings in background and swap
-      if (forceRefresh) {
-        void (async () => {
-          try {
-            const fresh = await fetchForYouPage(token, {
-              page: 1,
-              forceRefresh: true,
-            });
-            setForYouUsers(fresh.users);
-            setForYouPage(1);
-            setForYouHasMore(fresh.hasMore);
-            applyRelationships(setRelationshipById, fresh.users);
-          } catch {
-            /* keep fast-path list */
-          }
-        })();
-      }
     } catch (err: any) {
       if (
         err?.code === "LOCATION_REQUIRED" ||
@@ -617,13 +650,13 @@ export default function DiscoverScreen() {
     }
   }, [forYouHasMore, loadingMore, forYouPage]);
 
-  const reloadNearby = React.useCallback(async () => {
+  const reloadNearby = React.useCallback(async (opts?: { pull?: boolean }) => {
     if (fetchLockRef.current) return;
     fetchLockRef.current = true;
     const hadRows = nearbyUsersRef.current.length > 0;
-    // WhatsApp: keep list on screen — only spinner, never blank
+    // WhatsApp: keep list on screen — spinner only when empty or user pulled
     if (!hadRows) setLoading(true);
-    else setRefreshing(true);
+    else if (opts?.pull) setRefreshing(true);
     setLocationError(null);
     setHasMore(true);
     try {
@@ -694,12 +727,13 @@ export default function DiscoverScreen() {
       const load = async () => {
         if (fetchLockRef.current) return;
         fetchLockRef.current = true;
-        setLoading(true);
+        const hadRows = nearbyUsersRef.current.length > 0;
+        // Skeleton only when nothing to show — never flash over cached rows
+        if (!hadRows) {
+          setLoading(true);
+        }
         setHasMore(true);
         setLocationError(null);
-        if (prefsChanged || nearbyUsersRef.current.length === 0) {
-          setNearbyUsers([]);
-        }
         try {
           const token = await getAuthToken();
           if (!token) {
@@ -802,8 +836,18 @@ export default function DiscoverScreen() {
     const online = !!lastPresence.isOnline;
     const patch = (user: NearbyUser): NearbyUser =>
       user.id === uid ? { ...user, isOnline: online } : user;
-    setNearbyUsers((prev) => prev.map(patch));
-    setSearchedUser((prev) => (prev ? patch(prev) : prev));
+    setNearbyUsers((prev) => {
+      let changed = false;
+      const next = prev.map((u) => {
+        if (u.id !== uid || !!u.isOnline === online) return u;
+        changed = true;
+        return patch(u);
+      });
+      return changed ? next : prev;
+    });
+    setSearchedUser((prev) =>
+      prev && prev.id === uid && !!prev.isOnline !== online ? patch(prev) : prev,
+    );
     // Only touch the open profile when online status actually changes —
     // otherwise every presence tick rebuilds the modal and blinks Options.
     setSelectedUser((prev) => {
@@ -884,26 +928,32 @@ export default function DiscoverScreen() {
       return base;
     };
 
-    setRelationshipById((prev) => {
-      const rel = patchRelationship(prev[otherId]);
+    setRelationshipById((prev) => ({
+      ...prev,
+      [otherId]: patchRelationship(prev[otherId]),
+    }));
 
-      const patchUser = (user: NearbyUser): NearbyUser => {
-        if (user.id !== otherId) return user;
-        return {
-          ...user,
-          iLiked: !!rel.iLiked,
-          theyLiked: !!rel.theyLiked,
-          areFriends: !!rel.areFriends,
-          friendshipStatus: rel.status,
-        };
+    const applyUser = (user: NearbyUser): NearbyUser => {
+      if (user.id !== otherId) return user;
+      const rel = patchRelationship({
+        status: (user.friendshipStatus as FriendshipStatus["status"]) || "stranger",
+        areFriends: !!user.areFriends,
+        canSendMedia: false,
+        canCall: false,
+        iLiked: !!user.iLiked,
+        theyLiked: !!user.theyLiked,
+      });
+      return {
+        ...user,
+        iLiked: !!rel.iLiked,
+        theyLiked: !!rel.theyLiked,
+        areFriends: !!rel.areFriends,
+        friendshipStatus: rel.status,
       };
-
-      setNearbyUsers((users) => users.map(patchUser));
-      setSearchedUser((u) => (u ? patchUser(u) : u));
-      setSelectedUser((u) => (u ? patchUser(u) : u));
-
-      return { ...prev, [otherId]: rel };
-    });
+    };
+    setNearbyUsers((users) => users.map(applyUser));
+    setSearchedUser((u) => (u ? applyUser(u) : u));
+    setSelectedUser((u) => (u ? applyUser(u) : u));
   }, [friendTick, lastFriendUpdate]);
 
   // ── Infinite scroll: append below existing list only ────────────
@@ -1115,7 +1165,7 @@ export default function DiscoverScreen() {
       if (feedTab === "for_you") {
         await reloadForYou(true);
       } else {
-        await reloadNearby();
+        await reloadNearby({ pull: true });
       }
     } finally {
       setRefreshing(false);
@@ -1485,20 +1535,15 @@ export default function DiscoverScreen() {
             <TouchableOpacity
               onPress={() => router.push("/profile")}
               style={styles.profileBtn}
+              activeOpacity={0.85}
+              accessibilityLabel="Open profile"
             >
-              {profilePhoto ? (
-                <Image
-                  source={{ uri: profilePhoto }}
-                  style={styles.headerAvatar}
-                  contentFit="cover"
-                />
-              ) : (
-                <Image
-                  source={FALLBACK_AVATAR}
-                  style={styles.headerAvatar}
-                  contentFit="cover"
-                />
-              )}
+              <WhatsAppAvatar
+                photo={profilePhoto || ""}
+                name="Me"
+                size={28}
+                style={styles.headerAvatar}
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -1558,7 +1603,7 @@ export default function DiscoverScreen() {
         >
           <FlatList
             data={displayUsers}
-            extraData={{ relationshipById, likingId, feedTab }}
+            extraData={listExtraData}
             renderItem={renderItem}
             keyExtractor={(item) => item.id}
             keyboardShouldPersistTaps="handled"
@@ -1784,6 +1829,7 @@ function PreferencesModal({
   onClose: () => void;
   onSearch: (next: DiscoveryPrefs) => void;
 }) {
+  const bottomInset = useStableBottomInset();
   const [gender, setGender] = React.useState(initial.gender);
   const [radiusKm, setRadiusKm] = React.useState(initial.radiusKm);
   const [activeWithinMinutes, setActiveWithinMinutes] = React.useState(
@@ -1813,7 +1859,12 @@ function PreferencesModal({
     >
       <View style={styles.prefsOverlay}>
         <Pressable style={styles.prefsDismissArea} onPress={onClose} />
-        <View style={styles.prefsSheet}>
+        <View
+          style={[
+            styles.prefsSheet,
+            { paddingBottom: Math.max(24, bottomInset + 16) },
+          ]}
+        >
           <View style={styles.prefsHandle} />
           <Text style={styles.prefsTitle}>Preferences</Text>
           <Text style={styles.prefsSub}>Who you want to see nearby</Text>
@@ -2089,9 +2140,9 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: D.purpleSoft,
+    backgroundColor: "#DFE5E7",
   },
-  headerAvatar: { width: "100%", height: "100%" },
+  headerAvatar: { width: 28, height: 28, borderRadius: 14 },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -2361,7 +2412,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 36 : 24,
+    // paddingBottom set dynamically via useStableBottomInset (nav bar safe area)
   },
   prefsHandle: {
     alignSelf: "center",
@@ -2435,7 +2486,7 @@ const styles = StyleSheet.create({
   prefsSliderValue: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#370372",
+    color: "#1C1B1F",
   },
   prefsSliderTrackHit: {
     height: Platform.OS === "android" ? 28 : 36,
@@ -2445,12 +2496,12 @@ const styles = StyleSheet.create({
   prefsSliderTrack: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#E8E0F2",
+    backgroundColor: "#D0D0D0",
     overflow: "hidden",
   },
   prefsSliderFill: {
     height: "100%",
-    backgroundColor: "#370372",
+    backgroundColor: "#1C1B1F",
     borderRadius: 4,
   },
   prefsSliderThumb: {
@@ -2462,12 +2513,12 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     backgroundColor: "#FFFFFF",
     borderWidth: 2,
-    borderColor: "#370372",
+    borderColor: "#1C1B1F",
     ...Platform.select({
       ios: {
-        shadowColor: "#370372",
+        shadowColor: "#000000",
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.3,
+        shadowOpacity: 0.25,
         shadowRadius: 2.5,
       },
       android: { elevation: 3 },

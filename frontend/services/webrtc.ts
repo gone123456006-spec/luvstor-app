@@ -12,6 +12,15 @@ import {
   TurboModuleRegistry,
 } from 'react-native';
 
+// Optional — iOS mic prompt before getUserMedia
+let expoAudioPerms: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  expoAudioPerms = require('expo-audio');
+} catch {
+  expoAudioPerms = null;
+}
+
 export type CallMediaType = 'voice' | 'video';
 
 export type NetworkQuality = 'excellent' | 'good' | 'fair' | 'poor' | 'unknown';
@@ -113,7 +122,9 @@ export function getWebRTCUnavailableMessage(): string {
 
 export class CallPermissionError extends Error {
   kind: 'microphone' | 'camera';
-  constructor(kind: 'microphone' | 'camera') {
+  /** True when Android won't show the system dialog again — open Settings. */
+  needsSettings: boolean;
+  constructor(kind: 'microphone' | 'camera', needsSettings = false) {
     super(
       kind === 'microphone'
         ? 'Microphone permission is required to call.'
@@ -121,35 +132,114 @@ export class CallPermissionError extends Error {
     );
     this.name = 'CallPermissionError';
     this.kind = kind;
+    this.needsSettings = needsSettings;
   }
 }
 
+function isAndroidGranted(
+  result: string | undefined | null
+): boolean {
+  return result === PermissionsAndroid.RESULTS.GRANTED;
+}
+
+function isAndroidBlocked(
+  result: string | undefined | null
+): boolean {
+  return (
+    result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
+    // Some OEM / RN builds return denied with no re-prompt
+    result === 'never_ask_again'
+  );
+}
+
 /**
- * Android does not reliably prompt from inside getUserMedia, so ask explicitly.
- * Without this the call silently fails to produce a local stream.
+ * Production release APKs always enforce mic/camera.
+ * Local Metro / `__DEV__` builds skip so emulator testing isn't blocked.
+ */
+function shouldEnforceCallPermissions(): boolean {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) return false;
+  return true;
+}
+
+/**
+ * Ask for mic (and camera / Bluetooth for speaker routing) BEFORE the calling UI.
+ * WhatsApp-style: permission dialogs first, then ring.
+ * Skipped on local/dev — enforced only for production API builds.
  */
 export async function ensureCallPermissions(
   callType: CallMediaType
 ): Promise<void> {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS === 'web') return;
+  if (!shouldEnforceCallPermissions()) return;
 
-  const needed = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
-  if (callType === 'video') needed.push(PermissionsAndroid.PERMISSIONS.CAMERA);
-
-  const granted = await PermissionsAndroid.requestMultiple(needed);
-
-  if (
-    granted[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] !==
-    PermissionsAndroid.RESULTS.GRANTED
-  ) {
-    throw new CallPermissionError('microphone');
+  if (Platform.OS === 'ios') {
+    const req =
+      expoAudioPerms?.requestRecordingPermissionsAsync ||
+      expoAudioPerms?.AudioModule?.requestRecordingPermissionsAsync;
+    if (typeof req === 'function') {
+      const result = await req();
+      const granted =
+        result?.granted === true ||
+        result?.status === 'granted' ||
+        String(result?.status || '').toLowerCase() === 'granted';
+      if (!granted) throw new CallPermissionError('microphone', true);
+    }
+    if (callType === 'video') {
+      // Camera is prompted by getUserMedia / expo-camera when needed
+    }
+    return;
   }
-  if (
-    callType === 'video' &&
-    granted[PermissionsAndroid.PERMISSIONS.CAMERA] !==
-      PermissionsAndroid.RESULTS.GRANTED
-  ) {
-    throw new CallPermissionError('camera');
+
+  // Android — request one-by-one so the mic dialog always appears
+  const mic = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
+  const cam = PermissionsAndroid.PERMISSIONS.CAMERA;
+  const bt = (PermissionsAndroid.PERMISSIONS as any).BLUETOOTH_CONNECT as
+    | string
+    | undefined;
+
+  const micAlready = await PermissionsAndroid.check(mic);
+  if (!micAlready) {
+    const micResult = await PermissionsAndroid.request(mic, {
+      title: 'Microphone',
+      message: 'Luvstor needs the microphone for voice calls.',
+      buttonPositive: 'Allow',
+      buttonNegative: 'Deny',
+    });
+    if (!isAndroidGranted(micResult)) {
+      throw new CallPermissionError('microphone', isAndroidBlocked(micResult));
+    }
+  }
+
+  if (callType === 'video') {
+    const camAlready = await PermissionsAndroid.check(cam);
+    if (!camAlready) {
+      const camResult = await PermissionsAndroid.request(cam, {
+        title: 'Camera',
+        message: 'Luvstor needs the camera for video calls.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
+      });
+      if (!isAndroidGranted(camResult)) {
+        throw new CallPermissionError('camera', isAndroidBlocked(camResult));
+      }
+    }
+  }
+
+  // Speaker / headset routing on Android 12+ (optional)
+  if (bt && Number(Platform.Version) >= 31) {
+    try {
+      const btOk = await PermissionsAndroid.check(bt);
+      if (!btOk) {
+        await PermissionsAndroid.request(bt, {
+          title: 'Nearby devices',
+          message: 'Optional — used to connect Bluetooth headsets during calls.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Deny',
+        });
+      }
+    } catch {
+      /* optional */
+    }
   }
 }
 
@@ -166,6 +256,32 @@ function getRTC() {
   const mod = loadWebRTC();
   if (!mod) throw new Error(getWebRTCUnavailableMessage());
   return mod;
+}
+
+/**
+ * Prefer Opus for voice (WhatsApp-quality narrowband→wideband path).
+ * Reorders payload types in the audio m-line so Opus is first.
+ */
+function preferOpusSdp(sdp: string): string {
+  if (!sdp) return sdp;
+  const lines = sdp.split(/\r?\n/);
+  const opusPt = lines
+    .map((l) => /^a=rtpmap:(\d+)\s+opus\/48000/i.exec(l))
+    .find(Boolean)?.[1];
+  if (!opusPt) return sdp;
+
+  return lines
+    .map((line) => {
+      if (!line.startsWith('m=audio ')) return line;
+      const parts = line.split(' ');
+      // m=audio port proto pt pt pt…
+      if (parts.length < 4) return line;
+      const head = parts.slice(0, 3);
+      const pts = parts.slice(3).filter(Boolean);
+      const rest = pts.filter((p) => p !== opusPt);
+      return [...head, opusPt, ...rest].join(' ');
+    })
+    .join('\r\n');
 }
 
 export class CallPeer {
@@ -207,6 +323,15 @@ export class CallPeer {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
+        // Prefer telephony-quality mono Opus path (WhatsApp-like)
+        channelCount: 1,
+        sampleRate: 48000,
+        // Android WebRTC goog* hints (ignored harmlessly elsewhere)
+        googEchoCancellation: true,
+        googNoiseSuppression: true,
+        googAutoGainControl: true,
+        googHighpassFilter: true,
+        googTypingNoiseDetection: true,
       },
       video:
         this.callType === 'video'
@@ -298,9 +423,15 @@ export class CallPeer {
     const { RTCSessionDescription } = getRTC();
     const offer = await this.pc.createOffer({
       offerToReceiveAudio: true,
-      offerToReceiveVideo: true,
+      offerToReceiveVideo: this.callType === 'video',
+      voiceActivityDetection: true,
     });
-    await this.pc.setLocalDescription(offer);
+    const preferred = preferOpusSdp(offer.sdp || '');
+    await this.pc.setLocalDescription(
+      preferred !== offer.sdp
+        ? new RTCSessionDescription({ type: offer.type, sdp: preferred })
+        : offer,
+    );
     return {
       type: this.pc.localDescription.type,
       sdp: this.pc.localDescription.sdp,
@@ -309,7 +440,13 @@ export class CallPeer {
 
   async createAnswer() {
     const answer = await this.pc.createAnswer();
-    await this.pc.setLocalDescription(answer);
+    const preferred = preferOpusSdp(answer.sdp || '');
+    const { RTCSessionDescription } = getRTC();
+    await this.pc.setLocalDescription(
+      preferred !== answer.sdp
+        ? new RTCSessionDescription({ type: answer.type, sdp: preferred })
+        : answer,
+    );
     return {
       type: this.pc.localDescription.type,
       sdp: this.pc.localDescription.sdp,
@@ -335,6 +472,14 @@ export class CallPeer {
     this.localStream?.getAudioTracks?.().forEach((t: any) => {
       t.enabled = !muted;
     });
+    // Also mute senders in case track was replaced
+    try {
+      this.pc?.getSenders?.()?.forEach((s: any) => {
+        if (s.track?.kind === 'audio') s.track.enabled = !muted;
+      });
+    } catch {
+      /* ignore */
+    }
   }
 
   setCameraEnabled(enabled: boolean) {

@@ -36,8 +36,25 @@ function withWebRTC(config) {
   });
 
   config = withAndroidManifest(config, (cfg) => {
+    const manifest = cfg.modResults;
     for (const permission of ANDROID_PERMISSIONS) {
-      AndroidConfig.Permissions.ensurePermission(cfg.modResults, permission);
+      AndroidConfig.Permissions.ensurePermission(manifest, permission);
+    }
+    // Force RECORD_AUDIO even if another plugin (e.g. expo-camera
+    // recordAudioAndroid:false) stripped it earlier in the chain.
+    const app = manifest.manifest;
+    if (app) {
+      const list = app['uses-permission'] || [];
+      const hasMic = list.some(
+        (p) =>
+          p?.$?.['android:name'] === 'android.permission.RECORD_AUDIO',
+      );
+      if (!hasMic) {
+        list.push({
+          $: { 'android:name': 'android.permission.RECORD_AUDIO' },
+        });
+        app['uses-permission'] = list;
+      }
     }
     return cfg;
   });

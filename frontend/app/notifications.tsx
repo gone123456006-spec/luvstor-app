@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -284,7 +284,11 @@ export default function NotificationsScreen() {
   const cursor = useRef<string | null>(null);
   const hasMore = useRef(true);
   const loadingRef = useRef(false);
+  const lastLoadAtRef = useRef(0);
+  const itemsLenRef = useRef(0);
   const moreBtnRef = useRef<View>(null);
+
+  itemsLenRef.current = items.length;
 
   /** Anchor the overflow menu under the ⋮ button on any screen size. */
   const openMenu = useCallback(() => {
@@ -349,9 +353,11 @@ export default function NotificationsScreen() {
         );
         cursor.current = page.nextCursor;
         hasMore.current = page.hasMore;
+        lastLoadAtRef.current = Date.now();
         await refreshNotifUnread();
 
-        // Double-check subscription in case list payload is stale
+        // Subscription check is expensive — only on a cold/full load
+        if (soft) return;
         try {
           const sub = await fetchSubscriptionStatus(token);
           const unlocked = !!(
@@ -433,10 +439,21 @@ export default function NotificationsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      load(items.length > 0);
+      const soft = itemsLenRef.current > 0;
+      if (soft && Date.now() - lastLoadAtRef.current < 30_000) return;
+      load(soft);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [notifTick, filter]),
+    }, [filter]),
   );
+
+  // Socket badge tick — silent refresh; never remount the screen
+  useEffect(() => {
+    if (notifTick === 0) return;
+    if (itemsLenRef.current === 0) return;
+    if (Date.now() - lastLoadAtRef.current < 15_000) return;
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifTick]);
 
   // Filtering by read state happens server-side; hide personal chats + search
   const filtered = useMemo(() => {

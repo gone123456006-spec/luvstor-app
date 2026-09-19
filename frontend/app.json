@@ -10,7 +10,7 @@
     "splash": {
       "image": "./assets/images/spashscreen.png",
       "resizeMode": "contain",
-      "backgroundColor": "#FFFFFF"
+      "backgroundColor": "#5A2FC7"
     },
     "ios": {
       "supportsTablet": true,
@@ -31,7 +31,7 @@
       "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "backgroundColor": "#370372",
+        "backgroundColor": "#5A2FC7",
         "foregroundImage": "./assets/images/app-icon.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
@@ -156,7 +156,7 @@
         {
           "cameraPermission": "Luvstor uses the camera for photo verification and video calls.",
           "microphonePermission": "Luvstor uses the microphone for voice messages and voice/video calls.",
-          "recordAudioAndroid": false
+          "recordAudioAndroid": true
         }
       ],
       "./plugins/withWebRTC",
@@ -164,7 +164,7 @@
         "expo-notifications",
         {
           "icon": "./assets/images/android-icon-monochrome.png",
-          "color": "#370372",
+          "color": "#5A2FC7",
           "defaultChannel": "system",
           "enableBackgroundRemoteNotifications": true
         }
@@ -173,11 +173,11 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/spashscreen.png",
-          "imageWidth": 160,
+          "imageWidth": 220,
           "resizeMode": "contain",
-          "backgroundColor": "#FFFFFF",
+          "backgroundColor": "#5A2FC7",
           "dark": {
-            "backgroundColor": "#FFFFFF",
+            "backgroundColor": "#5A2FC7",
             "image": "./assets/images/spashscreen.png"
           }
         }

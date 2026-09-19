@@ -323,7 +323,7 @@ test('calling a non-friend is refused with NOT_FRIENDS', async (t) => {
   }
 });
 
-test('calling an offline friend still rings the caller (push / late join)', async (t) => {
+test('calling an offline friend reports OFFLINE rather than hanging', async (t) => {
   if (!available) return t.skip('no database');
 
   const devA = 'dev-offline-a';
@@ -332,18 +332,17 @@ test('calling an offline friend still rings the caller (push / late join)', asyn
   const callee = await makeUser(devB);
   await befriend(caller, callee);
 
-  // callee never connects — invite must not hard-fail with OFFLINE
+  // callee never connects — voice requires online
   const sockA = await connectClient(tokenFor(caller, devA));
 
   try {
-    const ringingP = waitFor(sockA, 'call:ringing');
+    const errP = waitFor(sockA, 'call:error');
     sockA.emit('call:invite', {
       receiverId: String(callee._id),
       callType: 'voice',
     });
-    const ringing = await ringingP;
-    assert.ok(ringing.callId, 'caller gets callId while callee offline');
-    assert.equal(ringing.calleeOnline, false);
+    const err = await errP;
+    assert.equal(err.code, 'OFFLINE');
   } finally {
     sockA.close();
   }

@@ -19,11 +19,14 @@ const sessions = new Map();
 const userCall = new Map();
 /** @type {Map<string, NodeJS.Timeout>} */
 const ringTimers = new Map();
-/** @type {Map<string, number>} callId → last heartbeat epoch ms (either party) */
+/** @type {Map<string, { caller: number, callee: number }>} per-party heartbeats */
 const heartbeats = new Map();
+/** callId → expiry — cancel arrived before invite finished creating the session */
+const pendingCancels = new Map();
 
 let ioRef = null;
 let cleanupTimer = null;
+let turnWarned = false;
 
 function setIo(io) {
   ioRef = io;
@@ -40,7 +43,9 @@ function generateCallId() {
 }
 
 function getIceServers() {
-  const stun = (process.env.STUN_URLS || 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302')
+  const defaultStun =
+    'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302';
+  const stun = (process.env.STUN_URLS || defaultStun)
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -59,7 +64,45 @@ function getIceServers() {
     credential: turnPass || undefined,
   }));
 
+  if (
+    !turnWarned &&
+    process.env.NODE_ENV === 'production' &&
+    turn.length === 0
+  ) {
+    turnWarned = true;
+    console.warn(
+      '[calls] No TURN_URLS set — cellular / strict-NAT friend calls may fail. Set TURN_* in production.',
+    );
+  }
+
   return [...stun, ...turn];
+}
+
+function isValidClientCallId(id) {
+  return typeof id === 'string' && /^c_[a-z0-9]+_[a-f0-9]{8,}$/i.test(id);
+}
+
+function markPendingCancel(callId) {
+  if (!callId) return;
+  pendingCancels.set(String(callId), Date.now() + 60_000);
+}
+
+function consumePendingCancel(callId) {
+  const id = String(callId || '');
+  if (!id || !pendingCancels.has(id)) return false;
+  pendingCancels.delete(id);
+  return true;
+}
+
+function initPartyHeartbeats(callId) {
+  const now = Date.now();
+  heartbeats.set(callId, { caller: now, callee: now });
+}
+
+function touchPartyHeartbeat(callId, role) {
+  const cur = heartbeats.get(callId) || { caller: 0, callee: 0 };
+  cur[role] = Date.now();
+  heartbeats.set(callId, cur);
 }
 
 function publicSession(session) {
@@ -99,6 +142,29 @@ async function redisClearActive(userId, callId) {
   } catch {
     /* ignore */
   }
+}
+
+async function redisGetActive(userId) {
+  if (!redisReady()) return null;
+  try {
+    const r = await getRedis();
+    if (!r) return null;
+    return (await r.get(`call:user:${String(userId)}`)) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Local Map first, then Redis (multi-instance busy locks). */
+async function isUserInCall(userId) {
+  if (getActiveCallForUser(userId)) return true;
+  const remote = await redisGetActive(userId);
+  return !!remote;
+}
+
+async function redisRefreshCallTtl(callId, callerId, calleeId) {
+  await redisSetActive(callerId, callId);
+  await redisSetActive(calleeId, callId);
 }
 
 /** Ringing call where this user is the callee (for deliver-on-reconnect). */
@@ -196,6 +262,7 @@ async function destroySession(callId, { status, endReason, endedBy, notify = tru
   clearRingTimer(callId);
   sessions.delete(callId);
   heartbeats.delete(callId);
+  pendingCancels.delete(callId);
 
   if (userCall.get(session.callerId) === callId) userCall.delete(session.callerId);
   if (userCall.get(session.calleeId) === callId) userCall.delete(session.calleeId);
@@ -227,6 +294,25 @@ async function destroySession(callId, { status, endReason, endedBy, notify = tru
     notifyUser(ioRef, session.calleeId, 'call:ended', payload);
   }
 
+  // WhatsApp-style auto message in the chat thread
+  if (!session.explore) {
+    try {
+      const { postCallChatEvent } = require('../utils/callChatMessage');
+      await postCallChatEvent(ioRef, {
+        callerId: session.callerId,
+        calleeId: session.calleeId,
+        roomId: session.roomId,
+        callId,
+        callType: session.callType,
+        status: finalStatus,
+        endReason: endReason || 'hangup',
+        durationSec,
+      });
+    } catch (err) {
+      console.warn('[calls] call chat message:', err.message);
+    }
+  }
+
   console.log(
     `[calls] end ${callId} status=${finalStatus} reason=${endReason || 'hangup'} dur=${durationSec}s`
   );
@@ -247,14 +333,16 @@ async function startOutgoing({
     return { ok: false, code: 'INVALID', error: 'Cannot call yourself' };
   }
 
-  if (getActiveCallForUser(cId)) {
+  if (await isUserInCall(cId)) {
     return { ok: false, code: 'BUSY_SELF', error: 'You are already in a call' };
   }
 
-  const calleeBusy = getActiveCallForUser(rId);
-  if (calleeBusy) {
+  if (await isUserInCall(rId)) {
     // Persist a busy attempt for history on callee side
-    const busyId = preferredId || generateCallId();
+    const busyId =
+      preferredId && isValidClientCallId(preferredId)
+        ? preferredId
+        : generateCallId();
     try {
       await Call.create({
         callId: busyId,
@@ -272,7 +360,21 @@ async function startOutgoing({
     return { ok: false, code: 'BUSY', error: 'User is busy on another call', callId: busyId };
   }
 
-  const callId = preferredId || generateCallId();
+  const callId =
+    preferredId && isValidClientCallId(preferredId)
+      ? preferredId
+      : generateCallId();
+
+  // Caller hung up before invite finished — honour cancel, don't ring
+  if (consumePendingCancel(callId)) {
+    return {
+      ok: false,
+      code: 'CANCELLED',
+      error: 'Call was cancelled',
+      callId,
+    };
+  }
+
   const startedAt = new Date();
   const session = {
     callId,
@@ -293,7 +395,7 @@ async function startOutgoing({
   sessions.set(callId, session);
   userCall.set(cId, callId);
   userCall.set(rId, callId);
-  heartbeats.set(callId, Date.now());
+  initPartyHeartbeats(callId);
   await redisSetActive(cId, callId);
   await redisSetActive(rId, callId);
 
@@ -371,7 +473,7 @@ async function acceptCall(callId, userId) {
   clearRingTimer(callId);
   session.status = 'connecting';
   session.answeredAt = new Date();
-  heartbeats.set(callId, Date.now());
+  initPartyHeartbeats(callId);
 
   try {
     await Call.findOneAndUpdate(
@@ -399,7 +501,8 @@ async function markConnected(callId, userId) {
     return { ok: true, session: publicSession(session) };
   }
   session.status = 'connected';
-  heartbeats.set(callId, Date.now());
+  const role = String(userId) === session.callerId ? 'caller' : 'callee';
+  touchPartyHeartbeat(callId, role);
   try {
     await Call.findOneAndUpdate({ callId }, { status: 'connected' });
   } catch {
@@ -411,8 +514,12 @@ async function markConnected(callId, userId) {
 function touchHeartbeat(callId, userId) {
   const session = sessions.get(callId);
   if (!session) return false;
-  if (![session.callerId, session.calleeId].includes(String(userId))) return false;
-  heartbeats.set(callId, Date.now());
+  const u = String(userId);
+  if (u !== session.callerId && u !== session.calleeId) return false;
+  const role = u === session.callerId ? 'caller' : 'callee';
+  touchPartyHeartbeat(callId, role);
+  // Keep Redis busy-lock alive for the full call duration
+  void redisRefreshCallTtl(callId, session.callerId, session.calleeId);
   return true;
 }
 
@@ -434,11 +541,21 @@ function otherParty(session, userId) {
 
 async function sweepStaleSessions() {
   const now = Date.now();
+  for (const [id, exp] of pendingCancels.entries()) {
+    if (exp < now) pendingCancels.delete(id);
+  }
   for (const [callId, session] of sessions.entries()) {
-    const last = heartbeats.get(callId) || new Date(session.startedAt).getTime();
     // Only enforce heartbeat after connect / connecting
     if (session.status === 'ringing') continue;
-    if (now - last > HEARTBEAT_TIMEOUT_MS) {
+    const hb = heartbeats.get(callId);
+    const started = new Date(session.startedAt).getTime();
+    const callerLast = hb?.caller || started;
+    const calleeLast = hb?.callee || started;
+    // End if EITHER party goes silent (app killed / network drop)
+    if (
+      now - callerLast > HEARTBEAT_TIMEOUT_MS ||
+      now - calleeLast > HEARTBEAT_TIMEOUT_MS
+    ) {
       console.warn(`[calls] heartbeat timeout ${callId}`);
       await destroySession(callId, {
         status: 'ended',
@@ -530,6 +647,7 @@ module.exports = {
   acceptCall,
   markConnected,
   touchHeartbeat,
+  markPendingCancel,
   destroySession,
   handleUserDisconnect,
   listHistory,

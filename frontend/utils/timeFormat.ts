@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 
 const clockOptions: Intl.DateTimeFormatOptions = {
   hour: 'numeric',
@@ -56,13 +57,34 @@ export function formatChatListTime(timestamp: number): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-/** Refresh list once per minute so "Just now" becomes clock time */
-export function useTimeTick(intervalMs = 60000): number {
+/**
+ * Refresh list once per minute so "Just now" becomes clock time.
+ * Pauses while the app is backgrounded — a ticking clock behind a closed app
+ * only burns re-renders.
+ */
+export function useTimeTick(intervalMs = 60000, enabled = true): number {
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
+    if (!enabled) return;
+    let id: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (!id) id = setInterval(() => setTick((t) => t + 1), intervalMs);
+    };
+    const stop = () => {
+      if (id) {
+        clearInterval(id);
+        id = null;
+      }
+    };
+    if (AppState.currentState === 'active') start();
+    const sub = AppState.addEventListener('change', (state) =>
+      state === 'active' ? start() : stop(),
+    );
+    return () => {
+      stop();
+      sub.remove();
+    };
+  }, [intervalMs, enabled]);
   return tick;
 }
 

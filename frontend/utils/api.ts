@@ -2,6 +2,9 @@ import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import { getOrCreateDeviceId } from './device';
 
+/** Production API (Render). Release APKs use this unless EXPO_PUBLIC_API_URL overrides. */
+export const PRODUCTION_API_URL = 'https://luvstor-api.onrender.com';
+
 // Default 5001 — macOS AirPlay Receiver often owns :5000
 const API_PORT = Number(process.env.EXPO_PUBLIC_API_PORT || 5001);
 
@@ -47,21 +50,27 @@ function getExpoDevHost(): string | null {
 }
 
 function resolveApiBase(): string {
-  // 1. Expo Metro / bundler host (same LAN as backend)
+  // 1. Explicit override (dev LAN or forced host) — always wins
+  const explicit = process.env.EXPO_PUBLIC_API_URL?.trim();
+  if (explicit) {
+    return explicit.replace(/\/$/, '');
+  }
+
+  // 2. Release / production APK — never hit localhost / Metro
+  if (typeof __DEV__ !== 'undefined' && !__DEV__) {
+    return PRODUCTION_API_URL;
+  }
+
+  // 3. Dev: Expo Metro / bundler host (same LAN as backend)
   const expoHost = getExpoDevHost();
   if (expoHost) {
     return `http://${expoHost}:${API_PORT}`;
   }
 
-  // 2. Tunnel mode — Metro is ngrok but API stays on PC LAN IP
+  // 4. Tunnel mode — Metro is ngrok but API stays on PC LAN IP
   const lanIp = getDevLanIp();
   if (lanIp) {
     return `http://${lanIp}:${API_PORT}`;
-  }
-
-  // 3. Explicit override in .env
-  if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL.replace(/\/$/, '');
   }
 
   if (Platform.OS === 'web') {
@@ -73,7 +82,7 @@ function resolveApiBase(): string {
     return `http://10.0.2.2:${API_PORT}`;
   }
 
-  // 4. Last resort — auto-resolve from Expo dev server URL
+  // 5. Last resort in dev
   return `http://localhost:${API_PORT}`;
 }
 
@@ -109,11 +118,21 @@ export function setOnSessionInvalid(handler: SessionInvalidHandler | null) {
 }
 
 const DEFAULT_FETCH_TIMEOUT_MS = 12_000;
+/** Render cold start + Brevo send often exceeds 12s — auth must wait longer. */
+const AUTH_FETCH_TIMEOUT_MS = 45_000;
+/** Uploads move real bytes over mobile data — they need more room than reads. */
+export const UPLOAD_FETCH_TIMEOUT_MS = 60_000;
 
-async function apiFetch(path: string, options: RequestInit = {}) {
-  const url = `${getApiBase()}${path}`;
-  let res: Response;
-  const timeoutMs = DEFAULT_FETCH_TIMEOUT_MS;
+/**
+ * `fetch` that always settles. Anything that talks to the API must go through
+ * this (or `apiRequest`) — a bare `fetch` can hang until the OS TCP timeout,
+ * which leaves screens stuck on a spinner for minutes.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController();
   const externalSignal = options.signal;
   const onExternalAbort = () => controller.abort();
@@ -123,23 +142,60 @@ async function apiFetch(path: string, options: RequestInit = {}) {
   }
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    res = await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal: controller.signal });
   } catch (err) {
     const aborted =
       (err instanceof Error && err.name === 'AbortError') ||
       controller.signal.aborted;
     if (aborted && !externalSignal?.aborted) {
       throw new Error(
-        `Server took too long at ${getApiBase()}. Check Wi‑Fi and that the backend is running.`
+        `Server took too long at ${getApiBase()}. Check your connection and try again.`,
       );
     }
     throw new Error(
-      `Cannot reach server at ${getApiBase()}. Run "npm run dev" in backend, use "npm start" in frontend, and ensure phone + PC share the same Wi‑Fi.`
+      __DEV__
+        ? `Cannot reach server at ${getApiBase()}. Run "npm run dev" in backend and ensure phone + PC share the same Wi‑Fi.`
+        : `Cannot reach server at ${getApiBase()}.`,
     );
   } finally {
     clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onExternalAbort);
   }
+}
+
+/**
+ * Concurrent identical GETs collapse into one request. Several screens and
+ * contexts ask for the same data (e.g. /api/users/me) on startup, which used to
+ * multiply into a burst against the API for no benefit.
+ */
+const inflightGets = new Map<string, Promise<Record<string, unknown>>>();
+
+async function apiFetch(
+  path: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
+) {
+  const method = (options.method || 'GET').toUpperCase();
+  if (method === 'GET' && !options.signal) {
+    const key = `${path}|${(options.headers as Record<string, string>)?.Authorization || ''}`;
+    const existing = inflightGets.get(key);
+    if (existing) return existing;
+    const run = apiFetchUncoalesced(path, options, timeoutMs).finally(() => {
+      inflightGets.delete(key);
+    });
+    inflightGets.set(key, run);
+    return run;
+  }
+  return apiFetchUncoalesced(path, options, timeoutMs);
+}
+
+async function apiFetchUncoalesced(
+  path: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
+) {
+  const url = `${getApiBase()}${path}`;
+  const res = await fetchWithTimeout(url, options, timeoutMs);
 
   let data: Record<string, unknown> = {};
   try {
@@ -171,16 +227,20 @@ export async function apiGoogleLogin(
   );
   await captureInstallReferrerOnce();
   const referralCode = await peekPendingReferralCode();
-  return apiFetch('/api/auth/google', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      idToken,
-      deviceId,
-      forceTransfer: Boolean(options?.forceTransfer),
-      ...(referralCode ? { referralCode } : {}),
-    }),
-  }) as Promise<{ success: boolean; token: string; user: any }>;
+  return apiFetch(
+    '/api/auth/google',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        idToken,
+        deviceId,
+        forceTransfer: Boolean(options?.forceTransfer),
+        ...(referralCode ? { referralCode } : {}),
+      }),
+    },
+    AUTH_FETCH_TIMEOUT_MS,
+  ) as Promise<{ success: boolean; token: string; user: any }>;
 }
 
 export async function apiSendOTP(email: string): Promise<{
@@ -189,11 +249,15 @@ export async function apiSendOTP(email: string): Promise<{
   resendCooldownSeconds?: number;
   devMode?: boolean;
 }> {
-  return apiFetch('/api/auth/send-otp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-  }) as Promise<{
+  return apiFetch(
+    '/api/auth/send-otp',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    },
+    AUTH_FETCH_TIMEOUT_MS,
+  ) as Promise<{
     success: boolean;
     message: string;
     resendCooldownSeconds?: number;
@@ -212,17 +276,21 @@ export async function apiVerifyOTP(
   );
   await captureInstallReferrerOnce();
   const referralCode = await peekPendingReferralCode();
-  return apiFetch('/api/auth/verify-otp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      otp,
-      deviceId,
-      forceTransfer: Boolean(options?.forceTransfer),
-      ...(referralCode ? { referralCode } : {}),
-    }),
-  }) as Promise<{ success: boolean; token: string; user: any }>;
+  return apiFetch(
+    '/api/auth/verify-otp',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        otp,
+        deviceId,
+        forceTransfer: Boolean(options?.forceTransfer),
+        ...(referralCode ? { referralCode } : {}),
+      }),
+    },
+    AUTH_FETCH_TIMEOUT_MS,
+  ) as Promise<{ success: boolean; token: string; user: any }>;
 }
 
 /** OTP-verified move of the session onto this device */

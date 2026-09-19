@@ -159,6 +159,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   const [presenceTick, setPresenceTick] = useState(0);
   const [lastPresence, setLastPresence] =
     useState<PresenceUpdatePayload | null>(null);
+  const lastPresenceRef = useRef<PresenceUpdatePayload | null>(null);
+  const presenceMapRef = useRef(new Map<string, boolean>());
   const [toast, setToast] = useState<ToastPayload | null>(null);
 
   const toastAnim = useRef(new Animated.Value(-120)).current;
@@ -232,7 +234,15 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     [applyProfileUpdate],
   );
 
+  const unreadGateRef = useRef({ at: 0, inflight: false });
+  const notifGateRef = useRef({ at: 0, inflight: false });
+
   const refreshUnread = useCallback(async () => {
+    const g = unreadGateRef.current;
+    if (g.inflight) return;
+    if (Date.now() - g.at < 10_000) return;
+    g.inflight = true;
+    g.at = Date.now();
     try {
       const token = await getAuthToken();
       if (!token) {
@@ -243,10 +253,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       if (typeof data?.unread === 'number') setUnreadCount(data.unread);
     } catch {
       /* ignore */
+    } finally {
+      g.inflight = false;
     }
   }, []);
 
   const refreshNotifUnread = useCallback(async () => {
+    const g = notifGateRef.current;
+    if (g.inflight) return;
+    if (Date.now() - g.at < 8_000) return;
+    g.inflight = true;
+    g.at = Date.now();
     try {
       const token = await getAuthToken();
       if (!token) {
@@ -257,6 +274,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       setNotifUnreadCount(count);
     } catch {
       /* ignore */
+    } finally {
+      g.inflight = false;
     }
   }, []);
 
@@ -299,11 +318,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       if (!authUserId) {
+        presenceMapRef.current.clear();
         setSocket(null);
         setUnreadCount(0);
         setNotifUnreadCount(0);
         return;
       }
+      presenceMapRef.current.clear();
       const token = await getAuthToken();
       if (!token || cancelled) return;
 
@@ -312,11 +333,19 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 800,
+        // Don't stay "online" after the OS backgrounds the app — we disconnect
+        // explicitly on AppState change below.
+        autoConnect: AppState.currentState === 'active',
       });
 
       active.on('connect', () => {
         refreshUnread();
         refreshNotifUnread();
+        try {
+          active.emit('presence:ping');
+        } catch {
+          /* ignore */
+        }
       });
 
       active.on('notification:new', () => {
@@ -482,7 +511,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       const applyPresence = (userId: any, isOnline: boolean) => {
         const id = String(userId || '');
         if (!id) return;
-        setLastPresence({ userId: id, isOnline: !!isOnline });
+        const online = !!isOnline;
+        if (presenceMapRef.current.get(id) === online) return;
+        presenceMapRef.current.set(id, online);
+        const next = { userId: id, isOnline: online };
+        lastPresenceRef.current = next;
+        setLastPresence(next);
         setPresenceTick((n) => n + 1);
       };
 
@@ -526,13 +560,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     refreshNotifUnread();
 
     let iv: ReturnType<typeof setInterval> | null = null;
+    let presenceIv: ReturnType<typeof setInterval> | null = null;
 
     const start = () => {
       if (iv) return;
       iv = setInterval(() => {
         refreshUnread();
         refreshNotifUnread();
-      }, 30000);
+      }, 90_000);
     };
     const stop = () => {
       if (!iv) return;
@@ -540,26 +575,84 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       iv = null;
     };
 
-    start();
+    const startPresence = () => {
+      if (presenceIv) return;
+      const sock = socket;
+      if (sock?.connected) {
+        try {
+          sock.emit('presence:ping');
+        } catch {
+          /* ignore */
+        }
+      }
+      presenceIv = setInterval(() => {
+        const s = socket;
+        if (s?.connected) {
+          try {
+            s.emit('presence:ping');
+          } catch {
+            /* ignore */
+          }
+        }
+      }, 60_000);
+    };
+    const stopPresence = () => {
+      if (!presenceIv) return;
+      clearInterval(presenceIv);
+      presenceIv = null;
+    };
 
-    // Pause while backgrounded; refresh once on return
+    /** Online = app open in foreground only */
+    const goOffline = () => {
+      stop();
+      stopPresence();
+      const s = socket;
+      if (s?.connected) {
+        try {
+          s.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+
+    const goOnline = () => {
+      refreshUnread();
+      refreshNotifUnread();
+      // Don't bump chatListTick every resume — Chat uses its own 60s TTL sync
+      start();
+      const s = socket;
+      if (s && !s.connected) {
+        try {
+          s.connect();
+        } catch {
+          /* ignore */
+        }
+      }
+      startPresence();
+    };
+
+    if (AppState.currentState === 'active') {
+      goOnline();
+    } else if (AppState.currentState === 'background') {
+      goOffline();
+    }
+
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        refreshUnread();
-        refreshNotifUnread();
-        // Bump chat list so Chat tab reloads even if it stayed focused
-        setChatListTick((n) => n + 1);
-        start();
-      } else {
-        stop();
+        goOnline();
+      } else if (state === 'background') {
+        // Home / switch apps — mark offline. Ignore brief "inactive" (control center).
+        goOffline();
       }
     });
 
     return () => {
       stop();
+      stopPresence();
       sub.remove();
     };
-  }, [user, sessionVersion, refreshUnread, refreshNotifUnread]);
+  }, [user, sessionVersion, socket, refreshUnread, refreshNotifUnread]);
 
   const openToast = () => {
     if (!toast?.fromUserId) {

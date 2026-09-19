@@ -183,12 +183,18 @@ export async function syncProfileToServer(
       const ext = photoUrl.split('.').pop()?.toLowerCase() || 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
       const dataUri = `data:${mimeType};base64,${base64}`;
-      const { getApiBase } = await import('./api');
-      const res = await fetch(`${getApiBase()}/api/upload/image`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ base64: dataUri }),
-      });
+      const { getApiBase, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS } = await import(
+        './api'
+      );
+      const res = await fetchWithTimeout(
+        `${getApiBase()}/api/upload/image`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ base64: dataUri }),
+        },
+        UPLOAD_FETCH_TIMEOUT_MS,
+      );
       const json = await res.json();
       if (json.url) {
         // Persist the relative path — an absolute host URL breaks on other devices

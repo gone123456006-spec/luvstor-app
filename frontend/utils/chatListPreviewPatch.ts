@@ -26,6 +26,11 @@ export function messagePreviewText(msg: {
 }): string {
   if (msg.type === 'image') return msg.viewOnce ? '📷 Photo' : '📷 Photo';
   if (msg.type === 'audio') return '🎤 Voice message';
+  if (msg.type === 'call') {
+    const t = (msg.text || '').trim();
+    if (t.toLowerCase().includes('video')) return t || '📹 Video call';
+    return t || '📞 Voice call';
+  }
   return (msg.text || '').trim() || 'Message';
 }
 

@@ -24,6 +24,8 @@ import {
   addNotificationReceivedListener,
   addNotificationResponseReceivedListener,
   addPushTokenListener,
+  CALL_ACTION_ACCEPT,
+  CALL_ACTION_DECLINE,
   configureForegroundHandler,
   dismissForGroup,
   ensureChannels,
@@ -36,6 +38,7 @@ import {
   syncToken,
   unregisterToken,
 } from '../utils/push';
+import { setPendingIncomingCall } from '../utils/pendingIncomingCall';
 
 type PushContextValue = {
   /** null while the permission state is still being resolved */
@@ -85,7 +88,14 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const navigateTo = useCallback(
-    (data: Record<string, any>) => {
+    (data: Record<string, any>, intent: 'open' | 'accept' | 'decline' = 'open') => {
+      if (data?.callId && (data?.action === 'incoming' || data?.type === 'call')) {
+        setPendingIncomingCall(data, intent);
+        if (intent === 'decline') {
+          // Decline can complete without opening chat
+          return;
+        }
+      }
       const route = routeForData(data);
       // Give the router a tick — a cold start tap can fire before mount
       setTimeout(() => {
@@ -183,17 +193,37 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [markHandled, refreshNotifUnread, refreshUnread]);
 
-  // Tapped — from foreground, background, or a cold start
+  // Tapped — from foreground, background, or a cold start (incl. Accept / Decline)
   useEffect(() => {
     const sub = addNotificationResponseReceivedListener((response) => {
       const data = (response.notification.request.content.data || {}) as Record<
         string,
         any
       >;
-      if (!markHandled(`tap:${data.notificationId || response.notification.request.identifier}`)) {
+      const actionId = String(response.actionIdentifier || '');
+      let intent: 'open' | 'accept' | 'decline' = 'open';
+      if (
+        actionId === CALL_ACTION_ACCEPT ||
+        actionId === 'ACCEPT_CALL' ||
+        actionId.toLowerCase() === 'accept'
+      ) {
+        intent = 'accept';
+      } else if (
+        actionId === CALL_ACTION_DECLINE ||
+        actionId === 'DECLINE_CALL' ||
+        actionId.toLowerCase() === 'decline'
+      ) {
+        intent = 'decline';
+      }
+
+      if (
+        !markHandled(
+          `tap:${intent}:${data.notificationId || response.notification.request.identifier}`,
+        )
+      ) {
         return;
       }
-      navigateTo(data);
+      navigateTo(data, intent);
       refreshNotifUnread();
     });
     return () => sub.remove();

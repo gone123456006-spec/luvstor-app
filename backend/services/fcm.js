@@ -83,6 +83,9 @@ function buildMessage({
         ? 60 * 1000
         : 24 * 60 * 60 * 1000;
 
+  const isCallIncoming =
+    type === 'call' && String(stringData.action || '') === 'incoming';
+
   return {
     tokens,
     notification: {
@@ -90,7 +93,10 @@ function buildMessage({
       body,
       ...(imageUrl ? { imageUrl } : {}),
     },
-    data: stringData,
+    data: {
+      ...stringData,
+      ...(isCallIncoming ? { categoryId: 'incoming_call' } : {}),
+    },
     android: {
       priority: isHigh ? 'high' : 'normal',
       ...(collapseKey ? { collapseKey } : {}),
@@ -104,6 +110,12 @@ function buildMessage({
         ...(imageUrl ? { imageUrl } : {}),
         icon: 'notification_icon',
         color: '#8E2DE2',
+        ...(isCallIncoming
+          ? {
+              // Expo maps this to Accept / Decline actions registered on device
+              clickAction: 'incoming_call',
+            }
+          : {}),
       },
     },
     apns: {
@@ -121,6 +133,7 @@ function buildMessage({
           ...(typeof badge === 'number' ? { badge } : {}),
           ...(groupKey ? { 'thread-id': groupKey } : {}),
           'mutable-content': imageUrl ? 1 : 0,
+          ...(isCallIncoming ? { category: 'incoming_call' } : {}),
         },
       },
     },

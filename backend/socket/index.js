@@ -75,6 +75,8 @@ const REPLY_TO_SELECT =
 
 module.exports = function initSocket(io) {
   calls.setIo(io);
+  /** Throttle Mongo lastSeen writes — Redis TTL is the live source of truth. */
+  const lastSeenWriteAt = new Map();
 
   // Map: userId → socket.id (latest socket for direct messaging)
   const onlineUsers = new Map();
@@ -129,6 +131,12 @@ module.exports = function initSocket(io) {
     existing.add(socket.id);
     onlineSockets.set(uid, existing);
     setPrimarySocket(uid);
+
+    // Keep Redis "alive" fresh for as long as this socket is open.
+    // Client also pings; this covers older app builds that don't emit presence:ping.
+    let aliveTimer = setInterval(() => {
+      presence.heartbeat(uid).catch(() => {});
+    }, 40_000);
 
     /**
      * Presence broadcast + delivery flush. Deliberately NOT awaited before the
@@ -283,6 +291,24 @@ module.exports = function initSocket(io) {
       }
     });
 
+    // Foreground presence — refresh Redis TTL + lastSeen so "Active now"
+    // cannot stick after the app is closed or the process dies mid-session.
+    socket.on('presence:ping', async () => {
+      try {
+        const hb = await presence.heartbeat(uid);
+        if (hb.ok === false) return;
+        const lastWrite = lastSeenWriteAt.get(uid) || 0;
+        if (Date.now() - lastWrite < 45_000) return;
+        lastSeenWriteAt.set(uid, Date.now());
+        await User.findByIdAndUpdate(uid, {
+          isOnline: true,
+          lastSeen: new Date(),
+        });
+      } catch (err) {
+        console.error('presence:ping error:', err.message);
+      }
+    });
+
     // ── Send a message ────────────────────────────────
     socket.on('chat:message', async (data) => {
       try {
@@ -299,7 +325,10 @@ module.exports = function initSocket(io) {
         if (!receiverId || (!text && !mediaUrl)) return;
 
         if (String(receiverId) === String(uid)) {
-          return socket.emit('chat:error', { error: 'Cannot send message to yourself' });
+          return socket.emit('chat:error', {
+            error: 'Cannot send message to yourself',
+            clientMsgId,
+          });
         }
 
         // One friendship read for block state (was two round-trips)
@@ -308,6 +337,7 @@ module.exports = function initSocket(io) {
           return socket.emit('chat:error', {
             error: 'Unblock this person to send messages',
             code: 'BLOCKED',
+            clientMsgId,
           });
         }
         const undelivered = !!block.theyBlocked;
@@ -327,6 +357,7 @@ module.exports = function initSocket(io) {
             tokenBalance: access.tokenBalance,
             remainingMs: access.remainingMs,
             sessionExpiresAt: access.sessionExpiresAt,
+            clientMsgId,
           });
         }
 
@@ -335,6 +366,7 @@ module.exports = function initSocket(io) {
             return socket.emit('chat:error', {
               error: 'Only text messages can be sent while blocked.',
               code: 'BLOCKED_MEDIA',
+              clientMsgId,
             });
           }
           // Image / voice unlock only after both users have sent a DM
@@ -346,6 +378,7 @@ module.exports = function initSocket(io) {
                   'Photos and voice unlock when they reply to your message.',
                 code: 'MEDIA_LOCKED',
                 requiresReply: true,
+                clientMsgId,
               });
             }
           } else {
@@ -356,6 +389,7 @@ module.exports = function initSocket(io) {
                   'Only friends can send files. Send a like and become friends first!',
                 code: 'NOT_FRIENDS',
                 requiresFriendship: true,
+                clientMsgId,
               });
             }
           }
@@ -366,6 +400,7 @@ module.exports = function initSocket(io) {
             error: canSend.message,
             code: canSend.code,
             consecutiveCount: canSend.consecutiveCount,
+            clientMsgId,
           });
         }
 
@@ -532,7 +567,10 @@ module.exports = function initSocket(io) {
         });
       } catch (err) {
         console.error('chat:message error:', err);
-        socket.emit('chat:error', { error: 'Failed to send message' });
+        socket.emit('chat:error', {
+          error: 'Failed to send message',
+          clientMsgId: data?.clientMsgId,
+        });
       }
     });
 
@@ -666,7 +704,6 @@ module.exports = function initSocket(io) {
           return;
         }
 
-        // Callee offline → unavailable (still create history via startOutgoing busy path skip)
         let calleeOnline = false;
         const redisOnline = await presence.isUserOnline(receiverId);
         if (redisOnline !== null) {
@@ -678,6 +715,48 @@ module.exports = function initSocket(io) {
         }
 
         const room = roomId(uid, receiverId);
+
+        // Offline friend: no ring — leave a WhatsApp-style missed-call chat line
+        if (!calleeOnline) {
+          const offlineCallId = preferredId || calls.generateCallId();
+          try {
+            const Call = require('../models/Call');
+            await Call.create({
+              callId: offlineCallId,
+              callerId: uid,
+              calleeId: receiverId,
+              callType,
+              status: 'missed',
+              endReason: 'offline',
+              endedAt: new Date(),
+              roomId: room,
+            });
+          } catch {
+            /* ignore duplicate */
+          }
+          try {
+            const { postCallChatEvent } = require('../utils/callChatMessage');
+            await postCallChatEvent(io, {
+              callerId: uid,
+              calleeId: receiverId,
+              roomId: room,
+              callId: offlineCallId,
+              callType,
+              status: 'missed',
+              endReason: 'offline',
+              durationSec: 0,
+            });
+          } catch (err) {
+            console.error('offline call chat:', err.message);
+          }
+          socket.emit('call:error', {
+            error: 'User is offline',
+            code: 'OFFLINE',
+            callId: offlineCallId,
+          });
+          return;
+        }
+
         const result = await calls.startOutgoing({
           callerId: uid,
           calleeId: receiverId,
@@ -698,6 +777,21 @@ module.exports = function initSocket(io) {
               callType,
             });
             try {
+              const { postCallChatEvent } = require('../utils/callChatMessage');
+              await postCallChatEvent(io, {
+                callerId: uid,
+                calleeId: receiverId,
+                roomId: room,
+                callId: result.callId,
+                callType,
+                status: 'busy',
+                endReason: 'busy',
+                durationSec: 0,
+              });
+            } catch (err) {
+              console.error('busy call chat:', err.message);
+            }
+            try {
               const { pushMissedCall } = require('../utils/callPush');
               const snap = await calls.actorSnapshot(uid);
               await pushMissedCall(io, {
@@ -716,8 +810,6 @@ module.exports = function initSocket(io) {
           return;
         }
 
-        // Always ring + push — even if callee socket is offline. They can
-        // answer from a wake-up push or when they reopen the app (deliver below).
         const incomingPayload = {
           callId: result.session.callId,
           from: uid,
@@ -825,7 +917,12 @@ module.exports = function initSocket(io) {
       try {
         if (!callId) return;
         const session = calls.getSession(callId);
-        if (!session || String(session.callerId) !== String(uid)) return;
+        if (!session) {
+          // Invite may still be in flight — remember cancel so we don't ring
+          calls.markPendingCancel(callId);
+          return;
+        }
+        if (String(session.callerId) !== String(uid)) return;
         await calls.destroySession(callId, {
           status: 'cancelled',
           endReason: 'cancel',
@@ -833,6 +930,26 @@ module.exports = function initSocket(io) {
         });
       } catch (err) {
         console.error('call:cancel error:', err.message);
+      }
+    });
+
+    // Re-deliver ringing incoming after push wake / app reopen
+    socket.on('call:sync', async () => {
+      try {
+        const ringing = calls.getRingingIncomingForUser(uid);
+        if (!ringing) return;
+        const caller = await calls.actorSnapshot(ringing.callerId);
+        socket.emit('call:incoming', {
+          callId: ringing.callId,
+          from: ringing.callerId,
+          callType: ringing.callType,
+          roomId: ringing.roomId,
+          caller,
+          iceServers: calls.getIceServers(),
+          ringTimeoutMs: calls.RING_TIMEOUT_MS,
+        });
+      } catch (err) {
+        console.error('call:sync error:', err.message);
       }
     });
 
@@ -1275,6 +1392,10 @@ module.exports = function initSocket(io) {
 
     // ── Disconnect ────────────────────────────────────
     socket.on('disconnect', async () => {
+      if (aliveTimer) {
+        clearInterval(aliveTimer);
+        aliveTimer = null;
+      }
       const set = onlineSockets.get(uid);
       if (set) {
         set.delete(socket.id);

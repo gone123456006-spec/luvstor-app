@@ -42,10 +42,12 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
     const blockedIds = await getBlockedUserIds(viewerId);
     const excludeIds = [viewerId, ...blockedIds];
     
-    // Online threshold
+    // Online threshold — never trust bare isOnline without a fresh lastSeen
     const recentlyActive = new Date(
       Date.now() - CONFIG.ONLINE_THRESHOLD_MIN * 60 * 1000
     );
+    const { STALE_MS } = require('../utils/onlineStatus');
+    const onlineFresh = new Date(Date.now() - STALE_MS);
     
     // Gender filter from viewer prefs
     const genderFilter = viewer.discoveryPrefs?.gender;
@@ -60,7 +62,7 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
         },
       },
       $or: [
-        { isOnline: true },
+        { isOnline: true, lastSeen: { $gte: onlineFresh } },
         { lastSeen: { $gte: recentlyActive } },
       ],
     };
@@ -87,6 +89,9 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
     
     const now = new Date();
     
+    const { resolveOnlineMap } = require('../utils/onlineStatus');
+    const onlineMap = await resolveOnlineMap(candidates);
+
     // Map to response format
     const users = candidates.slice(0, CONFIG.TARGET_COUNT).map(doc => {
       const id = String(doc._id);
@@ -115,7 +120,7 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
         age: doc.age,
         photo: doc.photo,
         gender: doc.gender,
-        isOnline: !!doc.isOnline,
+        isOnline: onlineMap.get(id) === true,
         lastSeen: doc.lastSeen,
         distanceKm: km < 1 ? '1' : km > 100 ? '100' : km.toFixed(1),
         friendshipStatus: friendship?.status || 'stranger',

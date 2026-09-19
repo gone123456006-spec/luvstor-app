@@ -116,6 +116,43 @@ export const CHANNELS = {
 
 export type ChannelId = keyof typeof CHANNELS;
 
+/** WhatsApp-style Accept / Decline on the incoming-call notification */
+export const INCOMING_CALL_CATEGORY = 'incoming_call';
+export const CALL_ACTION_ACCEPT = 'ACCEPT_CALL';
+export const CALL_ACTION_DECLINE = 'DECLINE_CALL';
+
+let callCategoryReady = false;
+
+/** Register Accept / Decline actions (iOS + Android). Safe to call repeatedly. */
+export async function ensureCallNotificationCategory(): Promise<void> {
+  const Notifications = loadNotifications();
+  if (!Notifications || callCategoryReady) return;
+  try {
+    await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY, [
+      {
+        identifier: CALL_ACTION_ACCEPT,
+        buttonTitle: 'Accept',
+        options: {
+          opensAppToForeground: true,
+          isAuthenticationRequired: false,
+        },
+      },
+      {
+        identifier: CALL_ACTION_DECLINE,
+        buttonTitle: 'Decline',
+        options: {
+          opensAppToForeground: false,
+          isDestructive: true,
+          isAuthenticationRequired: false,
+        },
+      },
+    ]);
+    callCategoryReady = true;
+  } catch (err: any) {
+    console.warn('[Push] call category failed:', err?.message);
+  }
+}
+
 /**
  * Foreground presentation. The in-app toast already covers chat, so a banner
  * would double up — everything else is shown.
@@ -151,7 +188,10 @@ export function configureForegroundHandler(
 
 /** Create every Android channel up front so the first push renders correctly. */
 export async function ensureChannels() {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS !== 'android') {
+    await ensureCallNotificationCategory();
+    return;
+  }
   const Notifications = loadNotifications();
   if (!Notifications) return;
   await Promise.all(
@@ -176,6 +216,7 @@ export async function ensureChannels() {
       );
     }),
   );
+  await ensureCallNotificationCategory();
 }
 
 export type PermissionResult = {
@@ -353,7 +394,7 @@ export async function getLastNotificationResponseAsync() {
   }
 }
 
-/** Present a local tray notification for an incoming call (app backgrounded). */
+/** Present a local tray notification for an incoming call (Accept / Decline). */
 export async function presentIncomingCallLocalNotification(opts: {
   callId: string;
   callerName: string;
@@ -363,24 +404,32 @@ export async function presentIncomingCallLocalNotification(opts: {
   const Notifications = loadNotifications();
   if (!Notifications) return;
   try {
+    await ensureCallNotificationCategory();
     const kind = opts.callType === 'video' ? 'video call' : 'voice call';
     await Notifications.scheduleNotificationAsync({
       content: {
         title: opts.callerName || 'Incoming call',
         body: `Incoming ${kind}`,
         sound: true,
+        categoryIdentifier: INCOMING_CALL_CATEGORY,
         data: {
           type: 'call',
           action: 'incoming',
           callId: opts.callId,
           userId: opts.callerId,
           callType: opts.callType,
+          categoryId: INCOMING_CALL_CATEGORY,
         },
         ...(Platform.OS === 'android'
-          ? { channelId: 'calls' as const }
+          ? {
+              channelId: 'calls' as const,
+              sticky: true,
+              priority: Notifications.AndroidNotificationPriority?.MAX,
+            }
           : {}),
       },
       trigger: null,
+      identifier: `incoming-call:${opts.callId}`,
     });
   } catch (err: any) {
     console.warn('[Push] local incoming call notify failed:', err?.message);
@@ -406,9 +455,18 @@ export async function dismissCallNotifications(callId?: string | null): Promise<
 
 /** Resolve the in-app route for a notification payload. */
 export function routeForData(data: Record<string, any> = {}) {
-  if (data.action === 'incoming' && data.callId) {
-    // Foreground/background: CallProvider handles socket `call:incoming`.
-    // Tap opens chat with caller so user can call back if missed.
+  if (
+    (data.action === 'incoming' || data.type === 'call') &&
+    data.callId &&
+    !data.missed
+  ) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { setPendingIncomingCall } = require('./pendingIncomingCall');
+      setPendingIncomingCall(data, 'open');
+    } catch {
+      /* ignore */
+    }
     const userId = data.userId || data.actorId;
     return userId ? `/messages/${userId}` : '/(tabs)/chat';
   }

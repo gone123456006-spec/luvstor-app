@@ -1,10 +1,10 @@
-import { getApiBase } from './api';
+import { fetchWithTimeout, getApiBase } from './api';
 
 export async function archiveConversation(
   token: string,
   otherUserId: string,
 ): Promise<void> {
-  const res = await fetch(`${getApiBase()}/api/chat/archive/${otherUserId}`, {
+  const res = await fetchWithTimeout(`${getApiBase()}/api/chat/archive/${otherUserId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -18,7 +18,7 @@ export async function unarchiveConversation(
   token: string,
   otherUserId: string,
 ): Promise<void> {
-  const res = await fetch(`${getApiBase()}/api/chat/unarchive/${otherUserId}`, {
+  const res = await fetchWithTimeout(`${getApiBase()}/api/chat/unarchive/${otherUserId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -32,7 +32,7 @@ export async function deleteConversationPermanently(
   token: string,
   otherUserId: string,
 ): Promise<void> {
-  const res = await fetch(`${getApiBase()}/api/chat/conversation/${otherUserId}`, {
+  const res = await fetchWithTimeout(`${getApiBase()}/api/chat/conversation/${otherUserId}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -43,7 +43,7 @@ export async function deleteConversationPermanently(
 }
 
 export async function fetchArchivedConversations(token: string): Promise<any[]> {
-  const res = await fetch(`${getApiBase()}/api/chat/archived`, {
+  const res = await fetchWithTimeout(`${getApiBase()}/api/chat/archived`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {

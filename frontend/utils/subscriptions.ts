@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiRequest, getApiBase } from "./api";
+import { apiRequest, fetchWithTimeout, getApiBase } from "./api";
 import { RazorpayCheckout, isRazorpayAvailable } from "./razorpay.native";
 
 export type SubscriptionPlanId =
@@ -81,7 +81,7 @@ export async function fetchSubscriptionPlans(): Promise<{
   defaultPeriodId: BillingPeriodId;
   paymentsEnabled?: boolean;
 }> {
-  const res = await fetch(`${getApiBase()}/api/subscriptions/plans`);
+  const res = await fetchWithTimeout(`${getApiBase()}/api/subscriptions/plans`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Failed to load plans");
   return data;

@@ -23,7 +23,7 @@ async function pushIncomingCall(io, {
   const name = (caller && caller.name) || 'Someone';
   const kind = callLabel(callType);
   const body = calleeOnline
-    ? `Incoming ${kind}`
+    ? `Incoming ${kind} — Accept or Decline`
     : `Incoming ${kind} — open Luvstor to answer`;
 
   return createNotification(io, {
@@ -45,6 +45,7 @@ async function pushIncomingCall(io, {
       callType,
       action: 'incoming',
       calleeOnline: Boolean(calleeOnline),
+      categoryId: 'incoming_call',
     },
   });
 }
