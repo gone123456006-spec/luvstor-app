@@ -15,7 +15,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppAlert } from "../components/AppAlert";
 import { ListRowSkeleton } from "../components/ScreenSkeleton";
 import UserProfileModal from "../components/UserProfileModal";
@@ -32,6 +32,7 @@ import {
     markNotificationsRead,
     markNotificationsUnread,
 } from "../utils/notifications";
+import { getSheetBottomPadding } from "../utils/navigation";
 import { routeForData } from "../utils/push";
 import { fetchSubscriptionStatus } from "../utils/subscriptions";
 
@@ -253,6 +254,7 @@ function displayBody(
 
 export default function NotificationsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { notifTick, refreshNotifUnread, notifUnreadCount } = useSocket();
   const { showAlert } = useAppAlert();
 
@@ -1092,7 +1094,10 @@ export default function NotificationsScreen() {
         onRequestClose={() => setSelected(null)}
       >
         <Pressable
-          style={styles.sheetBackdrop}
+          style={[
+            styles.sheetBackdrop,
+            { paddingBottom: getSheetBottomPadding(insets.bottom) },
+          ]}
           onPress={() => setSelected(null)}
         >
           <View
@@ -1590,13 +1595,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.45)",
     justifyContent: "flex-end",
     paddingHorizontal: 10,
-    paddingBottom: 10,
   },
   sheetWrap: {
     gap: 8,
   },
   sheet: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderRadius: 14,
     overflow: "hidden",
   },
@@ -1634,7 +1638,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   sheetCancel: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",

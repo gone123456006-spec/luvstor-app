@@ -2315,7 +2315,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   prefsSheet: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,

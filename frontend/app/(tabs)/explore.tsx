@@ -6,7 +6,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Modal,
   Platform,
   Pressable,
   StatusBar,
@@ -16,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAppAlert } from "../../components/AppAlert";
 import WhatsAppAvatar, {
   getDisplayName,
@@ -28,6 +27,8 @@ import {
   useExplore,
 } from "../../contexts/ExploreContext";
 import { useSocket } from "../../contexts/SocketContext";
+import { useStableBottomInset } from "../../hooks/useStableBottomInset";
+import { useTabBarOverlayInset } from "../../hooks/useTabBarOverlayInset";
 import {
   getWebRTCUnavailableMessage,
   isWebRTCAvailable,
@@ -269,9 +270,9 @@ function TabPadded({
   style?: object | object[];
   children: React.ReactNode;
 }) {
-  const insets = useSafeAreaInsets();
+  const bottom = useStableBottomInset();
   return (
-    <View style={[style, { paddingBottom: getTabBarClearance(insets.bottom) }]}>
+    <View style={[style, { paddingBottom: getTabBarClearance(bottom) }]}>
       {children}
     </View>
   );
@@ -399,6 +400,7 @@ function ExplorePrefsSheet({
 }) {
   const { user } = useAuth();
   const { showAlert } = useAppAlert();
+  const tabClearance = useTabBarOverlayInset();
   const [showMe, setShowMe] = useState<ShowMeValue>(initial.showMe);
   const [verifiedOnly, setVerifiedOnly] = useState(initial.verifiedOnly);
   const [hasExplorePrefs, setHasExplorePrefs] = useState(false);
@@ -489,131 +491,129 @@ function ExplorePrefsSheet({
 
   const locked = !hasExplorePrefs;
 
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <View style={styles.sheetOverlay}>
-        <Pressable style={styles.sheetDismiss} onPress={onClose} />
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>Preferences</Text>
-          <Text style={styles.sheetSub}>
-            Who you want to meet on Explore
-          </Text>
+    <View style={styles.sheetHost} pointerEvents="box-none">
+      <Pressable
+        style={[styles.sheetDim, { bottom: tabClearance }]}
+        onPress={onClose}
+      />
+      <View style={[styles.sheet, { marginBottom: tabClearance }]}>
+        <View style={styles.sheetHandle} />
+        <Text style={styles.sheetTitle}>Preferences</Text>
+        <Text style={styles.sheetSub}>
+          Who you want to meet on Explore
+        </Text>
 
-          {/* Explore Plus — ₹99 / month */}
-          <View style={[styles.subCard, hasExplorePrefs && styles.subCardActive]}>
-            <View style={styles.subCardTop}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.subCardTitle}>Explore Plus</Text>
-                <Text style={styles.subCardPrice}>₹99 / month</Text>
-              </View>
-              {hasExplorePrefs ? (
-                <View style={styles.subActivePill}>
-                  <Text style={styles.subActivePillText}>
-                    {planName || "Active"}
-                  </Text>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={onSubscribe}
-                  disabled={buying || loadingStatus}
-                  style={styles.subBuyBtn}
-                >
-                  {buying ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={styles.subBuyBtnText}>Subscribe</Text>
-                  )}
-                </TouchableOpacity>
-              )}
+        {/* Explore Plus — ₹99 / month */}
+        <View style={[styles.subCard, hasExplorePrefs && styles.subCardActive]}>
+          <View style={styles.subCardTop}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.subCardTitle}>Explore Plus</Text>
+              <Text style={styles.subCardPrice}>₹99 / month</Text>
             </View>
+            {hasExplorePrefs ? (
+              <View style={styles.subActivePill}>
+                <Text style={styles.subActivePillText}>
+                  {planName || "Active"}
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={onSubscribe}
+                disabled={buying || loadingStatus}
+                style={styles.subBuyBtn}
+              >
+                {buying ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.subBuyBtnText}>Subscribe</Text>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
+        </View>
 
-          <Text style={styles.sheetSection}>
-            Show me{locked ? "  ·  Plus" : ""}
-          </Text>
-          <View style={styles.chipRow}>
-            {SHOW_ME_OPTIONS.filter((opt) => opt.value !== "All").map((opt) => {
-              const on = showMe === opt.value;
-              const disabled = locked;
-              return (
-                <TouchableOpacity
-                  key={opt.value}
-                  activeOpacity={0.8}
-                  disabled={disabled || buying}
-                  onPress={() => {
-                    if (disabled || buying) return;
-                    // Tap again to clear back to all genders (no "Everyone" chip)
-                    setShowMe(on ? "All" : opt.value);
-                  }}
+        <Text style={styles.sheetSection}>
+          Show me{locked ? "  ·  Plus" : ""}
+        </Text>
+        <View style={styles.chipRow}>
+          {SHOW_ME_OPTIONS.filter((opt) => opt.value !== "All").map((opt) => {
+            const on = showMe === opt.value;
+            const disabled = locked;
+            return (
+              <TouchableOpacity
+                key={opt.value}
+                activeOpacity={0.8}
+                disabled={disabled || buying}
+                onPress={() => {
+                  if (disabled || buying) return;
+                  // Tap again to clear back to all genders (no "Everyone" chip)
+                  setShowMe(on ? "All" : opt.value);
+                }}
+                style={[
+                  styles.chip,
+                  on && styles.chipOn,
+                  disabled && styles.chipLocked,
+                ]}
+              >
+                <Text
                   style={[
-                    styles.chip,
-                    on && styles.chipOn,
-                    disabled && styles.chipLocked,
+                    styles.chipText,
+                    on && styles.chipTextOn,
+                    disabled && styles.chipTextLocked,
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      on && styles.chipTextOn,
-                      disabled && styles.chipTextLocked,
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <View style={[styles.toggleRow, locked && { opacity: 0.55 }]}>
-            <View style={styles.toggleCopy}>
-              <Text style={styles.toggleTitle}>Verified only</Text>
-              <Text style={styles.toggleSub}>
-                {locked
-                  ? "Unlock with Explore Plus · ₹99/mo"
-                  : "Match with photo-verified profiles"}
-              </Text>
-            </View>
-            <Switch
-              value={locked ? false : verifiedOnly}
-              disabled={locked || buying || loadingStatus}
-              onValueChange={(v) => {
-                if (locked || buying) return;
-                setVerifiedOnly(v);
-              }}
-              trackColor={{ false: T.border, true: "#5A3A8A" }}
-              thumbColor={!locked && verifiedOnly ? T.primary : "#f4f3f4"}
-            />
-          </View>
-
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() =>
-              onSave({
-                showMe: locked ? "All" : showMe,
-                verifiedOnly: locked ? false : verifiedOnly,
-              })
-            }
-          >
-            <LinearGradient
-              colors={[T.primary, T.text]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.saveBtn}
-            >
-              <Text style={styles.saveBtnText}>Save</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
+
+        <View style={[styles.toggleRow, locked && { opacity: 0.55 }]}>
+          <View style={styles.toggleCopy}>
+            <Text style={styles.toggleTitle}>Verified only</Text>
+            <Text style={styles.toggleSub}>
+              {locked
+                ? "Unlock with Explore Plus · ₹99/mo"
+                : "Match with photo-verified profiles"}
+            </Text>
+          </View>
+          <Switch
+            value={locked ? false : verifiedOnly}
+            disabled={locked || buying || loadingStatus}
+            onValueChange={(v) => {
+              if (locked || buying) return;
+              setVerifiedOnly(v);
+            }}
+            trackColor={{ false: T.border, true: "#5A3A8A" }}
+            thumbColor={!locked && verifiedOnly ? T.primary : "#f4f3f4"}
+          />
+        </View>
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() =>
+            onSave({
+              showMe: locked ? "All" : showMe,
+              verifiedOnly: locked ? false : verifiedOnly,
+            })
+          }
+        >
+          <LinearGradient
+            colors={[T.primary, T.text]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.saveBtn}
+          >
+            <Text style={styles.saveBtnText}>Save</Text>
+          </LinearGradient>
+        </TouchableOpacity>
       </View>
-    </Modal>
+    </View>
   );
 }
 
@@ -1033,22 +1033,29 @@ const styles = StyleSheet.create({
     ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
   },
 
-  /* Prefs sheet */
-  sheetOverlay: {
-    flex: 1,
+  /* Prefs sheet — in-tree so footer tabs stay visible */
+  sheetHost: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2000,
+    elevation: 2000,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.4)",
   },
-  sheetDismiss: {
-    flex: 1,
+  sheetDim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
   },
   sheet: {
-    backgroundColor: T.surface,
+    backgroundColor: "#E4E6EB",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 36 : 24,
+    paddingBottom: Platform.OS === "ios" ? 16 : 12,
+    zIndex: 1,
+    elevation: 8,
   },
   sheetHandle: {
     alignSelf: "center",

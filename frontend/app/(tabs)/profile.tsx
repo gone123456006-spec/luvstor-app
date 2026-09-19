@@ -12,6 +12,7 @@ import {
     KeyboardAvoidingView,
     Modal,
     Platform,
+    Pressable,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -55,6 +56,7 @@ import {
     showMeLabel,
 } from "../../utils/showMe";
 import { useLiveSubscriptionBadge } from "../../utils/subscriptions";
+import { useTabBarOverlayInset } from "../../hooks/useTabBarOverlayInset";
 
 // ── Luvstor theme + WhatsApp-style layout ───────────────────
 const WA = {
@@ -125,6 +127,7 @@ const DISTANCE_EDIT_OPTIONS = [1, 5, 10, 25, 50, 100];
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const tabClearance = useTabBarOverlayInset();
   const { sessionVersion, refreshSession } = useAuth();
   const { bumpProfileLocal } = useSocket();
   const initialSnapshot = React.useMemo(() => getCachedProfile(), []);
@@ -1075,6 +1078,7 @@ export default function ProfileScreen() {
     displayCoverUrl(coverPhoto) || displayCoverUrl(profile?.coverPhoto) || "";
 
   return (
+    <View style={styles.root}>
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <StatusBar
         barStyle="light-content"
@@ -2103,19 +2107,51 @@ export default function ProfileScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ── Photo Options Modal (Android) ── */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={photoOptionsVisible}
-        onRequestClose={() => setPhotoOptionsVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.photoModalOverlay}
-          activeOpacity={1}
-          onPress={() => setPhotoOptionsVisible(false)}
-        >
-          <View style={styles.photoOptionsContainer}>
+      <ProfilePhotoViewer
+        visible={photoViewerVisible}
+        uris={photoViewerUris}
+        initialIndex={photoViewerIndex}
+        title={photoViewerTitle}
+        onClose={() => setPhotoViewerVisible(false)}
+      />
+
+      <ProfileInfoModal
+        visible={infoVisible}
+        onClose={() => setInfoVisible(false)}
+        onEditPress={openEditProfile}
+        info={{
+          name: profile?.name,
+          publicId: profile?.publicId,
+          age: profile?.age,
+          photo: profile?.photo,
+          gender: profile?.gender,
+          height: profile?.height,
+          relationshipGoal: profile?.relationshipGoal,
+          showMeLabel: showMeLabel(profile?.gender, profile?.showMe),
+          distanceLabel: profile?.distance ? `${profile.distance} km` : "10 km",
+          interests: profile?.interests,
+          subscriptionBadge: liveSubscriptionBadge,
+          subscriptionExpiresAt: subscriptionExpiresAt,
+          photoVerified:
+            !!profile?.photoVerification?.photoVerified ||
+            profile?.photoVerification?.status === "approved",
+        }}
+      />
+    </SafeAreaView>
+
+      {/* Sheets outside SafeArea so they sit flush above the tab bar */}
+      {photoOptionsVisible ? (
+        <View style={styles.photoSheetHost} pointerEvents="box-none">
+          <Pressable
+            style={[styles.photoModalDim, { bottom: tabClearance }]}
+            onPress={() => setPhotoOptionsVisible(false)}
+          />
+          <View
+            style={[
+              styles.photoOptionsContainer,
+              { marginBottom: tabClearance },
+            ]}
+          >
             <Text style={styles.photoOptionsTitle}>Profile Photo</Text>
 
             {(editPhotoUri || profile?.photo) && (
@@ -2170,22 +2206,21 @@ export default function ProfileScreen() {
               <Text style={styles.photoOptionCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </Modal>
+        </View>
+      ) : null}
 
-      {/* ── Cover Photo Options (Android) ── */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={coverOptionsVisible}
-        onRequestClose={() => setCoverOptionsVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.photoModalOverlay}
-          activeOpacity={1}
-          onPress={() => setCoverOptionsVisible(false)}
-        >
-          <View style={styles.photoOptionsContainer}>
+      {coverOptionsVisible ? (
+        <View style={styles.photoSheetHost} pointerEvents="box-none">
+          <Pressable
+            style={[styles.photoModalDim, { bottom: tabClearance }]}
+            onPress={() => setCoverOptionsVisible(false)}
+          />
+          <View
+            style={[
+              styles.photoOptionsContainer,
+              { marginBottom: tabClearance },
+            ]}
+          >
             <Text style={styles.photoOptionsTitle}>Cover Photo</Text>
 
             {!!coverPhoto && (
@@ -2244,22 +2279,21 @@ export default function ProfileScreen() {
               <Text style={styles.photoOptionCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </Modal>
+        </View>
+      ) : null}
 
-      {/* ── Post Photo Options (Android) ── */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={galleryOptionsVisible}
-        onRequestClose={() => setGalleryOptionsVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.photoModalOverlay}
-          activeOpacity={1}
-          onPress={() => setGalleryOptionsVisible(false)}
-        >
-          <View style={styles.photoOptionsContainer}>
+      {galleryOptionsVisible ? (
+        <View style={styles.photoSheetHost} pointerEvents="box-none">
+          <Pressable
+            style={[styles.photoModalDim, { bottom: tabClearance }]}
+            onPress={() => setGalleryOptionsVisible(false)}
+          />
+          <View
+            style={[
+              styles.photoOptionsContainer,
+              { marginBottom: tabClearance },
+            ]}
+          >
             <Text style={styles.photoOptionsTitle}>
               {`Post ${gallerySlot + 1}`}
             </Text>
@@ -2325,44 +2359,17 @@ export default function ProfileScreen() {
               <Text style={styles.photoOptionCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </Modal>
-
-      <ProfilePhotoViewer
-        visible={photoViewerVisible}
-        uris={photoViewerUris}
-        initialIndex={photoViewerIndex}
-        title={photoViewerTitle}
-        onClose={() => setPhotoViewerVisible(false)}
-      />
-
-      <ProfileInfoModal
-        visible={infoVisible}
-        onClose={() => setInfoVisible(false)}
-        onEditPress={openEditProfile}
-        info={{
-          name: profile?.name,
-          publicId: profile?.publicId,
-          age: profile?.age,
-          photo: profile?.photo,
-          gender: profile?.gender,
-          height: profile?.height,
-          relationshipGoal: profile?.relationshipGoal,
-          showMeLabel: showMeLabel(profile?.gender, profile?.showMe),
-          distanceLabel: profile?.distance ? `${profile.distance} km` : "10 km",
-          interests: profile?.interests,
-          subscriptionBadge: liveSubscriptionBadge,
-          subscriptionExpiresAt: subscriptionExpiresAt,
-          photoVerified:
-            !!profile?.photoVerification?.photoVerified ||
-            profile?.photoVerification?.status === "approved",
-        }}
-      />
-    </SafeAreaView>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: WA.bg,
+  },
   container: {
     flex: 1,
     backgroundColor: WA.bg,
@@ -3460,19 +3467,29 @@ const styles = StyleSheet.create({
     color: C.accent,
   },
 
-  // Photo options modal (WhatsApp-style)
-  photoModalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+  // Photo options sheet — full window, flush toward footer tabs
+  photoSheetHost: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2000,
+    elevation: 2000,
     justifyContent: "flex-end",
   },
+  photoModalDim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
   photoOptionsContainer: {
-    backgroundColor: "#fff",
+    backgroundColor: "#E4E6EB",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    paddingTop: 20,
+    paddingTop: 16,
     paddingHorizontal: 16,
-    paddingBottom: Platform.OS === "ios" ? 34 : 20,
+    paddingBottom: 8,
+    zIndex: 1,
+    elevation: 8,
   },
   photoOptionsTitle: {
     fontSize: 16,
@@ -3488,7 +3505,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 16,
     borderRadius: 12,
-    backgroundColor: "#F8F9FA",
+    backgroundColor: "#FFFFFF",
     marginBottom: 8,
   },
   photoOptionText: {

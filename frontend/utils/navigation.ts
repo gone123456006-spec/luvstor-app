@@ -3,6 +3,7 @@
  * Target: 260 ms ease-out slide, no white flashes, previous screen frozen until transition ends.
  */
 import { Platform } from 'react-native';
+import { initialWindowMetrics } from 'react-native-safe-area-context';
 
 export const SCREEN_BG = '#F5F5F7';
 
@@ -19,8 +20,12 @@ export const TAB_BAR_CONTENT_GAP = 18;
  */
 const TAB_BAR_CLEARANCE_FLOOR = Platform.OS === 'ios' ? 108 : 96;
 
+/** Boot-time bottom inset — survives Modal inset flashes to 0 */
+const BOOT_BOTTOM_INSET = initialWindowMetrics?.insets?.bottom ?? 0;
+
 export function getTabBarBottomInset(safeBottom: number): number {
-  return Math.max(safeBottom, Platform.OS === 'android' ? 12 : 8);
+  const resolved = Math.max(safeBottom, BOOT_BOTTOM_INSET);
+  return Math.max(resolved, Platform.OS === 'android' ? 12 : 8);
 }
 
 /** Full tab bar height for style.height */
@@ -32,6 +37,16 @@ export function getTabBarHeight(safeBottom: number): number {
 export function getTabBarClearance(safeBottom: number): number {
   const dynamic = getTabBarHeight(safeBottom) + TAB_BAR_CONTENT_GAP;
   return Math.max(dynamic, TAB_BAR_CLEARANCE_FLOOR);
+}
+
+/**
+ * Bottom padding for action sheets / alerts so Cancel and actions clear
+ * the Android 3-button nav (≈48dp) or iOS home indicator.
+ * Floors low/zero insets (common inside translucent Modals).
+ */
+export function getSheetBottomPadding(safeBottom: number): number {
+  const floor = Platform.OS === 'android' ? 48 : 20;
+  return Math.max(safeBottom, BOOT_BOTTOM_INSET, floor) + 12;
 }
 
 /** Primary push navigation (chat, settings, profile sub-screens) */
@@ -79,6 +94,6 @@ export const tabScreenOptions = {
   headerShown: false,
   lazy: false,
   freezeOnBlur: false,
-  tabBarHideOnKeyboard: true,
+  tabBarHideOnKeyboard: false,
   sceneStyle: { backgroundColor: SCREEN_BG },
 };

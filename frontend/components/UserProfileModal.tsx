@@ -21,6 +21,7 @@ import { MAX_PROFILE_GALLERY } from "../constants/profile";
 import { getAuthToken, isValidPublicId } from "../utils/auth";
 import { blockUser, ReportReason, reportUser } from "../utils/friends";
 import { resolveMediaUrl } from "../utils/media";
+import { getSheetBottomPadding } from "../utils/navigation";
 import { showMeLabel } from "../utils/showMe";
 import { useAppAlert } from "./AppAlert";
 import CopyablePublicId, { sharePublicProfile } from "./CopyablePublicId";
@@ -214,7 +215,8 @@ export default function UserProfileModal({
   const coverUri =
     resolveMediaUrl(user.coverPhoto) || user.coverPhoto || null;
   const coverHeight = 148 + Math.max(insets.top, 0);
-  const avatarPhoto = resolveMediaUrl(user.photo) || user.photo || "";
+  // Raw path — WhatsAppAvatar resolves via resolveMediaUrl (avoids stale hosts)
+  const avatarPhoto = user.photo || "";
 
   const rawKm = user.distanceKm != null ? String(user.distanceKm).trim() : "";
   const kmFromField =
@@ -467,7 +469,8 @@ export default function UserProfileModal({
                 <TouchableOpacity
                   style={styles.avatarWrap}
                   onPress={() => {
-                    if (avatarPhoto) showViewer([avatarPhoto], 0, displayName);
+                    const uri = resolveMediaUrl(avatarPhoto) || avatarPhoto;
+                    if (uri) showViewer([uri], 0, displayName);
                   }}
                   activeOpacity={0.85}
                   disabled={!avatarPhoto}
@@ -606,7 +609,7 @@ export default function UserProfileModal({
                 style={styles.optionsScroll}
                 contentContainerStyle={[
                   styles.optionsScrollContent,
-                  { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+                  { paddingBottom: getSheetBottomPadding(insets.bottom) },
                 ]}
                 bounces={false}
                 showsVerticalScrollIndicator={false}
@@ -687,7 +690,7 @@ export default function UserProfileModal({
                     style={[
                       styles.waSheet,
                       {
-                        paddingBottom: Math.max(insets.bottom, 16),
+                        paddingBottom: getSheetBottomPadding(insets.bottom),
                         transform: [
                           {
                             translateY: waSheetAnim.interpolate({
@@ -779,7 +782,7 @@ export default function UserProfileModal({
                     style={[
                       styles.waSheet,
                       {
-                        paddingBottom: Math.max(insets.bottom, 16),
+                        paddingBottom: getSheetBottomPadding(insets.bottom),
                         transform: [
                           {
                             translateY: waSheetAnim.interpolate({
@@ -869,7 +872,7 @@ export default function UserProfileModal({
                     style={[
                       styles.waSheet,
                       {
-                        paddingBottom: Math.max(insets.bottom, 16),
+                        paddingBottom: getSheetBottomPadding(insets.bottom),
                         transform: [
                           {
                             translateY: waSheetAnim.interpolate({
@@ -959,7 +962,7 @@ export default function UserProfileModal({
                 style={styles.optionsScroll}
                 contentContainerStyle={[
                   styles.optionsScrollContent,
-                  { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+                  { paddingBottom: getSheetBottomPadding(insets.bottom) },
                 ]}
                 bounces={false}
                 showsVerticalScrollIndicator={false}
@@ -1665,7 +1668,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sheetCard: {
-    backgroundColor: WA.white,
+    backgroundColor: "#E4E6EB",
     borderRadius: 16,
     overflow: "hidden",
   },
@@ -1691,7 +1694,7 @@ const styles = StyleSheet.create({
     marginLeft: 18,
   },
   sheetCancel: {
-    backgroundColor: WA.white,
+    backgroundColor: "#E4E6EB",
     borderRadius: 16,
     paddingVertical: 16,
     alignItems: "center",

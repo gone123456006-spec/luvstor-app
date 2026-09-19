@@ -82,6 +82,7 @@ import { usePush } from "../../contexts/PushContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { apiRequest, getApiBase } from "../../utils/api";
 import { resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
+import { getSheetBottomPadding } from "../../utils/navigation";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import {
     ChatAccessStatus,
@@ -4390,7 +4391,6 @@ export default function MessageScreen() {
                       message:
                         "We’ll ring them and send a push notification. They can answer if they open Luvstor while you’re still calling.",
                       icon: callType === "video" ? "videocam" : "call",
-                      actionsLayout: "horizontal",
                       buttons: [
                         {
                           text: "Call anyway",
@@ -4419,7 +4419,7 @@ export default function MessageScreen() {
                             });
                           },
                         },
-                        { text: "Cancel", style: "default" },
+                        { text: "Cancel", style: "cancel" },
                       ],
                     });
                     return;
@@ -5097,7 +5097,7 @@ export default function MessageScreen() {
           <View
             style={[
               styles.optionsBody,
-              { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+              { paddingBottom: getSheetBottomPadding(insets.bottom) },
             ]}
           >
             <View style={styles.optionsAvatarBlock}>
@@ -5232,20 +5232,6 @@ export default function MessageScreen() {
                   {optionsAlert.message}
                 </Text>
                 <View style={styles.optAlertActions}>
-                  {optionsAlert.cancelText ? (
-                    <>
-                      <TouchableOpacity
-                        style={styles.optAlertBtn}
-                        onPress={() => setOptionsAlert(null)}
-                        activeOpacity={0.55}
-                      >
-                        <Text style={styles.optAlertBtnCancel}>
-                          {optionsAlert.cancelText}
-                        </Text>
-                      </TouchableOpacity>
-                      <View style={styles.optAlertVDivider} />
-                    </>
-                  ) : null}
                   <TouchableOpacity
                     style={styles.optAlertBtn}
                     onPress={() => {
@@ -5265,6 +5251,20 @@ export default function MessageScreen() {
                       {optionsAlert.confirmText}
                     </Text>
                   </TouchableOpacity>
+                  {optionsAlert.cancelText ? (
+                    <>
+                      <View style={styles.optAlertVDivider} />
+                      <TouchableOpacity
+                        style={styles.optAlertBtn}
+                        onPress={() => setOptionsAlert(null)}
+                        activeOpacity={0.55}
+                      >
+                        <Text style={styles.optAlertBtnCancel}>
+                          {optionsAlert.cancelText}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : null}
                 </View>
               </View>
             </View>
@@ -5281,7 +5281,7 @@ export default function MessageScreen() {
                 style={[
                   styles.optSheet,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16),
+                    paddingBottom: getSheetBottomPadding(insets.bottom),
                     transform: [
                       {
                         translateY: optionsSheetAnim.interpolate({
@@ -5355,7 +5355,7 @@ export default function MessageScreen() {
                 style={[
                   styles.optSheet,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16),
+                    paddingBottom: getSheetBottomPadding(insets.bottom),
                     transform: [
                       {
                         translateY: optionsSheetAnim.interpolate({
@@ -5427,7 +5427,7 @@ export default function MessageScreen() {
                 style={[
                   styles.optSheet,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16),
+                    paddingBottom: getSheetBottomPadding(insets.bottom),
                     transform: [
                       {
                         translateY: optionsSheetAnim.interpolate({
@@ -5667,7 +5667,7 @@ const styles = StyleSheet.create({
   optAlertCard: {
     width: "100%",
     maxWidth: 300,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderRadius: 16,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
@@ -5723,7 +5723,7 @@ const styles = StyleSheet.create({
   },
   optSheet: {
     width: "100%",
-    backgroundColor: "#FDF8FF",
+    backgroundColor: "#E4E6EB",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 14,
