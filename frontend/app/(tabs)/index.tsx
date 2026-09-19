@@ -31,7 +31,7 @@ import WhatsAppAvatar, {
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
-import { resolveMediaUrl } from "../../utils/media";
+import { mediaIdentity, resolveMediaUrl } from "../../utils/media";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -756,18 +756,29 @@ export default function DiscoverScreen() {
     };
     const patch = (user: NearbyUser): NearbyUser => {
       if (user.id !== u.userId) return user;
+      const nextPhoto = u.photo ? resolve(u.photo) : user.photo;
+      const nextCover =
+        u.coverPhoto !== undefined
+          ? resolve(u.coverPhoto) || ""
+          : user.coverPhoto;
+      const nextPhotos = Array.isArray(u.photos)
+        ? u.photos.map(resolve).filter(Boolean)
+        : user.photos;
+      const same = (a?: string | null, b?: string | null) => {
+        const ia = mediaIdentity(a);
+        const ib = mediaIdentity(b);
+        if (ia && ib) return ia === ib;
+        return String(a || "") === String(b || "");
+      };
       return {
         ...user,
         name: u.name != null && u.name !== "" ? u.name : user.name,
         bio: u.bio != null ? u.bio : user.bio,
-        photo: u.photo ? resolve(u.photo) : user.photo,
-        coverPhoto:
-          u.coverPhoto !== undefined
-            ? resolve(u.coverPhoto) || ""
-            : user.coverPhoto,
-        photos: Array.isArray(u.photos)
-          ? u.photos.map(resolve).filter(Boolean)
-          : user.photos,
+        photo: same(user.photo, nextPhoto) ? user.photo : nextPhoto,
+        coverPhoto: same(user.coverPhoto, nextCover)
+          ? user.coverPhoto
+          : nextCover,
+        photos: nextPhotos,
         age: u.age != null ? u.age : user.age,
         gender: u.gender || user.gender,
         height: u.height !== undefined ? u.height : user.height,
@@ -793,7 +804,12 @@ export default function DiscoverScreen() {
       user.id === uid ? { ...user, isOnline: online } : user;
     setNearbyUsers((prev) => prev.map(patch));
     setSearchedUser((prev) => (prev ? patch(prev) : prev));
-    setSelectedUser((prev) => (prev ? patch(prev) : prev));
+    // Only touch the open profile when online status actually changes —
+    // otherwise every presence tick rebuilds the modal and blinks Options.
+    setSelectedUser((prev) => {
+      if (!prev || prev.id !== uid || !!prev.isOnline === online) return prev;
+      return { ...prev, isOnline: online };
+    });
   }, [presenceTick, lastPresence]);
 
   // Realtime like / unlike / friends — update hearts without refresh
@@ -1131,28 +1147,53 @@ export default function DiscoverScreen() {
       const { user: full } = await fetchUserProfile(token, user.id);
       if (full) {
         const latestRel = relationshipById[user.id] || rel;
-        setSelectedUser({
-          ...user,
-          ...full,
-          // Prefer list distance; never invent km for non-nearby (random) rows
-          distanceKm:
-            user.source === "random"
-              ? undefined
-              : (user.distanceKm && user.distanceKm !== "?"
-                  ? user.distanceKm
-                  : null) ||
-                (full.distanceKm && full.distanceKm !== "?"
-                  ? full.distanceKm
-                  : null) ||
-                undefined,
-          distance:
-            user.source === "random"
-              ? undefined
-              : (user.distance ?? full.distance),
-          friendshipStatus: latestRel?.status || full.friendshipStatus,
-          areFriends: latestRel?.areFriends ?? full.areFriends,
-          iLiked: latestRel?.iLiked ?? full.iLiked,
-          theyLiked: latestRel?.theyLiked ?? full.theyLiked,
+        setSelectedUser((prev) => {
+          const base = prev?.id === full.id ? prev : user;
+          const same = (a?: string | null, b?: string | null) => {
+            const ia = mediaIdentity(a);
+            const ib = mediaIdentity(b);
+            if (ia && ib) return ia === ib;
+            return String(a || "") === String(b || "");
+          };
+          const nextPhotos = Array.isArray(full.photos) ? full.photos : [];
+          const prevPhotos = Array.isArray(base.photos) ? base.photos : [];
+          let photos = nextPhotos;
+          if (nextPhotos.length === 0 && prevPhotos.length > 0) {
+            photos = prevPhotos;
+          } else if (
+            nextPhotos.length === prevPhotos.length &&
+            nextPhotos.every((p, i) => same(p, prevPhotos[i]))
+          ) {
+            photos = prevPhotos;
+          }
+          return {
+            ...base,
+            ...full,
+            photo: same(base.photo, full.photo) ? base.photo : full.photo,
+            coverPhoto: same(base.coverPhoto, full.coverPhoto)
+              ? base.coverPhoto
+              : full.coverPhoto,
+            photos,
+            // Prefer list distance; never invent km for non-nearby (random) rows
+            distanceKm:
+              user.source === "random"
+                ? undefined
+                : (user.distanceKm && user.distanceKm !== "?"
+                    ? user.distanceKm
+                    : null) ||
+                  (full.distanceKm && full.distanceKm !== "?"
+                    ? full.distanceKm
+                    : null) ||
+                  undefined,
+            distance:
+              user.source === "random"
+                ? undefined
+                : (user.distance ?? full.distance),
+            friendshipStatus: latestRel?.status || full.friendshipStatus,
+            areFriends: latestRel?.areFriends ?? full.areFriends,
+            iLiked: latestRel?.iLiked ?? full.iLiked,
+            theyLiked: latestRel?.theyLiked ?? full.theyLiked,
+          };
         });
       }
     } catch {

@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import React from "react";
 import {
     ActivityIndicator,
@@ -11,7 +10,7 @@ import {
 } from "react-native";
 
 import { MAX_PROFILE_GALLERY } from "../constants/profile";
-import { resolveMediaUrl } from "../utils/media";
+import MediaImage from "./MediaImage";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const GRID_COLS = 3;
@@ -211,12 +210,12 @@ export default function ProfileInstagramSection({
                   }
                   delayLongPress={350}
                 >
-                  <Image
-                    source={{ uri: resolveMediaUrl(uri) || uri }}
+                  <MediaImage
+                    uri={uri}
                     style={styles.gridImage}
                     contentFit="cover"
-                    cachePolicy="none"
-                    recyclingKey={uri}
+                    cachePolicy="memory-disk"
+                    recyclingKey={`ig-manage-${index}`}
                   />
                   {busy ? (
                     <View style={styles.gridBusy}>
@@ -234,13 +233,12 @@ export default function ProfileInstagramSection({
                   activeOpacity={0.85}
                   onPress={() => onPhotoPress(index)}
                 >
-                  <Image
-                    source={{ uri: resolveMediaUrl(uri) || uri }}
+                  <MediaImage
+                    uri={uri}
                     style={styles.gridImage}
                     contentFit="cover"
                     cachePolicy="memory-disk"
-                    // Prevents a recycled cell from keeping the previous photo
-                    recyclingKey={uri}
+                    recyclingKey={`ig-photo-${index}`}
                   />
                 </TouchableOpacity>
               ) : null,

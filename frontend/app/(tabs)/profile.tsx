@@ -1,8 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
-import { Image } from "expo-image";
-import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
+import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useRef, useState } from "react";
 import {
@@ -26,6 +25,7 @@ import {
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import CopyablePublicId from "../../components/CopyablePublicId";
+import MediaImage, { prefetchMedia } from "../../components/MediaImage";
 import ProfileInfoModal from "../../components/ProfileInfoModal";
 import ProfileInstagramSection from "../../components/ProfileInstagramSection";
 import ProfilePhotoViewer from "../../components/ProfilePhotoViewer";
@@ -986,6 +986,11 @@ export default function ProfileScreen() {
       }
       setSubscriptionBadge(snapshot.subscriptionBadge);
       setSubscriptionExpiresAt(snapshot.subscriptionExpiresAt);
+
+      // Warm disk cache so DP / cover / posts stay visible offline once loaded
+      prefetchMedia(snapshot.profile?.photo);
+      prefetchMedia(next || raw);
+      for (const uri of snapshot.gallery || []) prefetchMedia(uri);
     },
     [],
   );
@@ -1027,6 +1032,7 @@ export default function ProfileScreen() {
               coverPhoto: raw,
             } as any,
           });
+          prefetchMedia(next);
         } catch {
           /* ignore — snapshot path still runs */
         }
@@ -1097,25 +1103,15 @@ export default function ProfileScreen() {
         <View style={styles.coverBlock}>
           <View style={[styles.coverWrap, { height: coverHeight }]}>
             {coverUri ? (
-              <Image
-                key={coverUri}
-                source={{ uri: coverUri }}
+              <MediaImage
+                uri={coverUri}
                 style={{ width: "100%", height: coverHeight }}
                 contentFit="cover"
                 cachePolicy="memory-disk"
-                recyclingKey={coverUri}
-                onError={() => {
-                  // Retry once with cache-bust if remote URL fails
-                  const base = coverUri.split("?")[0];
-                  if (
-                    base &&
-                    !coverUri.startsWith("file:") &&
-                    !coverUri.startsWith("content:")
-                  ) {
-                    const busted = `${base}?t=${Date.now()}`;
-                    coverPhotoRef.current = busted;
-                    setCoverPhoto(busted);
-                  }
+                onExhausted={() => {
+                  // Drop broken cover so gradient placeholder shows
+                  coverPhotoRef.current = "";
+                  setCoverPhoto("");
                 }}
               />
             ) : (

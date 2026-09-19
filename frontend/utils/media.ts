@@ -1,5 +1,8 @@
 import { getApiBase } from './api';
 
+/** Where production profile / post / cover files are hosted */
+export const PRODUCTION_MEDIA_BASE = 'https://luvstor-api.onrender.com';
+
 /**
  * Optional CDN / production origin for `/uploads/...` when the API host
  * differs from where files actually live (common in local-dev + Atlas).
@@ -7,7 +10,18 @@ import { getApiBase } from './api';
 function getMediaBase(): string {
   const fromEnv = process.env.EXPO_PUBLIC_MEDIA_BASE_URL?.trim().replace(/\/$/, '');
   if (fromEnv) return fromEnv;
-  return getApiBase();
+
+  const api = getApiBase();
+  try {
+    // Local / emulator / LAN API usually has an empty uploads/ folder while
+    // Mongo still points at files that live on Render.
+    if (isLocalOrEmulatorHost(new URL(api).hostname)) {
+      return PRODUCTION_MEDIA_BASE;
+    }
+  } catch {
+    /* fall through */
+  }
+  return api;
 }
 
 function isLocalOrEmulatorHost(hostname: string): boolean {
@@ -21,6 +35,44 @@ function isLocalOrEmulatorHost(hostname: string): boolean {
   if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
   if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
   return false;
+}
+
+/**
+ * Stable identity for a media item, independent of which host/query string
+ * it currently resolves through. Use this (not the resolved URL) as a React
+ * `key` / expo-image `recyclingKey` — otherwise a profile refresh that
+ * re-resolves the *same* photo through a slightly different absolute URL
+ * (different host, added query, etc.) forces a hard remount and the image
+ * flashes blank for a frame — the "blink" WhatsApp/Instagram never show.
+ */
+export function mediaIdentity(url?: string | null): string {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return '';
+  if (
+    trimmed.startsWith('file://') ||
+    trimmed.startsWith('content://') ||
+    trimmed.startsWith('data:')
+  ) {
+    return trimmed;
+  }
+  const path = uploadsPathFromUrl(trimmed);
+  if (path) return path;
+  return trimmed.split('?')[0];
+}
+
+/** Extract `/uploads/...` path from relative or absolute URL. */
+export function uploadsPathFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  const trimmed = String(url).trim().split('?')[0];
+  if (!trimmed) return null;
+  if (trimmed.startsWith('/uploads/')) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname.startsWith('/uploads/')) return parsed.pathname;
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 /**
@@ -73,18 +125,67 @@ export function resolveMediaUrl(url?: string | null): string | null {
   try {
     const parsed = new URL(trimmed);
     if (parsed.pathname.startsWith('/uploads/')) {
-      const baseHost = new URL(mediaBase).hostname;
-      const sameHost = parsed.hostname === baseHost;
-      // Only remap stale local/emulator hosts (or same host, wrong port)
-      if (sameHost || isLocalOrEmulatorHost(parsed.hostname)) {
-        return `${mediaBase}${parsed.pathname}${parsed.search || ''}`;
-      }
       // Keep Render / CDN / other remote absolute URLs intact
-      return trimmed;
+      if (!isLocalOrEmulatorHost(parsed.hostname)) {
+        return trimmed;
+      }
+      // Stale localhost / emulator / old LAN host → current media origin
+      return `${mediaBase}${parsed.pathname}${parsed.search || ''}`;
     }
   } catch {
     /* ignore */
   }
 
   return upgradeRemotePhotoUrl(trimmed);
+}
+
+/**
+ * Ordered list of URLs to try for Instagram/WhatsApp-style reliability.
+ * Primary resolve first, then production + local API for `/uploads` paths.
+ */
+export function mediaUrlCandidates(url?: string | null): string[] {
+  if (!url) return [];
+  const trimmed = String(url).trim();
+  if (!trimmed) return [];
+
+  if (
+    trimmed.startsWith('file://') ||
+    trimmed.startsWith('content://') ||
+    trimmed.startsWith('data:')
+  ) {
+    return [trimmed];
+  }
+
+  const out: string[] = [];
+  const push = (u?: string | null) => {
+    const v = String(u || '').trim();
+    if (!v) return;
+    if (!out.includes(v)) out.push(v);
+  };
+
+  push(resolveMediaUrl(trimmed));
+
+  const path = uploadsPathFromUrl(trimmed);
+  if (path) {
+    push(`${PRODUCTION_MEDIA_BASE}${path}`);
+    try {
+      const api = getApiBase();
+      // Skip local/LAN API when files live on production — trying it only
+      // causes a failed load → candidate hop → visible blink.
+      if (!isLocalOrEmulatorHost(new URL(api).hostname)) {
+        push(`${api}${path}`);
+      }
+    } catch {
+      /* ignore */
+    }
+    const envBase = process.env.EXPO_PUBLIC_MEDIA_BASE_URL?.trim().replace(/\/$/, '');
+    if (envBase) push(`${envBase}${path}`);
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    push(trimmed);
+    push(upgradeRemotePhotoUrl(trimmed));
+  }
+
+  return out;
 }

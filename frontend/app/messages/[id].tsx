@@ -1563,6 +1563,10 @@ export default function MessageScreen() {
   const [likingHeader, setLikingHeader] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menuOpen;
+  /** Message list updates deferred while Options is open (avoids loop blink). */
+  const deferredMessagesRef = useRef<ChatMsg[] | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [blockSheetOpen, setBlockSheetOpen] = useState(false);
   const [reasonPickerOpen, setReasonPickerOpen] = useState(false);
@@ -1937,6 +1941,11 @@ export default function MessageScreen() {
     setReportOpen(false);
     setReasonPickerOpen(false);
     setPendingAlsoBlock(false);
+    if (deferredMessagesRef.current) {
+      const deferred = deferredMessagesRef.current;
+      deferredMessagesRef.current = null;
+      setMessages(deferred);
+    }
     if (after) {
       InteractionManager.runAfterInteractions(() => {
         requestAnimationFrame(after);
@@ -2564,6 +2573,9 @@ export default function MessageScreen() {
     const expires = new Date(chatAccess.sessionExpiresAt).getTime();
     const tick = () => {
       const left = Math.max(0, expires - Date.now());
+      // Options Modal re-renders on every setState — skipping while open
+      // stops the continuous full-page blink on Android.
+      if (menuOpenRef.current) return;
       setRemainingMs(left);
       if (left <= 0) {
         setChatAccess((prev) =>
@@ -3165,12 +3177,13 @@ export default function MessageScreen() {
         setMessages((prev) => {
           if (prev.some((m) => m._id === incoming._id)) return prev;
 
+          let next: ChatMsg[];
           if (clientMsgId) {
             const idx = prev.findIndex((m) => m._id === clientMsgId);
             if (idx !== -1) {
               const prevMsg = prev[idx];
-              const newArr = [...prev];
-              newArr[idx] = {
+              next = [...prev];
+              next[idx] = {
                 ...incoming,
                 // Keep local preview + view-once flag across ack
                 localImageUri: prevMsg.localImageUri || incoming.localImageUri,
@@ -3182,11 +3195,20 @@ export default function MessageScreen() {
                 ),
                 replyTo: incoming.replyTo || prevMsg.replyTo,
               };
-              return newArr;
+            } else {
+              next = [...prev, incoming];
             }
+          } else {
+            next = [...prev, incoming];
           }
 
-          return [...prev, incoming];
+          // Don't rebuild Options every incoming message — Android loop-blinks.
+          // Apply the list when Options closes.
+          if (menuOpenRef.current) {
+            deferredMessagesRef.current = next;
+            return prev;
+          }
+          return next;
         });
         if (incoming.createdAt) {
           messagesLatestAtRef.current = Math.max(
@@ -3512,6 +3534,8 @@ export default function MessageScreen() {
   useEffect(() => {
     if (presenceTick === 0 || !lastPresence?.userId) return;
     if (String(lastPresence.userId) !== String(id)) return;
+    // Don't rebuild Options every presence tick — causes loop blink
+    if (menuOpenRef.current) return;
     const fs = friendshipStatusRef.current;
     if (fs?.theyBlocked || fs?.iBlocked || privacyHidden) {
       setOtherUserOnline(false);
@@ -5062,7 +5086,7 @@ export default function MessageScreen() {
       {/* Chat Options — full page (same as profile Options) */}
       <Modal
         visible={menuOpen}
-        animationType="slide"
+        animationType="none"
         presentationStyle="fullScreen"
         statusBarTranslucent
         onRequestClose={() => {
@@ -5073,7 +5097,12 @@ export default function MessageScreen() {
           else closeChatMenu();
         }}
       >
-        <View style={styles.optionsPage}>
+        <View
+          style={styles.optionsPage}
+          collapsable={false}
+          renderToHardwareTextureAndroid
+          shouldRasterizeIOS
+        >
           <View
             style={[
               styles.optionsHeader,
