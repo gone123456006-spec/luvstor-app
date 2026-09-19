@@ -1,8 +1,8 @@
-import { NativeModules, Platform } from 'react-native';
 import Constants from 'expo-constants';
+import { NativeModules, Platform } from 'react-native';
 import { getOrCreateDeviceId } from './device';
 
-const API_PORT = 5000;
+const API_PORT = Number(process.env.EXPO_PUBLIC_API_PORT || 5000);
 
 function hostFromUri(uri: string | undefined | null): string | null {
   if (!uri) return null;

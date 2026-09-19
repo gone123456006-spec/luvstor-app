@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
-import { tabScreenOptions } from '../../utils/navigation';
+import { tabScreenOptions, getTabBarBottomInset, getTabBarHeight } from '../../utils/navigation';
 import {
   getAuthToken,
   getLocalProfile,
@@ -23,9 +23,6 @@ import {
 } from '../../utils/profileCache';
 import { pingAppOpen } from '../../utils/retention';
 
-/** Icon + label row height (above system nav inset) */
-const TAB_BAR_CONTENT_HEIGHT = 56;
-
 export default function TabLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -37,11 +34,8 @@ export default function TabLayout() {
   >('checking');
 
   // WhatsApp-style: sit above 3-button / gesture nav on every device
-  const bottomInset = Math.max(
-    insets.bottom,
-    Platform.OS === 'android' ? 12 : 8,
-  );
-  const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomInset;
+  const bottomInset = getTabBarBottomInset(insets.bottom);
+  const tabBarHeight = getTabBarHeight(insets.bottom);
   // Kick to login only after a previously active session is revoked
   useEffect(() => {
     if (user) {
@@ -134,11 +128,14 @@ export default function TabLayout() {
         },
         tabBarItemStyle: {
           paddingTop: 2,
+          height: 52,
         },
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '500',
           marginBottom: 0,
+          lineHeight: 14,
+          ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
         },
       }}
     >

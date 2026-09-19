@@ -34,16 +34,18 @@ function getLanIp() {
 
 const ip = getLanIp();
 const env = { ...process.env };
+const API_PORT = process.env.EXPO_PUBLIC_API_PORT || '5000';
 
 freePort(EXPO_PORT);
 
 if (ip) {
   env.REACT_NATIVE_PACKAGER_HOSTNAME = ip;
   env.EXPO_PUBLIC_DEV_LAN_IP = ip;
+  env.EXPO_PUBLIC_API_PORT = API_PORT;
   console.log('');
   console.log('📱 Connect phones on the SAME Wi‑Fi as this PC');
   console.log(`   Expo URL:  exp://${ip}:8081`);
-  console.log(`   Backend:   http://${ip}:5000`);
+  console.log(`   Backend:   http://${ip}:${API_PORT}`);
   console.log('   Open in the Luvstor DEV CLIENT (not store Expo Go for SDK 57)');
   console.log('');
 } else {

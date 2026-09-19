@@ -2,8 +2,37 @@
  * Shared navigation transition presets — hardware-accelerated (opacity/transform via native stack).
  * Target: 260 ms ease-out slide, no white flashes, previous screen frozen until transition ends.
  */
+import { Platform } from 'react-native';
 
 export const SCREEN_BG = '#F5F5F7';
+
+/** Icon + label row height (above system nav inset) */
+export const TAB_BAR_CONTENT_HEIGHT = 58;
+
+/** Extra gap so screen content sits clearly above the absolute tab bar */
+export const TAB_BAR_CONTENT_GAP = 18;
+
+/**
+ * Previous hard-coded Explore padding floors.
+ * Keep these as a minimum so low/zero safe-area insets cannot under-pad
+ * content beneath the absolute tab bar (regression from 108 / 96).
+ */
+const TAB_BAR_CLEARANCE_FLOOR = Platform.OS === 'ios' ? 108 : 96;
+
+export function getTabBarBottomInset(safeBottom: number): number {
+  return Math.max(safeBottom, Platform.OS === 'android' ? 12 : 8);
+}
+
+/** Full tab bar height for style.height */
+export function getTabBarHeight(safeBottom: number): number {
+  return TAB_BAR_CONTENT_HEIGHT + getTabBarBottomInset(safeBottom);
+}
+
+/** Bottom padding for tab screens so content is not hidden under the tab bar */
+export function getTabBarClearance(safeBottom: number): number {
+  const dynamic = getTabBarHeight(safeBottom) + TAB_BAR_CONTENT_GAP;
+  return Math.max(dynamic, TAB_BAR_CLEARANCE_FLOOR);
+}
 
 /** Primary push navigation (chat, settings, profile sub-screens) */
 export const stackScreenOptions = {

@@ -16,7 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppAlert } from "../../components/AppAlert";
 import WhatsAppAvatar, {
   getDisplayName,
@@ -34,6 +34,7 @@ import {
 } from "../../services/webrtc";
 import { getAuthToken } from "../../utils/auth";
 import { resolveMediaUrl } from "../../utils/media";
+import { getTabBarClearance } from "../../utils/navigation";
 import { SHOW_ME_OPTIONS, type ShowMeValue } from "../../utils/showMe";
 import {
   fetchSubscriptionStatus,
@@ -261,6 +262,21 @@ export default function ExploreScreen() {
   );
 }
 
+function TabPadded({
+  style,
+  children,
+}: {
+  style?: object | object[];
+  children: React.ReactNode;
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[style, { paddingBottom: getTabBarClearance(insets.bottom) }]}>
+      {children}
+    </View>
+  );
+}
+
 function Header({
   onPrefs,
   prefsLabel,
@@ -292,7 +308,7 @@ function IdleHome({
   onVoice: () => void;
 }) {
   return (
-    <View style={styles.idle}>
+    <TabPadded style={styles.idle}>
       <View style={styles.idleHero}>
         <View style={styles.pairRow}>
           <View style={[styles.pairAvatar, styles.pairBoy]}>
@@ -366,7 +382,7 @@ function IdleHome({
           Verified profiles · Be kind · Safe community
         </Text>
       </View>
-    </View>
+    </TabPadded>
   );
 }
 
@@ -650,7 +666,7 @@ function SearchingState({
   });
 
   return (
-    <View style={styles.stateScreen}>
+    <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
         <View style={styles.radarWrap}>
           <Animated.View style={[styles.radarRing, ringStyle(ring1)]} />
@@ -688,7 +704,7 @@ function SearchingState({
           <Text style={styles.textBtnLabel}>Leave</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </TabPadded>
   );
 }
 
@@ -702,7 +718,7 @@ function CooldownState({
   onLeave: () => void;
 }) {
   return (
-    <View style={styles.stateScreen}>
+    <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
         <View style={styles.countdown}>
           <Text style={styles.countdownNum}>{seconds}</Text>
@@ -721,7 +737,7 @@ function CooldownState({
           <Text style={styles.textBtnLabel}>Leave</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </TabPadded>
   );
 }
 
@@ -751,7 +767,7 @@ function MatchedState({
   }, [pop]);
 
   return (
-    <View style={styles.stateScreen}>
+    <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
         <Text style={styles.matchBadge}>It{"'"}s a match</Text>
         <Animated.View
@@ -784,7 +800,7 @@ function MatchedState({
           </Text>
         </View>
       </View>
-    </View>
+    </TabPadded>
   );
 }
 
@@ -803,7 +819,7 @@ function LiveCallState({
   const display = getDisplayName(name, publicId);
 
   return (
-    <View style={styles.stateScreen}>
+    <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
         <View style={styles.livePill}>
           <View style={styles.liveDot} />
@@ -829,7 +845,7 @@ function LiveCallState({
         {publicId ? <Text style={styles.matchHandle}>@{publicId}</Text> : null}
         <Text style={styles.stateSub}>Controls are on the call screen</Text>
       </View>
-    </View>
+    </TabPadded>
   );
 }
 
@@ -873,7 +889,6 @@ const styles = StyleSheet.create({
   idle: {
     flex: 1,
     paddingHorizontal: 22,
-    paddingBottom: Platform.OS === "ios" ? 108 : 96,
     justifyContent: "space-between",
   },
   idleHero: {
@@ -1009,10 +1024,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
+    paddingTop: 4,
   },
   idleFoot: {
     fontSize: 12,
+    lineHeight: 16,
     color: T.muted,
+    ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
   },
 
   /* Prefs sheet */
@@ -1181,7 +1199,6 @@ const styles = StyleSheet.create({
   stateScreen: {
     flex: 1,
     paddingHorizontal: 24,
-    paddingBottom: Platform.OS === "ios" ? 108 : 96,
     justifyContent: "space-between",
   },
   stateCenter: {

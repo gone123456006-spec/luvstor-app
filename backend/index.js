@@ -411,9 +411,24 @@ async function startHttp() {
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`❌ Port ${PORT} is already in use. Stop the other server or run:`);
-      console.error(`   netstat -ano | findstr :${PORT}`);
-      console.error(`   taskkill /PID <pid> /F`);
+      console.error(`❌ Port ${PORT} is already in use.`);
+      if (process.platform === 'darwin' && String(PORT) === '5000') {
+        console.error(
+          '   On Mac, AirPlay Receiver (Control Center) usually owns port 5000.',
+        );
+        console.error(
+          '   Fix: set PORT=5001 in backend/.env, or disable AirPlay Receiver:',
+        );
+        console.error(
+          '   System Settings → General → AirDrop & Handoff → AirPlay Receiver.',
+        );
+      } else if (process.platform === 'win32') {
+        console.error(`   netstat -ano | findstr :${PORT}`);
+        console.error('   taskkill /PID <pid> /F');
+      } else {
+        console.error(`   lsof -nP -iTCP:${PORT} -sTCP:LISTEN`);
+        console.error('   kill <pid>');
+      }
       process.exit(1);
     }
     throw err;
