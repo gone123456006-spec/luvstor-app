@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { normalizeEmail } from './auth';
+import { normalizeEmail } from './normalizeEmail';
 
 export const MATCHES_KEY = 'user_matches';
 export const RECENT_CHATS_KEY = 'recent_chats';

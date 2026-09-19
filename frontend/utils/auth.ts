@@ -9,6 +9,9 @@ import {
   clearLegacyGlobalStorage,
   migrateAllGlobalsForAccount,
 } from './accountStorage';
+import { normalizeEmail } from './normalizeEmail';
+
+export { normalizeEmail };
 
 export type StoredProfile = {
   photo?: string | null;
@@ -46,10 +49,6 @@ export type AuthUser = {
 
 const LEGACY_PROFILE_KEY = 'user_profile';
 export const ACTIVE_ACCOUNT_EMAIL_KEY = 'active_account_email';
-
-export function normalizeEmail(email: string): string {
-  return String(email || '').trim().toLowerCase();
-}
 
 export function profileStorageKey(email: string): string {
   return `user_profile:${normalizeEmail(email)}`;
