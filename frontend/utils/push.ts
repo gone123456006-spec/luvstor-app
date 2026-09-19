@@ -49,13 +49,19 @@ const IMPORTANCE = {
 
 const VISIBILITY_PRIVATE = 2;
 
-/** Android channels — must match the channelId the backend sends. */
+/**
+ * Android channels — must match the channelId the backend sends.
+ *
+ * Omit `sound` for the system default notification sound.
+ * Do NOT use `sound: 'default'` — expo-notifications treats that as a custom
+ * filename and logs "Custom sound 'default' not found".
+ * Use `sound: null` for silent channels.
+ */
 export const CHANNELS = {
   messages: {
     name: 'Messages',
     description: 'New chat messages',
     importance: IMPORTANCE.MAX,
-    sound: 'default',
     vibrationPattern: [0, 250, 250, 250],
     lightColor: '#8E2DE2',
   },
@@ -63,7 +69,6 @@ export const CHANNELS = {
     name: 'Calls',
     description: 'Incoming voice and video calls',
     importance: IMPORTANCE.MAX,
-    sound: 'default',
     vibrationPattern: [0, 500, 500, 500],
     lightColor: '#8E2DE2',
   },
@@ -71,7 +76,6 @@ export const CHANNELS = {
     name: 'Matches & Likes',
     description: 'New matches, likes and friend requests',
     importance: IMPORTANCE.HIGH,
-    sound: 'default',
     vibrationPattern: [0, 250, 250, 250],
     lightColor: '#FF4B6E',
   },
@@ -79,7 +83,6 @@ export const CHANNELS = {
     name: 'Tokens & Wallet',
     description: 'Token purchases, rewards and balance alerts',
     importance: IMPORTANCE.DEFAULT,
-    sound: 'default',
     vibrationPattern: [0, 200],
     lightColor: '#F59E0B',
   },
@@ -87,7 +90,6 @@ export const CHANNELS = {
     name: 'Account & Security',
     description: 'Sign-ins and account changes',
     importance: IMPORTANCE.HIGH,
-    sound: 'default',
     vibrationPattern: [0, 250, 250, 250],
     lightColor: '#EA4335',
   },
@@ -95,21 +97,19 @@ export const CHANNELS = {
     name: 'Updates',
     description: 'App announcements',
     importance: IMPORTANCE.DEFAULT,
-    sound: 'default',
     lightColor: '#8E2DE2',
   },
   promotions: {
     name: 'Offers',
     description: 'Promotions and special offers',
     importance: IMPORTANCE.LOW,
-    sound: undefined,
+    sound: null as string | null,
     lightColor: '#8E2DE2',
   },
   suggestions: {
     name: 'Daily suggestions',
     description: 'One daily summary of likes, matches and new people nearby',
     importance: IMPORTANCE.DEFAULT,
-    sound: 'default',
     lightColor: '#8E2DE2',
   },
 } as const;
@@ -155,19 +155,26 @@ export async function ensureChannels() {
   const Notifications = loadNotifications();
   if (!Notifications) return;
   await Promise.all(
-    Object.entries(CHANNELS).map(([id, cfg]) =>
-      Notifications.setNotificationChannelAsync(id, {
+    Object.entries(CHANNELS).map(([id, cfg]) => {
+      const options: Record<string, unknown> = {
         name: cfg.name,
         description: cfg.description,
         importance: cfg.importance,
-        sound: cfg.sound,
-        vibrationPattern: (cfg as any).vibrationPattern,
+        vibrationPattern: (cfg as { vibrationPattern?: number[] }).vibrationPattern,
         lightColor: cfg.lightColor,
         lockscreenVisibility: VISIBILITY_PRIVATE,
         enableVibrate: true,
         showBadge: true,
-      }).catch(() => undefined),
-    ),
+      };
+      // Only pass sound for silent (null) or a bundled custom filename.
+      // Omitting it uses the Android system default notification sound.
+      if ('sound' in cfg) {
+        options.sound = (cfg as { sound?: string | null }).sound ?? null;
+      }
+      return Notifications.setNotificationChannelAsync(id, options as any).catch(
+        () => undefined,
+      );
+    }),
   );
 }
 

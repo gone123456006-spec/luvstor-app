@@ -10,5 +10,6 @@ if (__DEV__) {
   LogBox.ignoreLogs([
     'expo-notifications: Android Push notifications (remote notifications)',
     '`expo-notifications` functionality is not fully supported in Expo Go',
+    "expo-notifications: Custom sound 'default' not found",
   ]);
 }
