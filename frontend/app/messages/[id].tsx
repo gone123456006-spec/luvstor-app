@@ -4384,6 +4384,46 @@ export default function MessageScreen() {
                     });
                     return;
                   }
+                  if (!otherUserOnline) {
+                    showAlert({
+                      title: "They’re offline",
+                      message:
+                        "We’ll ring them and send a push notification. They can answer if they open Luvstor while you’re still calling.",
+                      icon: callType === "video" ? "videocam" : "call",
+                      actionsLayout: "horizontal",
+                      buttons: [
+                        {
+                          text: "Call anyway",
+                          style: "default",
+                          onPress: () => {
+                            void startMediaCall({
+                              userId: String(id),
+                              name:
+                                (displayName &&
+                                displayName !== "User" &&
+                                displayName.toLowerCase() !== "unknown"
+                                  ? displayName
+                                  : "") ||
+                                profileUser?.name ||
+                                profileUser?.publicId ||
+                                avatarName,
+                              photo:
+                                resolveMediaUrl(displayPhoto) ||
+                                displayPhoto ||
+                                resolveMediaUrl(profileUser?.photo) ||
+                                profileUser?.photo ||
+                                "",
+                              gender: displayGender || profileUser?.gender || "",
+                              publicId: profileUser?.publicId || "",
+                              callType,
+                            });
+                          },
+                        },
+                        { text: "Cancel", style: "default" },
+                      ],
+                    });
+                    return;
+                  }
                   void startMediaCall({
                     userId: String(id),
                     name:

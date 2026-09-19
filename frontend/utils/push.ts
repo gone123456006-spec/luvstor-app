@@ -353,6 +353,57 @@ export async function getLastNotificationResponseAsync() {
   }
 }
 
+/** Present a local tray notification for an incoming call (app backgrounded). */
+export async function presentIncomingCallLocalNotification(opts: {
+  callId: string;
+  callerName: string;
+  callType: 'voice' | 'video';
+  callerId: string;
+}): Promise<void> {
+  const Notifications = loadNotifications();
+  if (!Notifications) return;
+  try {
+    const kind = opts.callType === 'video' ? 'video call' : 'voice call';
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: opts.callerName || 'Incoming call',
+        body: `Incoming ${kind}`,
+        sound: true,
+        data: {
+          type: 'call',
+          action: 'incoming',
+          callId: opts.callId,
+          userId: opts.callerId,
+          callType: opts.callType,
+        },
+        ...(Platform.OS === 'android'
+          ? { channelId: 'calls' as const }
+          : {}),
+      },
+      trigger: null,
+    });
+  } catch (err: any) {
+    console.warn('[Push] local incoming call notify failed:', err?.message);
+  }
+}
+
+/** Dismiss local/tray notifications for a call once answered or ended. */
+export async function dismissCallNotifications(callId?: string | null): Promise<void> {
+  if (!callId) return;
+  const Notifications = loadNotifications();
+  if (!Notifications) return;
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      presented
+        .filter((n) => String((n.request.content.data as any)?.callId || '') === String(callId))
+        .map((n) => Notifications.dismissNotificationAsync(n.request.identifier)),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Resolve the in-app route for a notification payload. */
 export function routeForData(data: Record<string, any> = {}) {
   if (data.action === 'incoming' && data.callId) {

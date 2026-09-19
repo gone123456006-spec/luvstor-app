@@ -41,12 +41,12 @@ function formatDuration(ms: number) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function statusLabel(phase: string, endReason: string | null) {
+function statusLabel(phase: string, endReason: string | null, opts?: { peerOffline?: boolean }) {
   switch (phase) {
     case 'outgoing':
       return 'Calling…';
     case 'ringing':
-      return 'Ringing…';
+      return opts?.peerOffline ? 'Ringing… (they’re offline)' : 'Ringing…';
     case 'incoming':
       return 'Incoming call';
     case 'connecting':
@@ -60,7 +60,7 @@ function statusLabel(phase: string, endReason: string | null) {
       if (endReason === 'cancel') return 'Cancelled';
       if (endReason === 'timeout' || endReason === 'missed') return 'No answer';
       if (endReason === 'busy') return 'Busy';
-      if (endReason === 'offline') return 'Unavailable';
+      if (endReason === 'offline') return 'Couldn’t reach them';
       if (endReason === 'error') return 'Call failed';
       return 'Call ended';
     default:
@@ -167,7 +167,9 @@ export default function CallOverlay() {
   const subtitle =
     call.phase === 'connected'
       ? duration || 'Connected'
-      : statusLabel(call.phase, call.endReason);
+      : statusLabel(call.phase, call.endReason, {
+          peerOffline: !!call.peerOffline,
+        });
 
   if (call.minimized && call.phase !== 'incoming' && call.phase !== 'ended') {
     return (

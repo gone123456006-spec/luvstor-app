@@ -411,6 +411,21 @@ async function startHttp() {
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
+      // macOS AirPlay often owns :5000 — auto-retry once on 5001 for local dev
+      if (
+        process.platform === 'darwin' &&
+        String(PORT) === '5000' &&
+        !server.__retriedAltPort
+      ) {
+        const alt = 5001;
+        console.warn(
+          `⚠️  Port 5000 is in use (often AirPlay Receiver). Retrying on ${alt}…`,
+        );
+        console.warn('   Tip: set PORT=5001 in backend/.env to skip this.');
+        server.__retriedAltPort = true;
+        server.listen(alt, '0.0.0.0');
+        return;
+      }
       console.error(`❌ Port ${PORT} is already in use.`);
       if (process.platform === 'darwin' && String(PORT) === '5000') {
         console.error(

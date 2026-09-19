@@ -101,6 +101,42 @@ async function redisClearActive(userId, callId) {
   }
 }
 
+/** Ringing call where this user is the callee (for deliver-on-reconnect). */
+function getRingingIncomingForUser(userId) {
+  const callId = userCall.get(String(userId));
+  if (!callId) return null;
+  const session = sessions.get(callId);
+  if (!session || session.status !== 'ringing') return null;
+  if (String(session.calleeId) !== String(userId)) return null;
+  return session;
+}
+
+function storePendingOffer(callId, sdp, fromUserId) {
+  const session = sessions.get(callId);
+  if (!session || !sdp) return;
+  session.pendingOffer = { sdp, from: String(fromUserId) };
+}
+
+function storePendingIce(callId, candidate, fromUserId) {
+  const session = sessions.get(callId);
+  if (!session || !candidate) return;
+  if (!Array.isArray(session.pendingIce)) session.pendingIce = [];
+  // Cap buffer — ICE floods can be large
+  if (session.pendingIce.length < 64) {
+    session.pendingIce.push({ candidate, from: String(fromUserId) });
+  }
+}
+
+function takePendingSignaling(callId) {
+  const session = sessions.get(callId);
+  if (!session) return { offer: null, ice: [] };
+  const offer = session.pendingOffer;
+  const ice = Array.isArray(session.pendingIce) ? session.pendingIce.slice() : [];
+  session.pendingOffer = null;
+  session.pendingIce = [];
+  return { offer, ice };
+}
+
 function getActiveCallForUser(userId) {
   const id = userCall.get(String(userId));
   if (!id) return null;
@@ -249,6 +285,9 @@ async function startOutgoing({
     startedAt,
     answeredAt: null,
     offerFrom: null,
+    /** Buffered SDP / ICE so late-joining (offline→online) callees still connect */
+    pendingOffer: null,
+    pendingIce: [],
   };
 
   sessions.set(callId, session);
@@ -286,24 +325,17 @@ async function startOutgoing({
         endedBy: null,
       });
       try {
-        const { createNotification } = require('./notifications');
+        const { pushMissedCall } = require('../utils/callPush');
         if (ioRef) {
-          await createNotification(ioRef, {
-            userId: calleeId,
-            type: 'call',
-            title: 'Missed call',
-            body: type === 'video' ? 'Missed video call' : 'Missed voice call',
-            actorId: callerId,
-            priority: 'high',
-            groupKey: `call:missed:${room}`,
-            deepLink: `/messages/${callerId}`,
-            data: {
-              screen: 'messages',
-              userId: String(callerId),
-              callId,
-              callType: type,
-              missed: true,
-            },
+          const caller = await actorSnapshot(callerId);
+          await pushMissedCall(ioRef, {
+            calleeId,
+            callerId,
+            callerName: caller?.name,
+            callId,
+            callType: type,
+            roomId: room,
+            reason: 'timeout',
           });
         }
       } catch (err) {
@@ -486,6 +518,10 @@ module.exports = {
   generateCallId,
   getIceServers,
   getActiveCallForUser,
+  getRingingIncomingForUser,
+  storePendingOffer,
+  storePendingIce,
+  takePendingSignaling,
   getSession,
   isParticipant,
   otherParty,

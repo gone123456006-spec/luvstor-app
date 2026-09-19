@@ -253,7 +253,7 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
             style={[
               styles.sheetWrap,
               {
-                paddingBottom: Math.max(insets.bottom, 10),
+                paddingBottom: Math.max(insets.bottom, 10) + 16,
                 opacity,
                 transform: [{ translateY: slide }],
               },

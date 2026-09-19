@@ -194,6 +194,26 @@ module.exports = function initSocket(io) {
           /* ignore */
         }
       }
+
+      // If someone is ringing this user, deliver the incoming call now that
+      // their socket is back (covers offline→online during the ring window).
+      try {
+        const ringing = calls.getRingingIncomingForUser(uid);
+        if (ringing) {
+          const caller = await calls.actorSnapshot(ringing.callerId);
+          socket.emit('call:incoming', {
+            callId: ringing.callId,
+            from: ringing.callerId,
+            callType: ringing.callType,
+            roomId: ringing.roomId,
+            caller,
+            iceServers: calls.getIceServers(),
+            ringTimeoutMs: calls.RING_TIMEOUT_MS,
+          });
+        }
+      } catch (err) {
+        console.error('deliver ringing call error:', err.message);
+      }
     };
 
     // ── Join a chat room ──────────────────────────────
@@ -677,41 +697,27 @@ module.exports = function initSocket(io) {
               from: uid,
               callType,
             });
+            try {
+              const { pushMissedCall } = require('../utils/callPush');
+              const snap = await calls.actorSnapshot(uid);
+              await pushMissedCall(io, {
+                calleeId: receiverId,
+                callerId: uid,
+                callerName: snap?.name,
+                callId: result.callId,
+                callType,
+                roomId: room,
+                reason: 'busy',
+              });
+            } catch (err) {
+              console.error('busy missed push:', err.message);
+            }
           }
           return;
         }
 
-        if (!calleeOnline) {
-          await calls.destroySession(result.session.callId, {
-            status: 'unavailable',
-            endReason: 'offline',
-            endedBy: null,
-          });
-          socket.emit('call:error', {
-            error: 'User is offline',
-            code: 'OFFLINE',
-            callId: result.session.callId,
-          });
-          await createNotification(io, {
-            userId: receiverId,
-            type: 'call',
-            title: 'Missed call',
-            body: callType === 'video' ? 'Missed video call' : 'Missed voice call',
-            actorId: uid,
-            priority: 'high',
-            groupKey: `call:missed:${room}`,
-            deepLink: `/messages/${uid}`,
-            data: {
-              screen: 'messages',
-              userId: String(uid),
-              callId: result.session.callId,
-              callType,
-              missed: true,
-            },
-          });
-          return;
-        }
-
+        // Always ring + push — even if callee socket is offline. They can
+        // answer from a wake-up push or when they reopen the app (deliver below).
         const incomingPayload = {
           callId: result.session.callId,
           from: uid,
@@ -724,25 +730,20 @@ module.exports = function initSocket(io) {
 
         notifyUser(io, receiverId, 'call:incoming', incomingPayload);
 
-        // High-priority push — wake device / show incoming when backgrounded
-        await createNotification(io, {
-          userId: receiverId,
-          type: 'call',
-          title: result.caller.name || 'Incoming call',
-          body: callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
-          actorId: uid,
-          priority: 'high',
-          groupKey: `call:${result.session.callId}`,
-          deepLink: `/messages/${uid}`,
-          data: {
-            screen: 'call',
-            userId: String(uid),
-            roomId: room,
+        try {
+          const { pushIncomingCall } = require('../utils/callPush');
+          await pushIncomingCall(io, {
+            calleeId: receiverId,
+            caller: result.caller,
+            callerId: uid,
             callId: result.session.callId,
-            callType,
-            action: 'incoming',
-          },
-        });
+            callType: result.session.callType,
+            roomId: room,
+            calleeOnline,
+          });
+        } catch (err) {
+          console.error('incoming call push:', err.message);
+        }
 
         socket.emit('call:ringing', {
           callId: result.session.callId,
@@ -751,6 +752,7 @@ module.exports = function initSocket(io) {
           iceServers: result.iceServers,
           ringTimeoutMs: result.ringTimeoutMs,
           callType: result.session.callType,
+          calleeOnline,
         });
       } catch (err) {
         console.error('call:invite error:', err.message);
@@ -781,6 +783,23 @@ module.exports = function initSocket(io) {
           session,
           isCallee: true,
         });
+
+        // Replay offer/ICE buffered while this user was offline
+        const pending = calls.takePendingSignaling(callId);
+        if (pending.offer?.sdp) {
+          socket.emit('call:offer', {
+            callId,
+            sdp: pending.offer.sdp,
+            from: pending.offer.from,
+          });
+        }
+        for (const ice of pending.ice) {
+          socket.emit('call:ice-candidate', {
+            callId,
+            candidate: ice.candidate,
+            from: ice.from,
+          });
+        }
       } catch (err) {
         console.error('call:accept error:', err.message);
         socket.emit('call:error', { error: 'Could not accept call', callId });
@@ -898,6 +917,11 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !sdp) return;
       const otherId = calls.otherParty(session, uid);
+      // Buffer while ringing — delivered on accept (covers offline callees)
+      if (session.status === 'ringing') {
+        calls.storePendingOffer(callId, sdp, uid);
+        return;
+      }
       notifyUser(io, otherId, 'call:offer', { callId, sdp, from: uid });
     });
 
@@ -912,6 +936,11 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !candidate) return;
       const otherId = calls.otherParty(session, uid);
+      // Buffer while ringing — replayed with the offer on accept
+      if (session.status === 'ringing') {
+        calls.storePendingIce(callId, candidate, uid);
+        return;
+      }
       notifyUser(io, otherId, 'call:ice-candidate', {
         callId,
         candidate,

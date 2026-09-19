@@ -26,6 +26,10 @@ import {
   getWebRTCUnavailableMessage,
 } from '../services/webrtc';
 import { resolveMediaUrl } from '../utils/media';
+import {
+  dismissCallNotifications,
+  presentIncomingCallLocalNotification,
+} from '../utils/push';
 
 export type CallPhase =
   | 'idle'
@@ -63,6 +67,8 @@ type CallState = {
   remoteStream: any;
   error: string | null;
   webrtcReady: boolean;
+  /** True when server reported callee had no live socket at invite time */
+  peerOffline: boolean;
 };
 
 type StartCallOpts = {
@@ -109,6 +115,7 @@ const initialState: CallState = {
   remoteStream: null,
   error: null,
   webrtcReady: isWebRTCAvailable(),
+  peerOffline: false,
 };
 
 function isBlankName(name?: string | null) {
@@ -228,9 +235,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const finishCall = useCallback(
     (endReason: string | null) => {
+      const endedId = stateRef.current.callId;
       stopHeartbeat();
       disposePeer();
       Vibration.cancel();
+      void dismissCallNotifications(endedId);
       patch({
         phase: 'ended',
         endReason,
@@ -543,6 +552,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         direction: 'outgoing',
         speakerOn,
         cameraOff: callType !== 'video',
+        peerOffline: payload.calleeOnline === false,
       });
 
       try {
@@ -581,6 +591,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
       if (!explore) {
         Vibration.vibrate([0, 500, 400, 500], true);
+        // App backgrounded / screen off: show a local tray alert (FCM covers fully-killed)
+        if (AppState.currentState !== 'active') {
+          void presentIncomingCallLocalNotification({
+            callId: String(payload.callId),
+            callerName: peer.name || 'Incoming call',
+            callType: payload.callType === 'video' ? 'video' : 'voice',
+            callerId: String(payload.from || peer.id || ''),
+          });
+        }
       }
 
       setState({
