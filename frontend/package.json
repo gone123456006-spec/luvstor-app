@@ -7,7 +7,7 @@
     "start:tunnel": "node ./scripts/start-tunnel.js",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "node ./scripts/start-expo.js --android",
-    "android:dev": "npx expo run:android",
+    "android:dev": "node ./scripts/run-android-dev.js",
     "ios:dev": "npx expo run:ios",
     "android:build": "node ./scripts/run-android.js",
     "android:prebuild": "node ./scripts/build-android-release.js prebuild",
@@ -68,7 +68,7 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
-    "react-native-webrtc": "^124.0.5",
+    "react-native-webrtc": "^124.0.8",
     "react-native-worklets": "0.10.1",
     "socket.io-client": "^4.8.3"
   },

@@ -34,7 +34,8 @@ function getLanIp() {
 
 const ip = getLanIp();
 const env = { ...process.env };
-const API_PORT = process.env.EXPO_PUBLIC_API_PORT || '5000';
+// Default 5001 — macOS AirPlay Receiver often owns :5000
+const API_PORT = process.env.EXPO_PUBLIC_API_PORT || '5001';
 
 freePort(EXPO_PORT);
 

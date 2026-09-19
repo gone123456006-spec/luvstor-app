@@ -40,8 +40,12 @@ function isExpoGoRuntime(): boolean {
 
 /** Resolve native WebRTC under bridgeless / New Architecture. */
 function probeNativeWebRTCModule(): any {
-  const fromNative = (NativeModules as any)?.WebRTCModule;
-  if (fromNative != null) return fromNative;
+  try {
+    const fromNative = (NativeModules as any)?.WebRTCModule;
+    if (fromNative != null) return fromNative;
+  } catch {
+    /* RN 0.80+ TurboModule interop can throw while parsing WebRTCModule */
+  }
   try {
     return TurboModuleRegistry.get('WebRTCModule');
   } catch {

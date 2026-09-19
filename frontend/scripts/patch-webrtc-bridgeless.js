@@ -23,8 +23,12 @@ const SRC_HELPER = `import { NativeModules, TurboModuleRegistry } from 'react-na
  * Legacy NativeModules.WebRTCModule is often null; TurboModuleRegistry still has it.
  */
 export function getWebRTCModule(): any {
-  const fromNative = (NativeModules as any)?.WebRTCModule;
-  if (fromNative != null) return fromNative;
+  try {
+    const fromNative = (NativeModules as any)?.WebRTCModule;
+    if (fromNative != null) return fromNative;
+  } catch {
+    /* RN 0.80+ may throw while parsing WebRTCModule annotations */
+  }
   try {
     return TurboModuleRegistry.get('WebRTCModule');
   } catch {
@@ -45,8 +49,12 @@ exports.default = void 0;
 var _reactNative = require("react-native");
 
 function getWebRTCModule() {
-  var fromNative = _reactNative.NativeModules && _reactNative.NativeModules.WebRTCModule;
-  if (fromNative != null) return fromNative;
+  try {
+    var fromNative = _reactNative.NativeModules && _reactNative.NativeModules.WebRTCModule;
+    if (fromNative != null) return fromNative;
+  } catch (e) {
+    /* RN 0.80+ may throw while parsing WebRTCModule annotations */
+  }
   try {
     return _reactNative.TurboModuleRegistry.get("WebRTCModule");
   } catch (e) {
@@ -61,8 +69,12 @@ exports.default = WebRTCModule;
 const ESM_HELPER = `import { NativeModules, TurboModuleRegistry } from 'react-native';
 
 export function getWebRTCModule() {
-  const fromNative = NativeModules?.WebRTCModule;
-  if (fromNative != null) return fromNative;
+  try {
+    const fromNative = NativeModules?.WebRTCModule;
+    if (fromNative != null) return fromNative;
+  } catch {
+    /* RN 0.80+ may throw while parsing WebRTCModule annotations */
+  }
   try {
     return TurboModuleRegistry.get('WebRTCModule');
   } catch {
