@@ -636,17 +636,14 @@ router.get("/profile/:userId", auth, async (req, res) => {
 
     const { mongoLooksOnline } = require("../utils/onlineStatus");
     const presence = require("../utils/presence");
-    let liveOnline = null;
-    try {
-      liveOnline = await presence.isUserOnline(String(safe._id || safe.id));
-    } catch {
-      liveOnline = null;
+    let isOnline = false;
+    if (!safe.privacyHidden) {
+      try {
+        isOnline = !!(await presence.isUserOnline(String(safe._id || safe.id)));
+      } catch {
+        isOnline = mongoLooksOnline(safe);
+      }
     }
-    const isOnline = safe.privacyHidden
-      ? false
-      : liveOnline === null
-        ? mongoLooksOnline(safe)
-        : liveOnline;
 
     // Return LIMITED profile (safe for discovery/matching)
     res.json({
@@ -754,11 +751,11 @@ router.get("/search-by-id", auth, async (req, res) => {
 
     const { mongoLooksOnline } = require("../utils/onlineStatus");
     const presence = require("../utils/presence");
-    let liveOnline = null;
+    let isOnline = false;
     try {
-      liveOnline = await presence.isUserOnline(String(user._id));
+      isOnline = !!(await presence.isUserOnline(String(user._id)));
     } catch {
-      liveOnline = null;
+      isOnline = mongoLooksOnline(user);
     }
 
     res.json({
@@ -774,7 +771,7 @@ router.get("/search-by-id", auth, async (req, res) => {
       interests: user.interests,
       height: user.height,
       relationshipGoal: user.relationshipGoal || "",
-      isOnline: liveOnline === null ? mongoLooksOnline(user) : liveOnline,
+      isOnline,
       lastSeen: user.lastSeen,
       distance: Number.isFinite(distM) ? Math.round(distM) : null,
       distanceKm: Number.isFinite(distM) ? (distM / 1000).toFixed(1) : null,

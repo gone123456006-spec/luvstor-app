@@ -82,6 +82,10 @@ import { useCall } from "../../contexts/CallContext";
 import { usePush } from "../../contexts/PushContext";
 import { useSocket } from "../../contexts/SocketContext";
 import {
+  prepareChatRecordingAudio,
+  restoreChatPlaybackAudio,
+} from "../../utils/callAudio";
+import {
   apiRequest,
   fetchWithTimeout,
   getApiBase,
@@ -1447,11 +1451,19 @@ export default function MessageScreen() {
   const chatLeaveScale = useRef(new Animated.Value(1)).current;
 
   // Smoothly tuck the chat away when a full-screen call opens
+  // (do NOT block on "ended" — that left chat untouchable / mic dead after calls)
+  const callUiBlocking =
+    !callIsExplore &&
+    !callMinimized &&
+    (callPhase === "outgoing" ||
+      callPhase === "ringing" ||
+      callPhase === "incoming" ||
+      callPhase === "connecting" ||
+      callPhase === "reconnecting" ||
+      callPhase === "connected");
+
   useEffect(() => {
-    const hide =
-      !callIsExplore &&
-      !callMinimized &&
-      callPhase !== "idle";
+    const hide = callUiBlocking;
     Animated.parallel([
       Animated.timing(chatLeaveOpacity, {
         toValue: hide ? 0 : 1,
@@ -1466,7 +1478,14 @@ export default function MessageScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [callPhase, callIsExplore, callMinimized, chatLeaveOpacity, chatLeaveScale]);
+  }, [callUiBlocking, chatLeaveOpacity, chatLeaveScale]);
+
+  // After any call ends, reclaim the mic for chat voice notes
+  useEffect(() => {
+    if (callPhase === "idle" || callPhase === "ended") {
+      void restoreChatPlaybackAudio();
+    }
+  }, [callPhase]);
   const { clearConversation } = usePush();
   const {
     socket: globalSocket,
@@ -1498,6 +1517,7 @@ export default function MessageScreen() {
   const [recording, setRecording] = useState<AudioRecorder | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingRef = useRef<AudioRecorder | null>(null);
   const [selectedImage, setSelectedImage] = useState<{
     uri: string;
     width: number;
@@ -1534,7 +1554,7 @@ export default function MessageScreen() {
                 ? "mutual_match"
                 : "friends",
             areFriends: true,
-            canSendMedia: false,
+            canSendMedia: true,
             canCall: true,
             iLiked: iLikedParam !== "false",
             theyLiked: theyLikedParam !== "false",
@@ -1558,6 +1578,9 @@ export default function MessageScreen() {
     let me = false;
     let other = false;
     for (const m of messages) {
+      if (m.isDeleted) continue;
+      // Call-event lines don't count as a real DM reply for media unlock
+      if (m.type === "call") continue;
       if (m.sender === "me") me = true;
       else if (m.sender === "other") other = true;
       if (me && other) return true;
@@ -1565,7 +1588,14 @@ export default function MessageScreen() {
     return false;
   }, [messages]);
 
-  const isMediaUnlocked = !!friendshipStatus?.canSendMedia || bothSidesMessaged;
+  // Friends / mutual match can send voice & photos without waiting for a reply.
+  // Strangers still need a two-way chat (or server canSendMedia).
+  const isMediaUnlocked =
+    !!friendshipStatus?.canSendMedia ||
+    bothSidesMessaged ||
+    !!friendshipStatus?.areFriends ||
+    friendshipStatus?.status === "friends" ||
+    friendshipStatus?.status === "mutual_match";
 
   useEffect(() => {
     if (!bothSidesMessaged) return;
@@ -4140,9 +4170,17 @@ export default function MessageScreen() {
     try {
       const token = await getAuthToken();
       if (!token) return null;
+      const encoding =
+        (FileSystem as any).EncodingType?.Base64 ||
+        (FileSystem as any).EncodingType?.base64 ||
+        "base64";
       const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+        encoding,
+      } as any);
+      if (!base64) {
+        console.error("Audio upload failed: empty base64");
+        return null;
+      }
       const ext = uri.split(".").pop()?.toLowerCase()?.split("?")[0] || "m4a";
       const mimeType =
         ext === "mp3"
@@ -4155,7 +4193,9 @@ export default function MessageScreen() {
                 ? "audio/x-caf"
                 : ext === "ogg"
                   ? "audio/ogg"
-                  : "audio/m4a";
+                  : ext === "webm"
+                    ? "audio/webm"
+                    : "audio/mp4";
       const dataUri = `data:${mimeType};base64,${base64}`;
 
       const res = await fetchWithTimeout(
@@ -4170,7 +4210,7 @@ export default function MessageScreen() {
         },
         UPLOAD_FETCH_TIMEOUT_MS,
       );
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         console.error("Audio upload failed", json?.error || res.status);
         return null;
@@ -4183,59 +4223,82 @@ export default function MessageScreen() {
   };
 
   async function startRecording() {
+    if (recordingRef.current || isRecording) return;
     if (!requireMediaUnlocked()) return;
 
-    const keepKeyboard = isKeyboardVisible;
-
-    const perm = await getRecordingPermissionsAsync();
-    if (perm.status !== "granted") {
-      const np = await requestRecordingPermissionsAsync();
-      if (np.status !== "granted") return;
-    }
-    await setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-      interruptionMode: "doNotMix",
-    });
-    const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
-    await rec.prepareToRecordAsync();
-    rec.record();
-    setRecording(rec);
-    setIsRecording(true);
-    setRecordingDuration(0);
-    const tick = setInterval(() => {
-      try {
-        const st = rec.getStatus();
-        if (st?.isRecording) setRecordingDuration(st.durationMillis || 0);
-      } catch {
-        /* ignore */
+    try {
+      const perm = await getRecordingPermissionsAsync();
+      if (perm.status !== "granted") {
+        const np = await requestRecordingPermissionsAsync();
+        if (np.status !== "granted") {
+          showAlert({
+            title: "Microphone",
+            message: "Allow microphone access to send voice messages.",
+            icon: "mic",
+          });
+          return;
+        }
       }
-    }, 200);
-    (rec as any).__durationTick = tick;
 
-    if (keepKeyboard) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-      setTimeout(() => inputRef.current?.focus(), 80);
+      // Reclaim session after voice/video calls (InCallManager / WebRTC)
+      await prepareChatRecordingAudio();
+
+      const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      await rec.prepareToRecordAsync();
+      rec.record();
+      recordingRef.current = rec;
+      setRecording(rec);
+      setIsRecording(true);
+      setRecordingDuration(0);
+      const tick = setInterval(() => {
+        try {
+          const st = rec.getStatus();
+          if (st?.isRecording) setRecordingDuration(st.durationMillis || 0);
+        } catch {
+          /* ignore */
+        }
+      }, 200);
+      (rec as any).__durationTick = tick;
+    } catch (e) {
+      console.error("startRecording failed", e);
+      recordingRef.current = null;
+      setIsRecording(false);
+      setRecording(null);
+      showAlert({
+        title: "Voice message",
+        message:
+          "Could not start recording. Close any call screen and try again.",
+        icon: "mic",
+      });
+      void restoreChatPlaybackAudio();
     }
   }
 
   async function stopRecording() {
-    if (!recording) return;
+    const rec = recordingRef.current;
+    if (!rec) return;
     setIsRecording(false);
-    if ((recording as any).__durationTick) {
-      clearInterval((recording as any).__durationTick);
+    if ((rec as any).__durationTick) {
+      clearInterval((rec as any).__durationTick);
     }
-    await recording.stop();
-    await setAudioModeAsync({
-      allowsRecording: false,
-      playsInSilentMode: true,
-      interruptionMode: "duckOthers",
-      shouldRouteThroughEarpiece: false,
-    });
-    const uri = recording.uri;
+    try {
+      await rec.stop();
+    } catch (e) {
+      console.warn("recording.stop", e);
+    }
+    await restoreChatPlaybackAudio();
+    const uri = rec.uri;
+    recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
-    if (!uri) return;
+    if (!uri) {
+      showAlert({
+        title: "Voice message",
+        message: "Recording was empty. Hold a moment longer, then tap stop.",
+        icon: "mic",
+      });
+      return;
+    }
 
     if (
       chatAccess &&
@@ -4297,22 +4360,30 @@ export default function MessageScreen() {
             : m,
         ),
       );
+      showAlert({
+        title: "Voice message",
+        message: uploadedUrl
+          ? "Not connected. Check your internet and try again."
+          : "Upload failed. Check your internet and try again.",
+        icon: "mic",
+      });
     }
   }
 
   async function cancelRecording() {
-    if (!recording) return;
+    const rec = recordingRef.current;
+    if (!rec) return;
     setIsRecording(false);
-    if ((recording as any).__durationTick) {
-      clearInterval((recording as any).__durationTick);
+    if ((rec as any).__durationTick) {
+      clearInterval((rec as any).__durationTick);
     }
-    await recording.stop();
-    await setAudioModeAsync({
-      allowsRecording: false,
-      playsInSilentMode: true,
-      interruptionMode: "duckOthers",
-      shouldRouteThroughEarpiece: false,
-    });
+    try {
+      await rec.stop();
+    } catch {
+      /* ignore */
+    }
+    await restoreChatPlaybackAudio();
+    recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
   }
@@ -4468,11 +4539,7 @@ export default function MessageScreen() {
             transform: [{ scale: chatLeaveScale }],
           },
         ]}
-        pointerEvents={
-          !callIsExplore && !callMinimized && callPhase !== "idle"
-            ? "none"
-            : "auto"
-        }
+        pointerEvents={callUiBlocking ? "none" : "auto"}
       >
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView edges={["top"]} style={{ backgroundColor: "#FFFFFF" }}>
@@ -5040,39 +5107,50 @@ export default function MessageScreen() {
                 ) : null}
 
                 <TouchableOpacity
-                  onPress={
-                    showSendIcon
-                      ? sendMessage
-                      : isRecording
-                        ? stopRecording
-                        : friendshipStatus?.theyBlocked
-                          ? () =>
-                              showAlert({
-                                title: "Text only",
-                                message:
-                                  "Only text messages can be sent right now.",
-                                icon: "ban",
-                              })
-                          : startRecording
-                  }
+                  onPress={() => {
+                    if (showSendIcon) {
+                      void sendMessage();
+                      return;
+                    }
+                    if (isRecording) {
+                      void stopRecording();
+                      return;
+                    }
+                    if (friendshipStatus?.theyBlocked) {
+                      showAlert({
+                        title: "Text only",
+                        message:
+                          "Only text messages can be sent right now.",
+                        icon: "ban",
+                      });
+                      return;
+                    }
+                    if (
+                      !conversationStatus.canSend &&
+                      !friendshipStatus?.theyBlocked
+                    ) {
+                      showAlert({
+                        title: "Waiting for reply",
+                        message:
+                          conversationStatus.message ||
+                          "Wait for them to reply before sending more.",
+                        icon: "chatbubbles",
+                      });
+                      return;
+                    }
+                    void startRecording();
+                  }}
                   style={[
                     styles.sendButton,
-                    !conversationStatus.canSend &&
-                      !friendshipStatus?.theyBlocked &&
+                    !showSendIcon &&
+                      !isRecording &&
+                      (!isMediaUnlocked ||
+                        (!conversationStatus.canSend &&
+                          !friendshipStatus?.theyBlocked)) &&
                       styles.sendButtonDisabled,
                   ]}
                   activeOpacity={0.6}
-                  disabled={
-                    !conversationStatus.canSend &&
-                    !friendshipStatus?.theyBlocked &&
-                    !isRecording
-                  }
                   delayPressIn={0}
-                  onPressIn={() => {
-                    if (!showSendIcon && !isRecording) {
-                      inputRef.current?.focus();
-                    }
-                  }}
                 >
                   <LinearGradient
                     colors={[...LUVSTOR_GRADIENT]}

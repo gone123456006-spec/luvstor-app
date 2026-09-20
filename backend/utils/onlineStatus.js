@@ -1,9 +1,9 @@
 /**
  * Effective online status for API responses.
  *
- * Mongo `User.isOnline` can stick true after crashes / missed disconnects.
- * Truth = live socket presence (Redis heartbeat) when available, otherwise
- * Mongo flag only if lastSeen was refreshed recently (client heartbeat).
+ * Online means the person has the app open in the foreground (presence ping /
+ * Redis alive). Mongo `User.isOnline` alone is never enough — it sticks after
+ * crashes and after login without an active session.
  */
 const presence = require('./presence');
 
@@ -19,7 +19,7 @@ function mongoLooksOnline(doc) {
 }
 
 /**
- * Resolve isOnline for many users. Prefers Redis alive heartbeats.
+ * Resolve isOnline for many users. Live presence first; Mongo only as last resort.
  * @param {Array<{_id?: any, id?: any, isOnline?: boolean, lastSeen?: any}>} docs
  * @returns {Promise<Map<string, boolean>>}
  */
@@ -34,14 +34,21 @@ async function resolveOnlineMap(docs) {
     ids.push(id);
   }
 
-  const live = await presence.areUsersOnline(ids);
+  let live = null;
+  try {
+    live = await presence.areUsersOnline(ids);
+  } catch {
+    live = null;
+  }
+
   const map = new Map();
   for (const d of list) {
     const id = String(d?._id || d?.id || '');
     if (!id) continue;
-    if (live && typeof live.get(id) === 'boolean') {
-      map.set(id, live.get(id));
+    if (live && live.has(id)) {
+      map.set(id, live.get(id) === true);
     } else {
+      // Last resort only when presence layer failed entirely
       map.set(id, mongoLooksOnline(d));
     }
   }
@@ -51,7 +58,9 @@ async function resolveOnlineMap(docs) {
 function applyOnlineMap(doc, onlineMap) {
   if (!doc) return doc;
   const id = String(doc._id || doc.id || '');
-  const isOnline = onlineMap.has(id) ? !!onlineMap.get(id) : mongoLooksOnline(doc);
+  const isOnline = onlineMap.has(id)
+    ? !!onlineMap.get(id)
+    : mongoLooksOnline(doc);
   return { ...doc, isOnline };
 }
 

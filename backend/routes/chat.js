@@ -225,7 +225,9 @@ async function enrichConversationsBatch(reqUserId, conversations) {
       : null;
 
     let canSendMedia = false;
-    if (typeof c.sentByMe === 'number' && typeof c.receivedByMe === 'number') {
+    if (friendsStatus && !block.blocked) {
+      canSendMedia = true;
+    } else if (typeof c.sentByMe === 'number' && typeof c.receivedByMe === 'number') {
       canSendMedia = c.sentByMe > 0 && c.receivedByMe > 0;
     } else {
       canSendMedia = bidirectionalRooms.has(roomId(me, otherId));
@@ -580,7 +582,7 @@ router.post('/send', auth, async (req, res) => {
       return res.status(402).json(access);
     }
 
-    // Image / voice unlock only after both users have sent a DM
+    // Image / voice: friends always; strangers need a two-way chat first
     if (type !== 'text') {
       if (undelivered) {
         return res.status(403).json({
@@ -589,17 +591,20 @@ router.post('/send', auth, async (req, res) => {
         });
       }
       if (type === 'image' || type === 'audio') {
-        const bothMessaged = await hasBidirectionalChat(
-          req.userId,
-          receiverId,
-        );
-        if (!bothMessaged) {
-          return res.status(403).json({
-            error:
-              'Photos and voice unlock when they reply to your message.',
-            code: 'MEDIA_LOCKED',
-            requiresReply: true,
-          });
+        const friendsStatus = await areFriends(req.userId, receiverId);
+        if (!friendsStatus) {
+          const bothMessaged = await hasBidirectionalChat(
+            req.userId,
+            receiverId,
+          );
+          if (!bothMessaged) {
+            return res.status(403).json({
+              error:
+                'Photos and voice unlock when they reply to your message.',
+              code: 'MEDIA_LOCKED',
+              requiresReply: true,
+            });
+          }
         }
       } else {
         const friendsStatus = await areFriends(req.userId, receiverId);
@@ -632,14 +637,7 @@ router.post('/send', auth, async (req, res) => {
     if (!undelivered) {
       try {
         const presence = require('../utils/presence');
-        const redisOnline = await presence.isUserOnline(receiverId);
-        if (redisOnline !== null) {
-          receiverOnline = redisOnline;
-        } else {
-          const onlineUsers = io?.onlineUsers;
-          receiverOnline =
-            onlineUsers instanceof Map && onlineUsers.has(String(receiverId));
-        }
+        receiverOnline = !!(await presence.isUserOnline(receiverId));
       } catch {
         const onlineUsers = io?.onlineUsers;
         receiverOnline =

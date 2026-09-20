@@ -42,6 +42,15 @@ const SEPARATE_TABS = ['chat', 'profile_view'];
 function centerQuery(extra = {}) {
   return {
     type: { $nin: SEPARATE_TABS },
+    deletedAt: null,
+    ...extra,
+  };
+}
+
+/** Active (not cleared) notifications for this user. */
+function activeQuery(extra = {}) {
+  return {
+    deletedAt: null,
     ...extra,
   };
 }
@@ -84,7 +93,7 @@ router.get('/', auth, readLimiter, async (req, res) => {
       MAX_PAGE_SIZE,
     );
 
-    const query = { userId: req.userId };
+    const query = activeQuery({ userId: req.userId });
 
     if (req.query.filter === 'unread') query.read = false;
     if (req.query.type && NOTIFICATION_TYPES.includes(req.query.type)) {
@@ -196,7 +205,12 @@ router.post('/read', auth, writeLimiter, async (req, res) => {
     }
 
     const result = await Notification.updateMany(
-      { userId: req.userId, _id: { $in: idList }, type: { $nin: HIDE_FROM_CENTER } },
+      {
+        userId: req.userId,
+        _id: { $in: idList },
+        type: { $nin: HIDE_FROM_CENTER },
+        deletedAt: null,
+      },
       { $set: { read: true, readAt: new Date() } },
     );
 
@@ -221,7 +235,7 @@ router.post('/unread', auth, writeLimiter, async (req, res) => {
     if (!idList.length) return res.status(400).json({ error: 'Provide ids[]' });
 
     await Notification.updateMany(
-      { userId: req.userId, _id: { $in: idList } },
+      { userId: req.userId, _id: { $in: idList }, deletedAt: null },
       { $set: { read: false, readAt: null } },
     );
 
@@ -236,13 +250,20 @@ router.post('/unread', auth, writeLimiter, async (req, res) => {
   }
 });
 
-// DELETE /api/notifications  — clear all for the caller
+// DELETE /api/notifications  — clear all for the caller (permanent soft-delete)
 router.delete('/', auth, writeLimiter, async (req, res) => {
   try {
-    const result = await Notification.deleteMany(
-      centerQuery({ userId: req.userId }),
+    const now = new Date();
+    // Clear everything in the center, including Profile View
+    const result = await Notification.updateMany(
+      { userId: req.userId, deletedAt: null, type: { $ne: 'chat' } },
+      { $set: { deletedAt: now, read: true, readAt: now } },
     );
-    res.json({ ok: true, deleted: result.deletedCount || 0, unread: 0 });
+    res.json({
+      ok: true,
+      deleted: result.modifiedCount || 0,
+      unread: 0,
+    });
   } catch (err) {
     console.error('notifications/clear error:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -256,12 +277,13 @@ router.delete('/:id', auth, writeLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid notification id' });
     }
 
-    const result = await Notification.deleteOne({
-      _id: req.params.id,
-      userId: req.userId,
-    });
+    const now = new Date();
+    const result = await Notification.updateOne(
+      { _id: req.params.id, userId: req.userId, deletedAt: null },
+      { $set: { deletedAt: now, read: true, readAt: now } },
+    );
 
-    if (!result.deletedCount) {
+    if (!result.matchedCount) {
       return res.status(404).json({ error: 'Notification not found' });
     }
 

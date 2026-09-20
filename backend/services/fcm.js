@@ -7,6 +7,7 @@ const {
   isFirebaseAdminReady,
   getFirebaseInitError,
 } = require('./firebaseAdmin');
+const { absoluteMediaUrl } = require('../utils/absoluteUrl');
 
 let messaging = null;
 let enabled = false;
@@ -86,12 +87,15 @@ function buildMessage({
   const isCallIncoming =
     type === 'call' && String(stringData.action || '') === 'incoming';
 
+  // Relative `/uploads/...` photos never render in the tray — FCM needs https
+  const resolvedImage = absoluteMediaUrl(imageUrl) || undefined;
+
   return {
     tokens,
     notification: {
       title,
       body,
-      ...(imageUrl ? { imageUrl } : {}),
+      ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
     },
     data: {
       ...stringData,
@@ -107,7 +111,7 @@ function buildMessage({
         priority: isHigh ? 'max' : 'default',
         defaultVibrateTimings: true,
         ...(groupKey ? { tag: groupKey } : {}),
-        ...(imageUrl ? { imageUrl } : {}),
+        ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
         icon: 'notification_icon',
         color: '#8E2DE2',
         ...(isCallIncoming
@@ -132,10 +136,13 @@ function buildMessage({
           sound: sound === 'default' ? 'default' : `${sound}.caf`,
           ...(typeof badge === 'number' ? { badge } : {}),
           ...(groupKey ? { 'thread-id': groupKey } : {}),
-          'mutable-content': imageUrl ? 1 : 0,
+          'mutable-content': resolvedImage ? 1 : 0,
           ...(isCallIncoming ? { category: 'incoming_call' } : {}),
         },
       },
+      ...(resolvedImage
+        ? { fcmOptions: { image: resolvedImage } }
+        : {}),
     },
   };
 }

@@ -3,12 +3,13 @@ import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
   Easing,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,9 +18,105 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCall } from '../../contexts/CallContext';
+import { useExplore } from '../../contexts/ExploreContext';
 import { getRTCView } from '../../services/webrtc';
 import { resolveMediaUrl } from '../../utils/media';
 import WhatsAppAvatar, { getDisplayName } from '../WhatsAppAvatar';
+
+const PIP_W = 112;
+const PIP_H = 168;
+
+/** WhatsApp-style free-drag PiP that snaps to the nearest corner on release */
+function DraggablePip({
+  children,
+  insetsTop,
+  insetsBottom,
+}: {
+  children: React.ReactNode;
+  insetsTop: number;
+  insetsBottom: number;
+}) {
+  const { width: winW, height: winH } = Dimensions.get('window');
+  const margin = 12;
+  const bottomReserve = Math.max(insetsBottom, 12) + 100;
+  const minX = margin;
+  const maxX = Math.max(minX, winW - PIP_W - margin);
+  const minY = insetsTop + 56;
+  const maxY = Math.max(minY, winH - PIP_H - bottomReserve);
+
+  const pan = useRef(
+    new Animated.ValueXY({ x: maxX, y: minY + 8 }),
+  ).current;
+  const startXY = useRef({ x: maxX, y: minY + 8 });
+
+  const responder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
+      onPanResponderGrant: () => {
+        pan.stopAnimation((v: { x: number; y: number }) => {
+          startXY.current = { x: v.x, y: v.y };
+        });
+      },
+      onPanResponderMove: (_, g) => {
+        const nx = Math.min(
+          maxX,
+          Math.max(minX, startXY.current.x + g.dx),
+        );
+        const ny = Math.min(
+          maxY,
+          Math.max(minY, startXY.current.y + g.dy),
+        );
+        pan.setValue({ x: nx, y: ny });
+      },
+      onPanResponderRelease: (_, g) => {
+        const curX = startXY.current.x + g.dx;
+        const curY = startXY.current.y + g.dy;
+        const snapX = curX + PIP_W / 2 < winW / 2 ? minX : maxX;
+        const snapY = Math.min(maxY, Math.max(minY, curY));
+        startXY.current = { x: snapX, y: snapY };
+        Animated.spring(pan, {
+          toValue: { x: snapX, y: snapY },
+          useNativeDriver: false,
+          friction: 8,
+          tension: 80,
+        }).start();
+      },
+    }),
+  ).current;
+
+  return (
+    <Animated.View
+      {...responder.panHandlers}
+      style={[
+        styles.pip,
+        {
+          width: PIP_W,
+          height: PIP_H,
+          transform: pan.getTranslateTransform(),
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+function qualityLabel(q: string) {
+  switch (q) {
+    case 'excellent':
+      return null;
+    case 'good':
+      return null;
+    case 'fair':
+      return 'Weak network';
+    case 'poor':
+      return 'Poor connection';
+    default:
+      return null;
+  }
+}
 
 /** Luvstor call palette — matches Explore / Chat brand */
 const T = {
@@ -54,7 +151,7 @@ function formatDuration(ms: number) {
 function statusLabel(
   phase: string,
   endReason: string | null,
-  opts?: { peerOffline?: boolean },
+  opts?: { peerOffline?: boolean; callType?: 'voice' | 'video' | null },
 ) {
   switch (phase) {
     case 'outgoing':
@@ -62,7 +159,7 @@ function statusLabel(
     case 'ringing':
       return opts?.peerOffline ? 'They’re offline' : 'Ringing…';
     case 'incoming':
-      return 'Incoming voice call';
+      return opts?.callType === 'video' ? 'Incoming video call' : 'Incoming voice call';
     case 'connecting':
       return 'Connecting…';
     case 'reconnecting':
@@ -82,6 +179,52 @@ function statusLabel(
     default:
       return '';
   }
+}
+
+/** WhatsApp-style dark circle control */
+function WaCircle({
+  icon,
+  onPress,
+  size = 46,
+  bg = 'rgba(30,30,30,0.55)',
+  color = '#fff',
+  disabled,
+  iconRotate,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  size?: number;
+  bg?: string;
+  color?: string;
+  disabled?: boolean;
+  iconRotate?: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: bg,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: disabled ? 0.35 : pressed ? 0.75 : 1,
+        },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={icon}
+    >
+      <Ionicons
+        name={icon}
+        size={size * 0.42}
+        color={color}
+        style={iconRotate ? { transform: [{ rotate: iconRotate }] } : undefined}
+      />
+    </Pressable>
+  );
 }
 
 function CircleBtn({
@@ -138,6 +281,7 @@ function ActionCell({
   bg,
   size = 52,
   iconRotate,
+  disabled,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -146,6 +290,7 @@ function ActionCell({
   bg?: string;
   size?: number;
   iconRotate?: string;
+  disabled?: boolean;
 }) {
   return (
     <CircleBtn
@@ -156,6 +301,7 @@ function ActionCell({
       bg={bg}
       size={size}
       iconRotate={iconRotate}
+      disabled={disabled}
     />
   );
 }
@@ -239,6 +385,7 @@ export default function CallOverlay() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const call = useCall();
+  const explore = useExplore();
   const [tick, setTick] = useState(0);
   const pulse = React.useRef(new Animated.Value(1)).current;
   const enterOpacity = React.useRef(new Animated.Value(0)).current;
@@ -247,8 +394,11 @@ export default function CallOverlay() {
   const wasOpen = React.useRef(false);
   const RTCView = useMemo(() => getRTCView(), []);
 
-  const visible = call.phase !== 'idle';
-  const isVoice = call.callType !== 'video';
+  const isExplore = !!call.isExplore;
+  const visible =
+    call.phase !== 'idle' && call.phase !== 'ended';
+  const isVideo = call.callType === 'video';
+  const isVoice = call.callType === 'voice';
   const panelBottomRef = React.useRef<number | null>(null);
   if (!visible) {
     panelBottomRef.current = null;
@@ -257,9 +407,9 @@ export default function CallOverlay() {
   }
   const panelBottom = panelBottomRef.current ?? Math.max(insets.bottom, 16) + 28;
 
-  // Smooth open — crossfade over chat (chat fades out in messages screen)
+  // Smooth open — same chrome for friend + Explore
   useEffect(() => {
-    const open = visible && !call.isExplore;
+    const open = visible;
     if (open && !wasOpen.current) {
       enterOpacity.setValue(0);
       enterScale.setValue(1.02);
@@ -288,7 +438,7 @@ export default function CallOverlay() {
       enterY.setValue(0);
     }
     wasOpen.current = open;
-  }, [visible, call.isExplore, enterOpacity, enterScale, enterY]);
+  }, [visible, enterOpacity, enterScale, enterY]);
 
   useEffect(() => {
     if (call.phase !== 'connected' || !call.connectedAt) return;
@@ -323,10 +473,14 @@ export default function CallOverlay() {
     return () => loop.stop();
   }, [call.phase, pulse]);
 
-  if (!visible || call.isExplore) return null;
+  if (!visible) return null;
 
-  const name = getDisplayName(call.peer?.name, call.peer?.publicId);
-  const photo = resolveMediaUrl(call.peer?.photo) || call.peer?.photo || '';
+  const name = isExplore
+    ? 'Anonymous'
+    : getDisplayName(call.peer?.name, call.peer?.publicId);
+  const photo = isExplore
+    ? ''
+    : resolveMediaUrl(call.peer?.photo) || call.peer?.photo || '';
   const duration =
     call.phase === 'connected' && call.connectedAt
       ? formatDuration(Date.now() - call.connectedAt)
@@ -335,16 +489,27 @@ export default function CallOverlay() {
   const subtitle =
     call.phase === 'connected'
       ? duration || 'Connected'
-      : statusLabel(call.phase, call.endReason, {
-          peerOffline: !!call.peerOffline,
-        });
+      : call.phase === 'reconnecting'
+        ? 'Reconnecting…'
+        : statusLabel(call.phase, call.endReason, {
+            peerOffline: !!call.peerOffline,
+            callType: call.callType,
+          });
 
   const openPeerChat = () => {
+    if (isExplore) return;
     const id = call.peer?.id;
     if (!id || id === 'explore') return;
     call.setMinimized(true);
     router.push(`/messages/${id}` as any);
   };
+
+  const onSkip = () => {
+    if (!isExplore) return;
+    explore.skipWithCooldown();
+  };
+
+  const skipDisabled = isExplore && explore.cooldownSec > 0;
 
   const canMinimize =
     call.phase === 'connected' ||
@@ -353,11 +518,52 @@ export default function CallOverlay() {
     call.phase === 'outgoing' ||
     call.phase === 'ringing';
 
-  const showVideo =
-    !isVoice &&
+  /** Remote fills screen once we have a real stream URL (after pickup) */
+  const remoteUrl = (() => {
+    try {
+      return typeof call.remoteStream?.toURL === 'function'
+        ? call.remoteStream.toURL()
+        : '';
+    } catch {
+      return '';
+    }
+  })();
+  const localUrl = (() => {
+    try {
+      return typeof call.localStream?.toURL === 'function'
+        ? call.localStream.toURL()
+        : '';
+    } catch {
+      return '';
+    }
+  })();
+
+  const hasRemoteVideo =
+    isVideo &&
+    !!RTCView &&
+    !!remoteUrl &&
     (call.phase === 'connected' ||
       call.phase === 'connecting' ||
       call.phase === 'reconnecting');
+
+  /** Local camera fullscreen while ringing / before remote video arrives */
+  const hasLocalPreview =
+    isVideo && !!RTCView && !!localUrl && !call.cameraOff;
+  const localFullscreen =
+    hasLocalPreview &&
+    !hasRemoteVideo &&
+    call.phase !== 'connected' &&
+    call.phase !== 'reconnecting';
+  /** After pickup (or remote video): local → draggable PiP */
+  const localPip =
+    hasLocalPreview &&
+    (hasRemoteVideo ||
+      call.phase === 'connected' ||
+      call.phase === 'reconnecting');
+
+  /** Peer DP — video fallback when camera isn't filling the screen */
+  const showPeerDp = isVideo && !hasRemoteVideo && !localFullscreen;
+  const netHint = isVideo ? qualityLabel(call.quality) : null;
 
   const showActiveControls =
     call.phase === 'outgoing' ||
@@ -365,6 +571,11 @@ export default function CallOverlay() {
     call.phase === 'connecting' ||
     call.phase === 'reconnecting' ||
     call.phase === 'connected';
+
+  const endOrCancel =
+    call.phase === 'outgoing' || call.phase === 'ringing'
+      ? call.cancelCall
+      : call.endCall;
 
   if (call.minimized && call.phase !== 'incoming' && call.phase !== 'ended') {
     return (
@@ -380,15 +591,15 @@ export default function CallOverlay() {
             style={styles.miniInner}
           >
             <WhatsAppAvatar
-              name={call.peer?.name}
-              publicId={call.peer?.publicId}
+              name={name}
+              publicId={isExplore ? '' : call.peer?.publicId}
               photo={photo}
               gender={call.peer?.gender}
               size={36}
             />
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={styles.miniName} numberOfLines={1}>
-                {name}
+                {isExplore ? 'Explore · Anonymous' : name}
               </Text>
               <Text style={styles.miniSub}>
                 {call.phase === 'connected' ? duration || 'On call' : subtitle}
@@ -417,6 +628,9 @@ export default function CallOverlay() {
       </Pressable>
 
       <View style={styles.titleBlock}>
+        {isExplore ? (
+          <Text style={styles.exploreTag}>Explore</Text>
+        ) : null}
         <Text style={styles.name} numberOfLines={1}>
           {name}
         </Text>
@@ -428,14 +642,105 @@ export default function CallOverlay() {
         ) : null}
       </View>
 
-      <Pressable
-        onPress={openPeerChat}
-        hitSlop={10}
-        style={styles.topBtn}
-        disabled={!call.peer?.id || call.peer.id === 'explore'}
-      >
-        <Ionicons name="chatbubble-outline" size={20} color={T.text} />
-      </Pressable>
+      {isExplore ? (
+        <Pressable
+          onPress={onSkip}
+          hitSlop={10}
+          style={[styles.topBtn, skipDisabled && { opacity: 0.4 }]}
+          disabled={skipDisabled}
+          accessibilityLabel="Skip to next person"
+        >
+          <Ionicons name="play-skip-forward" size={20} color={T.text} />
+        </Pressable>
+      ) : (
+        <Pressable
+          onPress={openPeerChat}
+          hitSlop={10}
+          style={styles.topBtn}
+          disabled={!call.peer?.id || call.peer.id === 'explore'}
+        >
+          <Ionicons name="chatbubble-outline" size={20} color={T.text} />
+        </Pressable>
+      )}
+    </View>
+  );
+
+  /** WhatsApp video chrome: minimize · name · right-side add / chat|skip / flip */
+  const videoTopChrome = (
+    <View
+      pointerEvents="box-none"
+      style={[styles.waTop, { paddingTop: insets.top + 8 }]}
+    >
+      <View style={styles.waTopRow}>
+        <WaCircle
+          icon="scan-outline"
+          size={40}
+          bg="rgba(20,20,20,0.45)"
+          onPress={() => canMinimize && call.setMinimized(true)}
+          disabled={!canMinimize}
+        />
+        <View style={styles.waTitleBlock}>
+          {isExplore ? (
+            <Text style={styles.exploreTagLight}>Explore</Text>
+          ) : null}
+          <Text style={styles.waName} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={styles.waSub}>{subtitle || ' '}</Text>
+          {call.error ? (
+            <Text style={styles.error} numberOfLines={2}>
+              {call.error}
+            </Text>
+          ) : null}
+        </View>
+        {/* spacer matches left button so title stays centered */}
+        <View style={{ width: 40 }} />
+      </View>
+
+      <View style={[styles.waRightRail, { top: insets.top + 56 }]}>
+        {!isExplore ? (
+          <WaCircle
+            icon="person-add-outline"
+            size={44}
+            bg="rgba(20,20,20,0.45)"
+            disabled
+            onPress={() => {}}
+          />
+        ) : null}
+        {isExplore ? (
+          <WaCircle
+            icon="play-skip-forward"
+            size={44}
+            bg="rgba(103, 80, 164, 0.75)"
+            onPress={onSkip}
+            disabled={skipDisabled}
+          />
+        ) : (
+          <WaCircle
+            icon="chatbubble"
+            size={44}
+            bg="rgba(20,20,20,0.45)"
+            onPress={openPeerChat}
+            disabled={!call.peer?.id || call.peer.id === 'explore'}
+          />
+        )}
+        <WaCircle
+          icon="camera-reverse"
+          size={44}
+          bg="rgba(20,20,20,0.45)"
+          onPress={() => {
+            void call.switchCamera();
+          }}
+          disabled={call.cameraOff || !call.localStream}
+        />
+      </View>
+
+      {netHint ? (
+        <View style={[styles.netBanner, { top: insets.top + 52 }]}>
+          <Ionicons name="wifi" size={14} color="#FFE082" />
+          <Text style={styles.netBannerText}>{netHint}</Text>
+        </View>
+      ) : null}
     </View>
   );
 
@@ -445,7 +750,7 @@ export default function CallOverlay() {
       style={[styles.panelFixed, { bottom: panelBottom }]}
     >
       <BlurView intensity={48} tint="dark" style={styles.panel}>
-        {call.phase === 'incoming' ? (
+        {call.phase === 'incoming' && !isExplore ? (
           <View style={styles.panelRow}>
             <ActionCell
               icon="call"
@@ -467,59 +772,47 @@ export default function CallOverlay() {
           <Text style={styles.endedHint}>Returning…</Text>
         ) : showActiveControls ? (
           <View style={styles.panelRow}>
-            {!isVoice ? (
-              <>
-                <ActionCell
-                  icon={call.muted ? 'mic-off' : 'mic'}
-                  label={call.muted ? 'Unmute' : 'Mute'}
-                  bg={call.muted ? T.controlOn : T.control}
-                  color={call.muted ? T.controlOnInk : T.text}
-                  onPress={call.toggleMute}
-                />
-                <ActionCell
-                  icon={call.cameraOff ? 'videocam-off' : 'videocam'}
-                  label="Camera"
-                  bg={call.cameraOff ? T.controlOn : T.control}
-                  color={call.cameraOff ? T.controlOnInk : T.text}
-                  onPress={call.toggleCamera}
-                />
-                <ActionCell
-                  icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
-                  label="Speaker"
-                  bg={call.speakerOn ? T.controlOn : T.control}
-                  color={call.speakerOn ? T.controlOnInk : T.text}
-                  onPress={call.toggleSpeaker}
-                />
-              </>
+            {isExplore ? (
+              <ActionCell
+                icon="play-skip-forward"
+                label={skipDisabled ? `${explore.cooldownSec}s` : 'Skip'}
+                bg={T.control}
+                color={T.text}
+                onPress={onSkip}
+                disabled={skipDisabled}
+              />
             ) : (
-              <>
-                <ActionCell
-                  icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
-                  label="Speaker"
-                  bg={call.speakerOn ? T.controlOn : T.control}
-                  color={call.speakerOn ? T.controlOnInk : T.text}
-                  onPress={call.toggleSpeaker}
-                />
-                <ActionCell
-                  icon={call.muted ? 'mic-off' : 'mic'}
-                  label={call.muted ? 'Unmute' : 'Mute'}
-                  bg={call.muted ? T.controlOn : T.control}
-                  color={call.muted ? T.controlOnInk : T.text}
-                  onPress={call.toggleMute}
-                />
-              </>
+              <ActionCell
+                icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
+                label="Speaker"
+                bg={call.speakerOn ? T.controlOn : T.control}
+                color={call.speakerOn ? T.controlOnInk : T.text}
+                onPress={call.toggleSpeaker}
+              />
             )}
+            <ActionCell
+              icon={call.muted ? 'mic-off' : 'mic'}
+              label={call.muted ? 'Unmute' : 'Mute'}
+              bg={call.muted ? T.controlOn : T.control}
+              color={call.muted ? T.controlOnInk : T.text}
+              onPress={call.toggleMute}
+            />
+            {isExplore ? (
+              <ActionCell
+                icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
+                label="Speaker"
+                bg={call.speakerOn ? T.controlOn : T.control}
+                color={call.speakerOn ? T.controlOnInk : T.text}
+                onPress={call.toggleSpeaker}
+              />
+            ) : null}
             <ActionCell
               icon="call"
               label="End"
               bg={T.end}
               color="#fff"
               iconRotate="135deg"
-              onPress={
-                call.phase === 'outgoing' || call.phase === 'ringing'
-                  ? call.cancelCall
-                  : call.endCall
-              }
+              onPress={endOrCancel}
             />
           </View>
         ) : null}
@@ -527,10 +820,86 @@ export default function CallOverlay() {
     </View>
   );
 
+  /** WhatsApp video bottom bar — video · speaker · mute · end (+ skip for Explore) */
+  const videoControlPill = (
+    <View
+      pointerEvents="box-none"
+      style={[styles.waPanelFixed, { bottom: Math.max(insets.bottom, 12) + 10 }]}
+    >
+      {call.phase === 'incoming' && !isExplore ? (
+        <View style={styles.waPill}>
+          <WaCircle
+            icon="call"
+            size={56}
+            bg={T.end}
+            color="#fff"
+            iconRotate="135deg"
+            onPress={call.declineCall}
+          />
+          <WaCircle
+            icon="videocam"
+            size={56}
+            bg="#25D366"
+            color="#fff"
+            onPress={call.acceptCall}
+          />
+        </View>
+      ) : call.phase === 'ended' ? (
+        <View style={styles.waPill}>
+          <Text style={styles.endedHint}>Returning…</Text>
+        </View>
+      ) : showActiveControls ? (
+        <View style={styles.waPill}>
+          {isExplore ? (
+            <WaCircle
+              icon="play-skip-forward"
+              size={52}
+              bg={skipDisabled ? 'rgba(55,55,55,0.5)' : 'rgba(103, 80, 164, 0.9)'}
+              color="#fff"
+              onPress={onSkip}
+              disabled={skipDisabled}
+            />
+          ) : null}
+          <WaCircle
+            icon={call.cameraOff ? 'videocam-off' : 'videocam'}
+            size={52}
+            bg={call.cameraOff ? '#fff' : 'rgba(55,55,55,0.85)'}
+            color={call.cameraOff ? '#111' : '#fff'}
+            onPress={() => call.toggleCamera()}
+          />
+          <WaCircle
+            icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
+            size={52}
+            bg={call.speakerOn ? '#fff' : 'rgba(55,55,55,0.85)'}
+            color={call.speakerOn ? '#111' : '#fff'}
+            onPress={() => {
+              void call.toggleSpeaker();
+            }}
+          />
+          <WaCircle
+            icon={call.muted ? 'mic-off' : 'mic'}
+            size={52}
+            bg={call.muted ? '#fff' : 'rgba(55,55,55,0.85)'}
+            color={call.muted ? '#111' : '#fff'}
+            onPress={() => call.toggleMute()}
+          />
+          <WaCircle
+            icon="call"
+            size={52}
+            bg="#E53935"
+            color="#fff"
+            iconRotate="135deg"
+            onPress={() => endOrCancel()}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+
   const peerAvatar = (
     <CenterPeerAvatar
-      name={call.peer?.name}
-      publicId={call.peer?.publicId}
+      name={name}
+      publicId={isExplore ? '' : call.peer?.publicId}
       photo={photo}
       gender={call.peer?.gender}
       pulse={pulse}
@@ -562,37 +931,51 @@ export default function CallOverlay() {
 
   const videoBody = (
     <View style={styles.fullscreen}>
-      {showVideo && RTCView && call.remoteStream ? (
+      {/* Always keep peer DP under video so fallback never blanks */}
+      {(showPeerDp || !hasRemoteVideo) && <CallBackdrop photo={photo} />}
+
+      {hasRemoteVideo ? (
         <RTCView
-          streamURL={call.remoteStream.toURL?.() || call.remoteStream.toURL()}
+          streamURL={remoteUrl}
           style={styles.remoteVideo}
           objectFit="cover"
           mirror={false}
+          zOrder={0}
         />
-      ) : (
-        <CallBackdrop photo={photo} />
-      )}
-
-      {showVideo && RTCView && call.localStream && !call.cameraOff ? (
-        <View style={[styles.pip, { top: insets.top + 52 }]}>
-          <RTCView
-            streamURL={call.localStream.toURL?.() || call.localStream.toURL()}
-            style={styles.pipVideo}
-            objectFit="cover"
-            mirror
-          />
-        </View>
+      ) : localFullscreen ? (
+        <RTCView
+          streamURL={localUrl}
+          style={styles.remoteVideo}
+          objectFit="cover"
+          mirror={call.localMirrored !== false}
+          zOrder={0}
+        />
       ) : null}
 
-      {topBar}
+      {localPip ? (
+        <DraggablePip
+          insetsTop={insets.top}
+          insetsBottom={insets.bottom}
+        >
+          <RTCView
+            streamURL={localUrl}
+            style={styles.pipVideo}
+            objectFit="cover"
+            mirror={call.localMirrored !== false}
+            zOrder={1}
+          />
+        </DraggablePip>
+      ) : null}
 
-      {!(showVideo && call.remoteStream) ? (
+      {videoTopChrome}
+
+      {showPeerDp ? (
         <View style={centerAvatarStyle} pointerEvents="none">
           {peerAvatar}
         </View>
       ) : null}
 
-      {controlPill}
+      {videoControlPill}
     </View>
   );
 
@@ -616,7 +999,7 @@ export default function CallOverlay() {
           },
         ]}
       >
-        {isVoice ? voiceBody : videoBody}
+        {isVideo ? videoBody : voiceBody}
       </Animated.View>
     </Modal>
   );
@@ -647,18 +1030,111 @@ const styles = StyleSheet.create({
   },
   pip: {
     position: 'absolute',
-    right: 14,
-    width: 108,
-    height: 156,
+    left: 0,
+    top: 0,
     borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.2)',
-    zIndex: 5,
+    borderColor: 'rgba(255,255,255,0.35)',
+    zIndex: 15,
+    elevation: 15,
+    backgroundColor: '#111',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+      },
+      android: { elevation: 16 },
+    }),
   },
   pipVideo: {
     width: '100%',
     height: '100%',
+  },
+  netBanner: {
+    position: 'absolute',
+    alignSelf: 'center',
+    left: 60,
+    right: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    zIndex: 10,
+  },
+  netBannerText: {
+    color: '#FFE082',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  waTop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 8,
+  },
+  waTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: 14,
+  },
+  waTitleBlock: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingTop: 4,
+  },
+  waName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  waSub: {
+    marginTop: 3,
+    fontSize: 14,
+    fontWeight: '400',
+    color: 'rgba(255,255,255,0.85)',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  waRightRail: {
+    position: 'absolute',
+    right: 14,
+    gap: 14,
+    alignItems: 'center',
+    zIndex: 9,
+  },
+  waPanelFixed: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+    zIndex: 20,
+    elevation: 20,
+  },
+  waPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 18,
+    backgroundColor: 'rgba(35,35,35,0.72)',
+    borderRadius: 40,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    minHeight: 80,
+    alignSelf: 'stretch',
   },
   top: {
     flexDirection: 'row',
@@ -686,6 +1162,27 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     color: T.text,
     textAlign: 'center',
+  },
+  exploreTag: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: T.live,
+    marginBottom: 2,
+    textAlign: 'center',
+  },
+  exploreTagLight: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: 'rgba(196, 181, 253, 0.95)',
+    marginBottom: 2,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   sub: {
     marginTop: 4,

@@ -132,12 +132,6 @@ module.exports = function initSocket(io) {
     onlineSockets.set(uid, existing);
     setPrimarySocket(uid);
 
-    // Keep Redis "alive" fresh for as long as this socket is open.
-    // Client also pings; this covers older app builds that don't emit presence:ping.
-    let aliveTimer = setInterval(() => {
-      presence.heartbeat(uid).catch(() => {});
-    }, 40_000);
-
     /**
      * Presence broadcast + delivery flush. Deliberately NOT awaited before the
      * socket.on(...) registrations below: Socket.IO drops any event that arrives
@@ -246,10 +240,9 @@ module.exports = function initSocket(io) {
         }
 
         let otherOnline = false;
-        const redisOnline = await presence.isUserOnline(otherUserId);
-        if (redisOnline !== null) {
-          otherOnline = redisOnline;
-        } else {
+        try {
+          otherOnline = !!(await presence.isUserOnline(otherUserId));
+        } catch {
           otherOnline =
             onlineSockets.has(String(otherUserId)) &&
             (onlineSockets.get(String(otherUserId))?.size || 0) > 0;
@@ -369,17 +362,20 @@ module.exports = function initSocket(io) {
               clientMsgId,
             });
           }
-          // Image / voice unlock only after both users have sent a DM
+          // Image / voice: friends always; strangers need a two-way chat first
           if (type === 'image' || type === 'audio') {
-            const bothMessaged = await hasBidirectionalChat(uid, receiverId);
-            if (!bothMessaged) {
-              return socket.emit('chat:error', {
-                error:
-                  'Photos and voice unlock when they reply to your message.',
-                code: 'MEDIA_LOCKED',
-                requiresReply: true,
-                clientMsgId,
-              });
+            const friendsStatus = await areFriends(uid, receiverId);
+            if (!friendsStatus) {
+              const bothMessaged = await hasBidirectionalChat(uid, receiverId);
+              if (!bothMessaged) {
+                return socket.emit('chat:error', {
+                  error:
+                    'Photos and voice unlock when they reply to your message.',
+                  code: 'MEDIA_LOCKED',
+                  requiresReply: true,
+                  clientMsgId,
+                });
+              }
             }
           } else {
             const friendsStatus = await areFriends(uid, receiverId);
@@ -407,10 +403,9 @@ module.exports = function initSocket(io) {
         const room = String([String(uid), String(receiverId)].sort().join('_'));
         let receiverOnline = false;
         if (!undelivered) {
-          const redisOnline = await presence.isUserOnline(receiverId);
-          if (redisOnline !== null) {
-            receiverOnline = redisOnline;
-          } else {
+          try {
+            receiverOnline = !!(await presence.isUserOnline(receiverId));
+          } catch {
             receiverOnline =
               onlineSockets.has(String(receiverId)) &&
               (onlineSockets.get(String(receiverId))?.size || 0) > 0;
@@ -705,10 +700,9 @@ module.exports = function initSocket(io) {
         }
 
         let calleeOnline = false;
-        const redisOnline = await presence.isUserOnline(receiverId);
-        if (redisOnline !== null) {
-          calleeOnline = redisOnline;
-        } else {
+        try {
+          calleeOnline = !!(await presence.isUserOnline(receiverId));
+        } catch {
           calleeOnline =
             onlineSockets.has(String(receiverId)) &&
             (onlineSockets.get(String(receiverId))?.size || 0) > 0;
@@ -1392,10 +1386,6 @@ module.exports = function initSocket(io) {
 
     // ── Disconnect ────────────────────────────────────
     socket.on('disconnect', async () => {
-      if (aliveTimer) {
-        clearInterval(aliveTimer);
-        aliveTimer = null;
-      }
       const set = onlineSockets.get(uid);
       if (set) {
         set.delete(socket.id);
@@ -1407,10 +1397,12 @@ module.exports = function initSocket(io) {
         }
       }
 
-      const disc = await presence.socketDisconnected(uid);
+      const stillConnected =
+        onlineSockets.has(uid) && (onlineSockets.get(uid)?.size || 0) > 0;
+      const disc = await presence.socketDisconnected(uid, { stillConnected });
       const becameOffline = redisReady()
         ? disc.becameOffline
-        : !onlineSockets.has(uid);
+        : !stillConnected;
 
       if (becameOffline) {
         await User.findByIdAndUpdate(uid, {

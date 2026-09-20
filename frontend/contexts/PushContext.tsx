@@ -240,7 +240,8 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
           string,
           any
         >;
-        const id = `tap:${data.notificationId || response.notification.request.identifier}`;
+        // Same key shape as the response listener so we don't double-navigate
+        const id = `tap:open:${data.notificationId || response.notification.request.identifier}`;
         if (!markHandled(id)) return;
         navigateTo(data);
       } catch {

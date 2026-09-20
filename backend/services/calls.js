@@ -58,7 +58,24 @@ function getIceServers() {
   const turnUser = process.env.TURN_USERNAME || '';
   const turnPass = process.env.TURN_CREDENTIAL || '';
 
-  const turn = turnUrls.map((url) => ({
+  const validTurnUrls = [];
+  const invalidTurnUrls = [];
+  for (const url of turnUrls) {
+    // Must be turn: / turns: URIs — not API keys or bare tokens
+    if (/^turns?:/i.test(url)) validTurnUrls.push(url);
+    else invalidTurnUrls.push(url);
+  }
+  if (invalidTurnUrls.length && !turnWarned) {
+    turnWarned = true;
+    console.error(
+      '[calls] TURN_URLS is invalid — entries must look like ' +
+        '"turn:host:3478" or "turns:host:443". ' +
+        'Got non-URI value(s) (often a Metered API key pasted by mistake). ' +
+        'Cellular / different-network calls will fail until fixed.',
+    );
+  }
+
+  const turn = validTurnUrls.map((url) => ({
     urls: url,
     username: turnUser || undefined,
     credential: turnPass || undefined,
@@ -71,7 +88,7 @@ function getIceServers() {
   ) {
     turnWarned = true;
     console.warn(
-      '[calls] No TURN_URLS set — cellular / strict-NAT friend calls may fail. Set TURN_* in production.',
+      '[calls] No valid TURN_URLS set — cellular / strict-NAT friend calls may fail. Set TURN_* in production.',
     );
   }
 

@@ -47,24 +47,23 @@ import {
 const GIRL_IMG = require("../../assets/images/explore-girl.png");
 const BOY_IMG = require("../../assets/images/explore-boy.png");
 
-/** Luvstor theme — grey base + soft purple/rose gradients */
+/** Luvstor Explore — soft purple/rose atmosphere */
 const T = {
-  bg: "#F5F5F7",
-  bgMid: "#EFE8F8",
-  bgDeep: "#FFE8EE",
+  bg: "#F7F4FA",
+  bgMid: "#EDE4F7",
+  bgDeep: "#FFE4EC",
   surface: "#FFFFFF",
-  text: "#1C1B1F",
-  secondary: "#6B7280",
-  muted: "#9CA3AF",
-  border: "#E8E8ED",
+  text: "#1A0A2E",
+  secondary: "#5C5668",
+  muted: "#9A93A8",
+  border: "rgba(55, 3, 114, 0.08)",
   primary: "#370372",
-  primaryDeep: "#2A0258",
-  primarySoft: "#EFE8F8",
-  primaryContainer: "#EFE8F8",
+  primaryDeep: "#24024D",
+  primarySoft: "#F0E8FA",
+  primaryMid: "#5A2FC7",
   rose: "#FF4B6E",
   roseSoft: "#FFE8EE",
-  roseMid: "#FF4B6E",
-  purpleSoft: "#EFE8F8",
+  roseDeep: "#E8355A",
   gold: "#F5C518",
   live: "#E53935",
 };
@@ -75,7 +74,7 @@ function prefsSummary(prefs: ExplorePrefs) {
   }
   const who =
     SHOW_ME_OPTIONS.find((o) => o.value === prefs.showMe)?.label || "Preferences";
-  if (prefs.verifiedOnly) return `${who} · Verified only`;
+  if (prefs.verifiedOnly) return `${who} · Verified`;
   return who;
 }
 
@@ -150,8 +149,18 @@ export default function ExploreScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      return () => leaveQueue();
-    }, [leaveQueue]),
+      return () => {
+        // Only leave the search queue — never tear down an active Explore call
+        if (
+          call.isExplore &&
+          call.phase !== 'idle' &&
+          call.phase !== 'ended'
+        ) {
+          return;
+        }
+        leaveQueue();
+      };
+    }, [call.isExplore, call.phase, leaveQueue]),
   );
 
   useEffect(() => {
@@ -172,12 +181,14 @@ export default function ExploreScreen() {
     return (
       <View style={styles.root}>
         <LinearGradient
-          colors={[T.bg, T.bgMid, T.bg, T.bgDeep]}
-          locations={[0, 0.28, 0.62, 1]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
+          colors={[T.bg, T.bgMid, "#F8F0F6", T.bgDeep]}
+          locations={[0, 0.32, 0.68, 1]}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.9, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
+        <View style={styles.orbPurple} pointerEvents="none" />
+        <View style={styles.orbRose} pointerEvents="none" />
         <SafeAreaView style={styles.safe} edges={["top"]}>
           <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
           <Header
@@ -185,9 +196,9 @@ export default function ExploreScreen() {
             prefsLabel={prefsSummary(prefs)}
           />
           <LiveCallState
-            name={matchedPeer?.name || call.peer?.name}
-            publicId={matchedPeer?.publicId || call.peer?.publicId}
-            photo={matchedPeer?.photo || call.peer?.photo}
+            name="Anonymous"
+            publicId=""
+            photo=""
             gender={matchedPeer?.gender || call.peer?.gender}
           />
           <ExplorePrefsSheet
@@ -207,12 +218,14 @@ export default function ExploreScreen() {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={[T.bg, T.bgMid, T.bg, T.bgDeep]}
-        locations={[0, 0.28, 0.62, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        colors={[T.bg, T.bgMid, "#F8F0F6", T.bgDeep]}
+        locations={[0, 0.32, 0.68, 1]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
+      <View style={styles.orbPurple} pointerEvents="none" />
+      <View style={styles.orbRose} pointerEvents="none" />
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
         <Header
@@ -287,7 +300,10 @@ function Header({
 }) {
   return (
     <View style={styles.header}>
-      <Text style={styles.headerTitle}>Explore</Text>
+      <View style={styles.headerLeft}>
+        <Text style={styles.headerTitle}>Explore</Text>
+        <Text style={styles.headerSub}>Anonymous live matches</Text>
+      </View>
       <TouchableOpacity
         onPress={onPrefs}
         activeOpacity={0.75}
@@ -295,7 +311,10 @@ function Header({
         accessibilityRole="button"
         accessibilityLabel={`Preferences: ${prefsLabel}`}
       >
-        <Ionicons name="options-outline" size={20} color={T.text} />
+        <Ionicons name="options-outline" size={18} color={T.primary} />
+        <Text style={styles.prefsChipText} numberOfLines={1}>
+          {prefsLabel === "Preferences" ? "Filters" : prefsLabel}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -308,81 +327,155 @@ function IdleHome({
   onVideo: () => void;
   onVoice: () => void;
 }) {
+  const float = useRef(new Animated.Value(0)).current;
+  const fadeIn = useRef(new Animated.Value(0)).current;
+  const slideUp = useRef(new Animated.Value(18)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeIn, {
+        toValue: 1,
+        duration: 520,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideUp, {
+        toValue: 0,
+        duration: 520,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(float, {
+          toValue: 1,
+          duration: 2400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(float, {
+          toValue: 0,
+          duration: 2400,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [fadeIn, float, slideUp]);
+
+  const floatY = float.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -8],
+  });
+
   return (
     <TabPadded style={styles.idle}>
-      <View style={styles.idleHero}>
-        <View style={styles.pairRow}>
-          <View style={[styles.pairAvatar, styles.pairBoy]}>
-            <Image
-              source={BOY_IMG}
-              style={styles.pairPhoto}
-              contentFit="cover"
-            />
-          </View>
-          <View style={[styles.pairAvatar, styles.pairGirl]}>
-            <Image
-              source={GIRL_IMG}
-              style={styles.pairPhoto}
-              contentFit="cover"
-            />
-          </View>
+      <Animated.View
+        style={[
+          styles.idleTop,
+          { opacity: fadeIn, transform: [{ translateY: slideUp }] },
+        ]}
+      >
+        <View style={styles.anonPill}>
+          <Ionicons name="eye-off-outline" size={13} color={T.primary} />
+          <Text style={styles.anonPillText}>Fully anonymous</Text>
         </View>
-      </View>
 
-      <View style={styles.idleCopy}>
-        <Text style={styles.idleTitle}>
-          Ready to meet{" "}
-          <Text style={styles.idleTitleAccent}>someone?</Text>
-        </Text>
-        <Text style={styles.idleSub}>
-          Start a live video or voice match — connect, chat, and feel the vibe.
-        </Text>
-      </View>
-
-      <View style={styles.actionRow}>
-        <View style={styles.modeCard}>
-          <View style={[styles.modeIconWrap, styles.modeIconVideo]}>
-            <Ionicons name="videocam" size={22} color={T.primary} />
+        <Animated.View
+          style={[styles.idleHero, { transform: [{ translateY: floatY }] }]}
+        >
+          <View style={styles.heroGlow} />
+          <View style={styles.pairRow}>
+            <View style={[styles.pairAvatar, styles.pairBoy]}>
+              <Image
+                source={BOY_IMG}
+                style={styles.pairPhoto}
+                contentFit="cover"
+              />
+            </View>
+            <View style={styles.pairSpark}>
+              <LinearGradient
+                colors={[T.rose, T.primaryMid]}
+                style={styles.pairSparkInner}
+              >
+                <Ionicons name="flash" size={16} color="#fff" />
+              </LinearGradient>
+            </View>
+            <View style={[styles.pairAvatar, styles.pairGirl]}>
+              <Image
+                source={GIRL_IMG}
+                style={styles.pairPhoto}
+                contentFit="cover"
+              />
+            </View>
           </View>
-          <Text style={styles.modeTitle}>Video</Text>
-          <Text style={styles.modeHint}>See each other</Text>
-          <TouchableOpacity
-            activeOpacity={0.88}
-            onPress={onVideo}
-            style={styles.startBtnPurple}
-            accessibilityRole="button"
-            accessibilityLabel="Start video explore"
+        </Animated.View>
+
+        <View style={styles.idleCopy}>
+          <Text style={styles.idleTitle}>
+            Meet someone{"\n"}
+            <Text style={styles.idleTitleAccent}>right now</Text>
+          </Text>
+          <Text style={styles.idleSub}>
+            Instant anonymous video or voice — no profiles, no pressure.
+          </Text>
+        </View>
+      </Animated.View>
+
+      <Animated.View
+        style={[
+          styles.idleBottom,
+          { opacity: fadeIn, transform: [{ translateY: slideUp }] },
+        ]}
+      >
+        <TouchableOpacity
+          activeOpacity={0.9}
+          onPress={onVideo}
+          style={styles.primaryCtaWrap}
+          accessibilityRole="button"
+          accessibilityLabel="Start video explore"
+        >
+          <LinearGradient
+            colors={[T.primary, T.primaryMid]}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={styles.primaryCta}
           >
-            <Text style={styles.startBtnText}>Start Video</Text>
-            <Ionicons name="arrow-forward" size={14} color="#fff" />
-          </TouchableOpacity>
-        </View>
+            <View style={styles.ctaIconBubble}>
+              <Ionicons name="videocam" size={22} color={T.primary} />
+            </View>
+            <View style={styles.ctaCopy}>
+              <Text style={styles.ctaTitle}>Start Video</Text>
+              <Text style={styles.ctaHint}>Face-to-face match</Text>
+            </View>
+            <Ionicons name="arrow-forward" size={20} color="#fff" />
+          </LinearGradient>
+        </TouchableOpacity>
 
-        <View style={styles.modeCard}>
-          <View style={[styles.modeIconWrap, styles.modeIconVoice]}>
+        <TouchableOpacity
+          activeOpacity={0.9}
+          onPress={onVoice}
+          style={styles.secondaryCta}
+          accessibilityRole="button"
+          accessibilityLabel="Start voice explore"
+        >
+          <View style={[styles.ctaIconBubble, styles.ctaIconRose]}>
             <Ionicons name="call" size={20} color={T.rose} />
           </View>
-          <Text style={styles.modeTitle}>Voice</Text>
-          <Text style={styles.modeHint}>Just talk</Text>
-          <TouchableOpacity
-            activeOpacity={0.88}
-            onPress={onVoice}
-            style={styles.startBtnPink}
-            accessibilityRole="button"
-            accessibilityLabel="Start voice explore"
-          >
-            <Text style={styles.startBtnText}>Start Voice</Text>
-            <Ionicons name="arrow-forward" size={14} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
+          <View style={styles.ctaCopy}>
+            <Text style={styles.ctaTitleDark}>Start Voice</Text>
+            <Text style={styles.ctaHintDark}>Talk without video</Text>
+          </View>
+          <Ionicons name="arrow-forward" size={18} color={T.primary} />
+        </TouchableOpacity>
 
-      <View style={styles.idleFootRow}>
-        <Ionicons name="shield-checkmark" size={14} color={T.muted} />
-        <Text style={styles.idleFoot}>
-          Verified profiles · Be kind · Safe community
-        </Text>
-      </View>
+        <View style={styles.idleFootRow}>
+          <Ionicons name="shield-checkmark" size={14} color={T.primaryMid} />
+          <Text style={styles.idleFoot}>
+            Safe · Skip anytime · Be kind
+          </Text>
+        </View>
+      </Animated.View>
     </TabPadded>
   );
 }
@@ -628,6 +721,7 @@ function SearchingState({
 }) {
   const ring1 = useRef(new Animated.Value(0)).current;
   const ring2 = useRef(new Animated.Value(0)).current;
+  const ring3 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const make = (v: Animated.Value, delay: number) =>
@@ -636,7 +730,7 @@ function SearchingState({
           Animated.delay(delay),
           Animated.timing(v, {
             toValue: 1,
-            duration: 1800,
+            duration: 2200,
             useNativeDriver: true,
           }),
           Animated.timing(v, {
@@ -647,20 +741,23 @@ function SearchingState({
         ]),
       );
     const a = make(ring1, 0);
-    const b = make(ring2, 900);
+    const b = make(ring2, 700);
+    const c = make(ring3, 1400);
     a.start();
     b.start();
+    c.start();
     return () => {
       a.stop();
       b.stop();
+      c.stop();
     };
-  }, [ring1, ring2]);
+  }, [ring1, ring2, ring3]);
 
   const ringStyle = (v: Animated.Value) => ({
-    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
+    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }),
     transform: [
       {
-        scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 1.85] }),
+        scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 2.05] }),
       },
     ],
   });
@@ -668,32 +765,51 @@ function SearchingState({
   return (
     <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
+        <View style={styles.modeLivePill}>
+          <Ionicons
+            name={mode === "video" ? "videocam" : "call"}
+            size={12}
+            color={T.primary}
+          />
+          <Text style={styles.modeLiveText}>
+            {mode === "video" ? "Video" : "Voice"} queue
+          </Text>
+        </View>
         <View style={styles.radarWrap}>
-          <Animated.View style={[styles.radarRing, ringStyle(ring1)]} />
-          <Animated.View style={[styles.radarRing, ringStyle(ring2)]} />
+          <Animated.View
+            style={[styles.radarRing, styles.radarRingRose, ringStyle(ring1)]}
+          />
+          <Animated.View
+            style={[styles.radarRing, styles.radarRingPurple, ringStyle(ring2)]}
+          />
+          <Animated.View style={[styles.radarRing, ringStyle(ring3)]} />
           <LinearGradient
             colors={[T.rose, T.primary]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
             style={styles.radarCore}
           >
             <Ionicons
               name={mode === "video" ? "videocam" : "call"}
-              size={30}
+              size={32}
               color="#fff"
             />
           </LinearGradient>
         </View>
-        <Text style={styles.stateTitle}>Finding your match</Text>
+        <Text style={styles.stateTitle}>Finding someone</Text>
         <Text style={styles.stateSub}>
-          {mode === "video" ? "Someone to see" : "Someone to talk to"} · hang tight
+          Matching you with an anonymous{" "}
+          {mode === "video" ? "video" : "voice"} partner…
         </Text>
       </View>
 
       <View style={styles.stateActions}>
         <TouchableOpacity
-          activeOpacity={0.8}
+          activeOpacity={0.85}
           onPress={onSkip}
           style={styles.ghostBtn}
         >
+          <Ionicons name="play-skip-forward" size={18} color={T.text} />
           <Text style={styles.ghostBtnText}>Skip</Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -701,7 +817,7 @@ function SearchingState({
           onPress={onLeave}
           style={styles.textBtn}
         >
-          <Text style={styles.textBtnLabel}>Leave</Text>
+          <Text style={styles.textBtnLabel}>Leave queue</Text>
         </TouchableOpacity>
       </View>
     </TabPadded>
@@ -717,15 +833,44 @@ function CooldownState({
   mode: "video" | "voice";
   onLeave: () => void;
 }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1.06,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
   return (
     <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
-        <View style={styles.countdown}>
-          <Text style={styles.countdownNum}>{seconds}</Text>
-        </View>
+        <Animated.View
+          style={[styles.countdown, { transform: [{ scale: pulse }] }]}
+        >
+          <LinearGradient
+            colors={[T.primarySoft, T.roseSoft]}
+            style={styles.countdownInner}
+          >
+            <Text style={styles.countdownNum}>{seconds}</Text>
+          </LinearGradient>
+        </Animated.View>
         <Text style={styles.stateTitle}>Next match soon</Text>
         <Text style={styles.stateSub}>
-          Finding another {mode === "video" ? "video" : "voice"} match
+          Looking for another anonymous {mode === "video" ? "video" : "voice"}{" "}
+          partner
         </Text>
       </View>
       <View style={styles.stateActions}>
@@ -734,7 +879,7 @@ function CooldownState({
           onPress={onLeave}
           style={styles.textBtn}
         >
-          <Text style={styles.textBtnLabel}>Leave</Text>
+          <Text style={styles.textBtnLabel}>Leave queue</Text>
         </TouchableOpacity>
       </View>
     </TabPadded>
@@ -753,25 +898,59 @@ function MatchedState({
   };
   mode: "video" | "voice";
 }) {
-  const photo = resolveMediaUrl(peer.photo) || peer.photo || "";
-  const name = getDisplayName(peer.name, peer.publicId);
-  const pop = useRef(new Animated.Value(0.86)).current;
+  const name = "Anonymous";
+  const pop = useRef(new Animated.Value(0.82)).current;
+  const glow = useRef(new Animated.Value(0.4)).current;
 
   useEffect(() => {
     Animated.spring(pop, {
       toValue: 1,
-      friction: 6,
-      tension: 80,
+      friction: 5,
+      tension: 90,
       useNativeDriver: true,
     }).start();
-  }, [pop]);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(glow, {
+          toValue: 0.4,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [glow, pop]);
 
   return (
     <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
-        <Text style={styles.matchBadge}>It{"'"}s a match</Text>
+        <View style={styles.matchBadgeWrap}>
+          <LinearGradient
+            colors={[T.rose, T.primaryMid]}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={styles.matchBadgeGrad}
+          >
+            <Text style={styles.matchBadge}>It{"'"}s a match</Text>
+          </LinearGradient>
+        </View>
         <Animated.View
-          style={[styles.matchAvatar, { transform: [{ scale: pop }] }]}
+          style={[
+            styles.matchAvatar,
+            {
+              transform: [{ scale: pop }],
+              opacity: glow.interpolate({
+                inputRange: [0.4, 1],
+                outputRange: [0.92, 1],
+              }),
+            },
+          ]}
         >
           <LinearGradient
             colors={[T.rose, T.primary]}
@@ -779,20 +958,17 @@ function MatchedState({
           >
             <View style={styles.matchAvatarInner}>
               <WhatsAppAvatar
-                name={peer.name}
-                publicId={peer.publicId}
-                photo={photo}
+                name={name}
+                publicId=""
+                photo=""
                 gender={peer.gender}
                 size={118}
-                photoVerified={!!(peer as any).photoVerified}
               />
             </View>
           </LinearGradient>
         </Animated.View>
         <Text style={styles.matchName}>{name}</Text>
-        {peer.publicId ? (
-          <Text style={styles.matchHandle}>@{peer.publicId}</Text>
-        ) : null}
+        <Text style={styles.matchAnonHint}>Identity hidden</Text>
         <View style={styles.connectingRow}>
           <ActivityIndicator size="small" color={T.primary} />
           <Text style={styles.connectingText}>
@@ -816,7 +992,7 @@ function LiveCallState({
   gender?: string;
 }) {
   const uri = resolveMediaUrl(photo) || photo || "";
-  const display = getDisplayName(name, publicId);
+  const display = getDisplayName(name, publicId) || "Anonymous";
 
   return (
     <TabPadded style={styles.stateScreen}>
@@ -832,7 +1008,7 @@ function LiveCallState({
           >
             <View style={styles.matchAvatarInner}>
               <WhatsAppAvatar
-                name={name}
+                name={display}
                 publicId={publicId}
                 photo={uri}
                 gender={gender}
@@ -842,7 +1018,6 @@ function LiveCallState({
           </LinearGradient>
         </View>
         <Text style={styles.matchName}>{display}</Text>
-        {publicId ? <Text style={styles.matchHandle}>@{publicId}</Text> : null}
         <Text style={styles.stateSub}>Controls are on the call screen</Text>
       </View>
     </TabPadded>
@@ -854,6 +1029,24 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: T.bg,
   },
+  orbPurple: {
+    position: "absolute",
+    top: -60,
+    right: -40,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(90, 47, 199, 0.12)",
+  },
+  orbRose: {
+    position: "absolute",
+    bottom: 120,
+    left: -70,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: "rgba(255, 75, 110, 0.10)",
+  },
   safe: {
     flex: 1,
     backgroundColor: "transparent",
@@ -863,24 +1056,52 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 22,
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingTop: 4,
+    paddingBottom: 10,
+    gap: 12,
+  },
+  headerLeft: {
+    flex: 1,
   },
   headerTitle: {
-    fontSize: 30,
+    fontSize: 32,
     fontWeight: "800",
     color: T.text,
-    letterSpacing: -0.8,
+    letterSpacing: -1,
+  },
+  headerSub: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: "500",
+    color: T.muted,
+    letterSpacing: -0.1,
   },
   prefsChip: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    gap: 6,
+    maxWidth: 140,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 22,
     backgroundColor: T.surface,
     borderWidth: 1,
     borderColor: T.border,
+    ...Platform.select({
+      ios: {
+        shadowColor: T.primary,
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: { elevation: 2 },
+    }),
+  },
+  prefsChipText: {
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    color: T.primary,
   },
   body: {
     flex: 1,
@@ -891,38 +1112,98 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     justifyContent: "space-between",
   },
+  idleTop: {
+    alignItems: "center",
+    paddingTop: 8,
+  },
+  idleBottom: {
+    gap: 12,
+    paddingBottom: 4,
+  },
+  anonPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: "rgba(55, 3, 114, 0.08)",
+    marginBottom: 18,
+  },
+  anonPillText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: T.primary,
+    letterSpacing: 0.2,
+  },
   idleHero: {
     alignItems: "center",
     justifyContent: "center",
+    height: 168,
+    marginBottom: 8,
+  },
+  heroGlow: {
+    position: "absolute",
+    width: 200,
     height: 200,
-    marginTop: 16,
-    marginBottom: 4,
+    borderRadius: 100,
+    backgroundColor: "rgba(255, 75, 110, 0.12)",
   },
   pairRow: {
-    width: 210,
-    height: 140,
+    width: 220,
+    height: 148,
     alignItems: "center",
     justifyContent: "center",
   },
   pairAvatar: {
     position: "absolute",
-    width: 118,
-    height: 118,
-    borderRadius: 59,
+    width: 124,
+    height: 124,
+    borderRadius: 62,
     overflow: "hidden",
-    borderWidth: 3,
+    borderWidth: 3.5,
     borderColor: T.surface,
     backgroundColor: T.surface,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.18,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+      },
+      android: { elevation: 6 },
+    }),
   },
   pairBoy: {
     left: 0,
-    transform: [{ translateY: 6 }],
+    transform: [{ translateY: 8 }, { rotate: "-4deg" }],
     zIndex: 1,
   },
   pairGirl: {
     right: 0,
-    transform: [{ translateY: -4 }],
+    transform: [{ translateY: -4 }, { rotate: "5deg" }],
     zIndex: 2,
+  },
+  pairSpark: {
+    zIndex: 3,
+    ...Platform.select({
+      ios: {
+        shadowColor: T.rose,
+        shadowOpacity: 0.45,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 3 },
+      },
+      android: { elevation: 8 },
+    }),
+  },
+  pairSparkInner: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2.5,
+    borderColor: T.surface,
   },
   pairPhoto: {
     width: "100%",
@@ -930,13 +1211,14 @@ const styles = StyleSheet.create({
   },
   idleCopy: {
     alignItems: "center",
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
+    marginTop: 6,
   },
   idleTitle: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: "800",
     color: T.text,
-    letterSpacing: -0.6,
+    letterSpacing: -0.8,
     lineHeight: 36,
     textAlign: "center",
   },
@@ -951,85 +1233,87 @@ const styles = StyleSheet.create({
     textAlign: "center",
     maxWidth: 300,
   },
-  actionRow: {
-    flexDirection: "row",
-    gap: 12,
+  primaryCtaWrap: {
+    borderRadius: 22,
+    overflow: "hidden",
+    ...Platform.select({
+      ios: {
+        shadowColor: T.primary,
+        shadowOpacity: 0.28,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 8 },
+      },
+      android: { elevation: 5 },
+    }),
   },
-  modeCard: {
-    flex: 1,
-    backgroundColor: T.surface,
-    borderRadius: 20,
-    paddingTop: 20,
-    paddingBottom: 14,
-    paddingHorizontal: 12,
+  primaryCta: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  secondaryCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 22,
+    backgroundColor: T.surface,
     borderWidth: 1,
     borderColor: T.border,
   },
-  modeIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+  ctaIconBubble: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 12,
+    backgroundColor: "#fff",
   },
-  modeIconVideo: {
-    backgroundColor: T.primarySoft,
-  },
-  modeIconVoice: {
+  ctaIconRose: {
     backgroundColor: T.roseSoft,
   },
-  modeTitle: {
-    fontSize: 16,
-    fontWeight: "700",
+  ctaCopy: {
+    flex: 1,
+  },
+  ctaTitle: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.2,
+  },
+  ctaHint: {
+    marginTop: 2,
+    color: "rgba(255,255,255,0.78)",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  ctaTitleDark: {
     color: T.text,
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.2,
   },
-  modeHint: {
-    marginTop: 3,
-    marginBottom: 14,
-    fontSize: 13,
+  ctaHintDark: {
+    marginTop: 2,
     color: T.muted,
-  },
-  startBtnPurple: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    alignSelf: "stretch",
-    backgroundColor: T.primary,
-    borderRadius: 999,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-  },
-  startBtnPink: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    alignSelf: "stretch",
-    backgroundColor: T.rose,
-    borderRadius: 999,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-  },
-  startBtnText: {
-    color: "#FFFFFF",
     fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: 0.1,
+    fontWeight: "500",
   },
   idleFootRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    paddingTop: 4,
+    paddingTop: 6,
   },
   idleFoot: {
     fontSize: 12,
     lineHeight: 16,
     color: T.muted,
+    fontWeight: "500",
     ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
   },
 
@@ -1045,12 +1329,12 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(26, 10, 46, 0.45)",
   },
   sheet: {
-    backgroundColor: "#E4E6EB",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    backgroundColor: T.surface,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 16 : 12,
@@ -1062,7 +1346,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#D0D0D0",
+    backgroundColor: "rgba(0,0,0,0.12)",
     marginBottom: 14,
   },
   sheetTitle: {
@@ -1106,7 +1390,7 @@ const styles = StyleSheet.create({
     color: T.text,
   },
   subBuyBtn: {
-    backgroundColor: T.text,
+    backgroundColor: T.primary,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
@@ -1119,7 +1403,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   subActivePill: {
-    backgroundColor: T.text,
+    backgroundColor: T.primary,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
@@ -1148,12 +1432,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 8,
     borderRadius: 20,
-    backgroundColor: "#E8E8ED",
+    backgroundColor: T.primarySoft,
     alignItems: "center",
     justifyContent: "center",
   },
   chipOn: {
-    backgroundColor: T.text,
+    backgroundColor: T.primary,
   },
   chipLocked: {
     opacity: 0.55,
@@ -1233,52 +1517,93 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: "center",
   },
+  modeLivePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: T.primarySoft,
+    marginBottom: 22,
+  },
+  modeLiveText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: T.primary,
+  },
 
   radarWrap: {
-    width: 168,
-    height: 168,
+    width: 180,
+    height: 180,
     alignItems: "center",
     justifyContent: "center",
   },
   radarRing: {
     position: "absolute",
-    width: 112,
-    height: 112,
-    borderRadius: 56,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     borderWidth: 2,
+    borderColor: T.primaryMid,
+  },
+  radarRingRose: {
     borderColor: T.rose,
   },
+  radarRingPurple: {
+    borderColor: T.primary,
+  },
   radarCore: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     alignItems: "center",
     justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowColor: T.primary,
+        shadowOpacity: 0.35,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
+      },
+      android: { elevation: 8 },
+    }),
   },
 
   countdown: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    overflow: "hidden",
     borderWidth: 3,
-    borderColor: T.rose,
+    borderColor: "rgba(55, 3, 114, 0.15)",
+  },
+  countdownInner: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.85)",
   },
   countdownNum: {
-    fontSize: 38,
+    fontSize: 40,
     fontWeight: "800",
     color: T.primary,
   },
 
+  matchBadgeWrap: {
+    marginBottom: 20,
+    borderRadius: 20,
+    overflow: "hidden",
+  },
+  matchBadgeGrad: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
   matchBadge: {
-    marginBottom: 18,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "800",
-    letterSpacing: 1.4,
+    letterSpacing: 1.2,
     textTransform: "uppercase",
-    color: T.rose,
+    color: "#fff",
   },
   matchAvatar: {
     alignItems: "center",
@@ -1300,6 +1625,12 @@ const styles = StyleSheet.create({
     color: T.text,
     letterSpacing: -0.5,
   },
+  matchAnonHint: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: "600",
+    color: T.muted,
+  },
   matchHandle: {
     marginTop: 4,
     fontSize: 15,
@@ -1319,11 +1650,13 @@ const styles = StyleSheet.create({
 
   ghostBtn: {
     alignSelf: "stretch",
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 8,
     paddingVertical: 15,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.9)",
+    borderRadius: 18,
+    backgroundColor: T.surface,
     borderWidth: 1,
     borderColor: T.border,
   },

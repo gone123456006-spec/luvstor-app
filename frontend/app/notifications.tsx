@@ -21,6 +21,7 @@ import { ListRowSkeleton } from "../components/ScreenSkeleton";
 import UserProfileModal from "../components/UserProfileModal";
 import WhatsAppAvatar, { getDisplayName } from "../components/WhatsAppAvatar";
 import { useSocket } from "../contexts/SocketContext";
+import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { resolveMediaUrl } from "../utils/media";
 import { getAuthToken } from "../utils/auth";
 import { sendLike } from "../utils/friends";
@@ -255,6 +256,7 @@ function displayBody(
 export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const bottomInset = useStableBottomInset();
   const { notifTick, refreshNotifUnread, notifUnreadCount } = useSocket();
   const { showAlert } = useAppAlert();
 
@@ -443,8 +445,20 @@ export default function NotificationsScreen() {
       if (soft && Date.now() - lastLoadAtRef.current < 30_000) return;
       load(soft);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [filter]),
+    }, []),
   );
+
+  // All ↔ Unread ↔ Profile View — always fetch the matching page (never reuse All)
+  const filterRef = useRef(filter);
+  useEffect(() => {
+    if (filterRef.current === filter) return;
+    filterRef.current = filter;
+    cursor.current = null;
+    hasMore.current = true;
+    setItems([]);
+    void load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
 
   // Socket badge tick — silent refresh; never remount the screen
   useEffect(() => {
@@ -455,13 +469,19 @@ export default function NotificationsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notifTick]);
 
-  // Filtering by read state happens server-side; hide personal chats + search
+  // Filtering by read state happens server-side; also enforce client-side so
+  // switching All ↔ Unread never shows the wrong set while a fetch is in flight.
   const filtered = useMemo(() => {
     // Profile View is its own tab — never mix into All / Unread
-    const scoped =
+    let scoped =
       filter === "Profile View"
         ? items.filter((n) => n.type === "profile_view")
         : items.filter((n) => n.type !== "chat" && n.type !== "profile_view");
+
+    if (filter === "Unread") {
+      scoped = scoped.filter((n) => !n.read);
+    }
+
     const q = searchQuery.trim().toLowerCase();
     if (!q) return scoped;
     return scoped.filter(
@@ -891,7 +911,15 @@ export default function NotificationsScreen() {
 
   const unlockFooter =
     !profileViewsUnlocked && filter === "Profile View" ? (
-      <View style={styles.unlockBannerWrap}>{unlockBanner}</View>
+      <View
+        style={[
+          styles.unlockBannerWrap,
+          // Clear Android 3-button / gesture nav — SafeAreaView only pads top
+          { marginBottom: Math.max(bottomInset, 12) + 8 },
+        ]}
+      >
+        {unlockBanner}
+      </View>
     ) : null;
 
   return (
@@ -1003,7 +1031,25 @@ export default function NotificationsScreen() {
           renderItem={renderRow}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={
-            rows.length ? styles.listContent : styles.emptyWrap
+            rows.length
+              ? [
+                  styles.listContent,
+                  {
+                    paddingBottom:
+                      !profileViewsUnlocked && filter === "Profile View"
+                        ? 12
+                        : 28 + bottomInset,
+                  },
+                ]
+              : [
+                  styles.emptyWrap,
+                  {
+                    paddingBottom:
+                      !profileViewsUnlocked && filter === "Profile View"
+                        ? 0
+                        : bottomInset,
+                  },
+                ]
           }
           refreshControl={
             <RefreshControl
@@ -1501,7 +1547,7 @@ const styles = StyleSheet.create({
   unlockBannerWrap: {
     marginHorizontal: 12,
     marginTop: 10,
-    marginBottom: 28,
+    // marginBottom set dynamically from useStableBottomInset
   },
   unlockBanner: {
     flexDirection: "row",

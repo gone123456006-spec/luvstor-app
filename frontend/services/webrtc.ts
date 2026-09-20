@@ -25,6 +25,18 @@ export type CallMediaType = 'voice' | 'video';
 
 export type NetworkQuality = 'excellent' | 'good' | 'fair' | 'poor' | 'unknown';
 
+/** WhatsApp-style adaptive encode presets (send-side). */
+const VIDEO_QUALITY: Record<
+  NetworkQuality,
+  { width: number; height: number; frameRate: number; maxBitrate: number }
+> = {
+  excellent: { width: 720, height: 1280, frameRate: 30, maxBitrate: 1_500_000 },
+  good: { width: 540, height: 960, frameRate: 24, maxBitrate: 900_000 },
+  fair: { width: 360, height: 640, frameRate: 18, maxBitrate: 450_000 },
+  poor: { width: 240, height: 426, frameRate: 12, maxBitrate: 200_000 },
+  unknown: { width: 540, height: 960, frameRate: 24, maxBitrate: 900_000 },
+};
+
 type PeerHandlers = {
   onLocalStream?: (stream: any) => void;
   onRemoteStream?: (stream: any) => void;
@@ -295,6 +307,9 @@ export class CallPeer {
   private disposed = false;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private onQuality?: (q: NetworkQuality) => void;
+  private lastQuality: NetworkQuality = 'unknown';
+  private facingFront = true;
+  private adaptBusy = false;
 
   constructor(opts: {
     iceServers: any[];
@@ -310,6 +325,21 @@ export class CallPeer {
     this.callType = opts.callType;
     this.handlers = opts.handlers;
     this.onQuality = opts.onQuality;
+  }
+
+  /** Update ICE (TURN) without tearing down the local camera preview. */
+  updateIceServers(iceServers: any[]) {
+    if (!iceServers?.length) return;
+    this.iceServers = iceServers;
+    try {
+      this.pc?.setConfiguration?.({ iceServers: this.iceServers });
+    } catch (err) {
+      console.warn('[WebRTC] setConfiguration:', (err as Error).message);
+    }
+  }
+
+  isFrontCamera() {
+    return this.facingFront;
   }
 
   async start() {
@@ -393,30 +423,87 @@ export class CallPeer {
         let rtt = 0;
         let packetsLost = 0;
         let packetsReceived = 0;
+        let outboundBitrate = 0;
         stats.forEach((report: any) => {
-          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-            rtt = report.currentRoundTripTime
-              ? report.currentRoundTripTime * 1000
-              : report.currentRoundTripTime;
+          if (
+            (report.type === 'candidate-pair' || report.type === 'transport') &&
+            (report.state === 'succeeded' || report.selected)
+          ) {
+            if (report.currentRoundTripTime != null) {
+              rtt = report.currentRoundTripTime * 1000;
+            }
           }
-          if (report.type === 'inbound-rtp' && !report.isRemote) {
+          if (
+            report.type === 'inbound-rtp' &&
+            (report.kind === 'video' || report.mediaType === 'video')
+          ) {
             packetsLost += report.packetsLost || 0;
             packetsReceived += report.packetsReceived || 0;
           }
+          if (
+            report.type === 'outbound-rtp' &&
+            (report.kind === 'video' || report.mediaType === 'video')
+          ) {
+            // bytesSent delta approximated via timestamp if available
+            if (report.bytesSent && report.timestamp) {
+              outboundBitrate = report.bytesSent;
+            }
+          }
         });
+        void outboundBitrate;
         const loss =
           packetsReceived + packetsLost > 0
             ? packetsLost / (packetsReceived + packetsLost)
             : 0;
         let q: NetworkQuality = 'good';
-        if (rtt > 400 || loss > 0.08) q = 'poor';
-        else if (rtt > 250 || loss > 0.04) q = 'fair';
-        else if (rtt < 120 && loss < 0.01) q = 'excellent';
+        if (rtt > 450 || loss > 0.1) q = 'poor';
+        else if (rtt > 280 || loss > 0.05) q = 'fair';
+        else if (rtt > 0 && rtt < 100 && loss < 0.01) q = 'excellent';
+        else if (rtt === 0 && loss === 0) q = this.lastQuality === 'unknown' ? 'good' : this.lastQuality;
         this.onQuality?.(q);
+        void this.applyAdaptiveVideo(q);
       } catch {
         /* ignore */
       }
-    }, 4000);
+    }, 3000);
+  }
+
+  /** Lower resolution / bitrate when the network is weak (WhatsApp-like). */
+  private async applyAdaptiveVideo(q: NetworkQuality) {
+    if (this.callType !== 'video' || this.disposed || this.adaptBusy) return;
+    if (q === this.lastQuality || q === 'unknown') return;
+    this.adaptBusy = true;
+    this.lastQuality = q;
+    const preset = VIDEO_QUALITY[q] || VIDEO_QUALITY.good;
+    try {
+      const track = this.localStream?.getVideoTracks?.()?.[0];
+      if (track && typeof track.applyConstraints === 'function') {
+        await track.applyConstraints({
+          width: { ideal: preset.width },
+          height: { ideal: preset.height },
+          frameRate: { ideal: preset.frameRate, max: preset.frameRate },
+        });
+      }
+      const sender = this.pc
+        ?.getSenders?.()
+        ?.find((s: any) => s.track && s.track.kind === 'video');
+      if (sender && typeof sender.getParameters === 'function') {
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) {
+          params.encodings = [{}];
+        }
+        params.encodings[0].maxBitrate = preset.maxBitrate;
+        params.encodings[0].maxFramerate = preset.frameRate;
+        if (params.degradationPreference !== undefined) {
+          params.degradationPreference = 'balanced';
+        }
+        await sender.setParameters(params);
+      }
+    } catch (err) {
+      console.warn('[WebRTC] adapt video:', (err as Error).message);
+    } finally {
+      this.adaptBusy = false;
+    }
   }
 
   async createOffer() {
@@ -486,6 +573,13 @@ export class CallPeer {
     this.localStream?.getVideoTracks?.().forEach((t: any) => {
       t.enabled = enabled;
     });
+    try {
+      this.pc?.getSenders?.()?.forEach((s: any) => {
+        if (s.track?.kind === 'video') s.track.enabled = enabled;
+      });
+    } catch {
+      /* ignore */
+    }
   }
 
   async switchCamera() {
@@ -494,6 +588,8 @@ export class CallPeer {
     // react-native-webrtc
     if (typeof (videoTrack as any)._switchCamera === 'function') {
       (videoTrack as any)._switchCamera();
+      this.facingFront = !this.facingFront;
+      this.handlers.onLocalStream?.(this.localStream);
       return;
     }
     // Web fallback: reacquire opposite facingMode
@@ -502,7 +598,7 @@ export class CallPeer {
       const currentFacing = videoTrack.getSettings?.()?.facingMode || 'user';
       const next = currentFacing === 'environment' ? 'user' : 'environment';
       const fresh = await mediaDevices.getUserMedia({
-        video: { facingMode: next },
+        video: { facingMode: { exact: next } },
         audio: false,
       });
       const newTrack = fresh.getVideoTracks()[0];
@@ -514,6 +610,7 @@ export class CallPeer {
         videoTrack.stop();
         this.localStream.removeTrack(videoTrack);
         this.localStream.addTrack(newTrack);
+        this.facingFront = next === 'user';
         this.handlers.onLocalStream?.(this.localStream);
       }
     } catch (err) {

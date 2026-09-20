@@ -594,7 +594,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
             /* ignore */
           }
         }
-      }, 60_000);
+      }, 35_000);
     };
     const stopPresence = () => {
       if (!presenceIv) return;

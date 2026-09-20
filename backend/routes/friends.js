@@ -485,7 +485,11 @@ router.get('/status/:userId', auth, async (req, res) => {
 
     const friendship = await Friendship.findOne({ userA, userB }).lean();
 
-    const canSendMedia = await hasBidirectionalChat(req.userId, targetUserId);
+    const matched =
+      friendship &&
+      (friendship.status === 'friends' || friendship.status === 'mutual_match');
+    const canSendMedia =
+      !!matched || (await hasBidirectionalChat(req.userId, targetUserId));
 
     if (!friendship) {
       return res.json({
@@ -498,8 +502,6 @@ router.get('/status/:userId', auth, async (req, res) => {
       });
     }
 
-    const matched =
-      friendship.status === 'friends' || friendship.status === 'mutual_match';
     const iLiked =
       matched || String(friendship.initiatedBy) === req.userId;
     const theyLiked =
@@ -507,9 +509,9 @@ router.get('/status/:userId', auth, async (req, res) => {
 
     res.json({
       status: friendship.status,
-      areFriends: matched,
+      areFriends: !!matched,
       canSendMedia,
-      canCall: matched,
+      canCall: !!matched,
       iLiked,
       theyLiked,
       iBlocked: friendship.status === 'blocked' && String(friendship.blockedBy) === req.userId,

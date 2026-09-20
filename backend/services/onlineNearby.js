@@ -12,9 +12,9 @@ const { serializeSubscription } = require('../services/subscriptions');
 
 const CONFIG = {
   PULSE_RADIUS_KM: 10,
-  TARGET_COUNT: 8,
-  MAX_RESULTS: 12, // Fetch extra, filter blocked, return top 8
-  ONLINE_THRESHOLD_MIN: 5, // Must be online/active within 5 minutes
+  TARGET_COUNT: 40,
+  MAX_RESULTS: 48,
+  ONLINE_THRESHOLD_MIN: 5,
 };
 
 /**
@@ -42,10 +42,7 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
     const blockedIds = await getBlockedUserIds(viewerId);
     const excludeIds = [viewerId, ...blockedIds];
     
-    // Online threshold — never trust bare isOnline without a fresh lastSeen
-    const recentlyActive = new Date(
-      Date.now() - CONFIG.ONLINE_THRESHOLD_MIN * 60 * 1000
-    );
+    // Online threshold — only people with a fresh foreground presence ping
     const { STALE_MS } = require('../utils/onlineStatus');
     const onlineFresh = new Date(Date.now() - STALE_MS);
     
@@ -61,10 +58,9 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
           $maxDistance: radiusMetres,
         },
       },
-      $or: [
-        { isOnline: true, lastSeen: { $gte: onlineFresh } },
-        { lastSeen: { $gte: recentlyActive } },
-      ],
+      // Do NOT use bare lastSeen — that showed recently logged-in offline users
+      isOnline: true,
+      lastSeen: { $gte: onlineFresh },
     };
     
     if (genderFilter && genderFilter !== 'All') {
@@ -92,8 +88,11 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
     const { resolveOnlineMap } = require('../utils/onlineStatus');
     const onlineMap = await resolveOnlineMap(candidates);
 
-    // Map to response format
-    const users = candidates.slice(0, CONFIG.TARGET_COUNT).map(doc => {
+    // Map to response format — drop anyone whose live presence is offline
+    const users = candidates
+      .filter((doc) => onlineMap.get(String(doc._id)) === true)
+      .slice(0, CONFIG.TARGET_COUNT)
+      .map((doc) => {
       const id = String(doc._id);
       const friendship = friendships.get(id) || null;
       const areFriends = friendship?.status === 'friends';
@@ -120,7 +119,7 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
         age: doc.age,
         photo: doc.photo,
         gender: doc.gender,
-        isOnline: onlineMap.get(id) === true,
+        isOnline: true,
         lastSeen: doc.lastSeen,
         distanceKm: km < 1 ? '1' : km > 100 ? '100' : km.toFixed(1),
         friendshipStatus: friendship?.status || 'stranger',

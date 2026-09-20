@@ -220,14 +220,12 @@ function buildEligibilityFilter({ excludeOids, genderFilter, activeWithinMinutes
     filter.gender = new RegExp(`^${genderFilter}$`, 'i');
   }
   if (activeWithinMinutes > 0) {
-    const since = new Date(Date.now() - activeWithinMinutes * 60 * 1000);
     const { STALE_MS } = require('../utils/onlineStatus');
     const onlineFresh = new Date(Date.now() - STALE_MS);
-    // Require fresh lastSeen even when isOnline is stuck true
-    filter.$or = [
-      { isOnline: true, lastSeen: { $gte: onlineFresh } },
-      { lastSeen: { $gte: since } },
-    ];
+    // Online-only discovery: require live isOnline + fresh lastSeen.
+    // Do not treat "logged in recently" as online.
+    filter.isOnline = true;
+    filter.lastSeen = { $gte: onlineFresh };
   }
   return filter;
 }

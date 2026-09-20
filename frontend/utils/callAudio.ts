@@ -67,11 +67,11 @@ export async function startCallAudio(opts: {
   const mgr = getInCallManager();
   if (mgr) {
     try {
-      mgr.start({
+      mgr.start?.({
         media: opts.callType === 'video' ? 'video' : 'audio',
         auto: false,
       });
-      mgr.setForceSpeakerphoneOn(opts.speakerOn);
+      mgr.setForceSpeakerphoneOn?.(opts.speakerOn);
       if (opts.callType === 'voice' && !opts.speakerOn) {
         mgr.startProximitySensor?.();
       }
@@ -87,8 +87,8 @@ export async function setCallSpeaker(speakerOn: boolean) {
   const mgr = getInCallManager();
   if (mgr) {
     try {
-      mgr.setForceSpeakerphoneOn(speakerOn);
-      mgr.setSpeakerphoneOn(speakerOn);
+      mgr.setForceSpeakerphoneOn?.(speakerOn);
+      mgr.setSpeakerphoneOn?.(speakerOn);
       if (speakerOn) mgr.stopProximitySensor?.();
       else mgr.startProximitySensor?.();
     } catch (err) {
@@ -103,7 +103,7 @@ export function setCallMicMuted(muted: boolean) {
   const mgr = getInCallManager();
   if (!mgr) return;
   try {
-    mgr.setMicrophoneMute(muted);
+    mgr.setMicrophoneMute?.(muted);
   } catch (err) {
     console.warn('[CallAudio] mic mute:', (err as Error).message);
   }
@@ -117,12 +117,21 @@ export async function stopCallAudio() {
   if (mgr) {
     try {
       mgr.stopProximitySensor?.();
-      mgr.setForceSpeakerphoneOn(false);
-      mgr.setSpeakerphoneOn(false);
-      mgr.setMicrophoneMute(false);
-      mgr.stop();
+      mgr.setForceSpeakerphoneOn?.(false);
+      mgr.setSpeakerphoneOn?.(false);
+      mgr.setMicrophoneMute?.(false);
+      mgr.stop?.();
     } catch (err) {
       console.warn('[CallAudio] InCall stop:', (err as Error).message);
+    }
+  }
+  if (Platform.OS === 'ios') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { RTCAudioSession } = require('react-native-webrtc');
+      RTCAudioSession?.audioSessionDidDeactivate?.();
+    } catch {
+      /* Expo Go / missing native */
     }
   }
   try {
@@ -230,5 +239,65 @@ export async function reinforceCallAudio(speakerOn: boolean) {
     } catch {
       /* Expo Go / missing native */
     }
+  }
+}
+
+/** Force a clean mic session for chat voice notes (after WebRTC / InCallManager). */
+export async function prepareChatRecordingAudio() {
+  stopCallRingback();
+  stopIncomingRingtone();
+  const mgr = getInCallManager();
+  if (mgr) {
+    try {
+      mgr.setMicrophoneMute?.(false);
+      mgr.stopProximitySensor?.();
+      mgr.setForceSpeakerphoneOn?.(false);
+      mgr.setSpeakerphoneOn?.(false);
+      // Fully release call audio so expo-audio can own the mic again
+      mgr.stop?.();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (Platform.OS === 'ios') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { RTCAudioSession } = require('react-native-webrtc');
+      RTCAudioSession?.audioSessionDidDeactivate?.();
+    } catch {
+      /* ignore */
+    }
+  }
+  // Brief yield so native session teardown settles before record mode
+  await new Promise((r) => setTimeout(r, 60));
+  await setAudioModeAsync({
+    allowsRecording: true,
+    playsInSilentMode: true,
+    shouldPlayInBackground: false,
+    interruptionMode: 'doNotMix',
+    shouldRouteThroughEarpiece: false,
+  });
+}
+
+/** Restore normal chat playback after a voice note is finished. */
+export async function restoreChatPlaybackAudio() {
+  const mgr = getInCallManager();
+  if (mgr) {
+    try {
+      mgr.setMicrophoneMute?.(false);
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
+      interruptionMode: 'duckOthers',
+      shouldRouteThroughEarpiece: false,
+    });
+  } catch {
+    /* ignore */
   }
 }

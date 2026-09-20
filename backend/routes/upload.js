@@ -22,7 +22,7 @@ function extensionForMime(mime, fallback = 'bin') {
   if (m.includes('gif')) return 'gif';
   if (m.includes('webp')) return 'webp';
   if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
-  if (m.includes('m4a') || m.includes('mp4') || m.includes('aac')) return 'm4a';
+  if (m.includes('m4a') || m.includes('mp4') || m.includes('aac') || m === 'audio/mp4') return 'm4a';
   if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
   if (m.includes('wav')) return 'wav';
   if (m.includes('3gpp') || m.includes('3gp')) return '3gp';
