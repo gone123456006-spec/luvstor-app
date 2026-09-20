@@ -1,0 +1,16 @@
+0 verbose cli /Users/shyamkuamr/.nvm/versions/node/v24.21.0/bin/node /Users/shyamkuamr/.nvm/versions/node/v24.21.0/bin/npm
+1 info using npm@11.19.0
+2 info using node@v24.21.0
+3 silly config load:file:/Users/shyamkuamr/.nvm/versions/node/v24.21.0/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/shyamkuamr/.npmrc
+5 silly config load:file:/Users/shyamkuamr/.nvm/versions/node/v24.21.0/etc/npmrc
+6 verbose title npm config get prefix
+7 verbose argv "config" "--global" "get" "prefix"
+8 verbose logfile logs-max:10 dir:/Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-20T04_17_19_968Z-
+9 verbose logfile /Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-20T04_17_19_968Z-debug-0.log
+10 verbose cwd /Users/shyamkuamr/Documents/luvstor-app/frontend
+11 verbose os Darwin 25.6.0
+12 verbose node v24.21.0
+13 verbose npm  v11.19.0
+14 verbose exit 0
+15 info ok
