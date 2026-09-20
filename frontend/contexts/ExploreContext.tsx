@@ -11,6 +11,7 @@ import { useCall } from './CallContext';
 import { useSocket } from './SocketContext';
 import { apiRequest } from '../utils/api';
 import { getAuthToken } from '../utils/auth';
+import { ensureSocketConnected } from '../utils/ensureSocketConnected';
 import { canonicalShowMe, type ShowMeValue } from '../utils/showMe';
 
 export type ExploreCallMode = 'video' | 'voice';
@@ -167,8 +168,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const emitJoin = useCallback(
-    (nextMode: ExploreCallMode) => {
-      if (!socket?.connected) return;
+    async (nextMode: ExploreCallMode) => {
+      const ready = await ensureSocketConnected(socket);
+      if (!ready) return;
 
       const busy = inActiveCall(call);
       if (busy === 'friend') return;
@@ -179,7 +181,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       modeRef.current = nextMode;
       setStatus('searching');
       setMatchedPeer(null);
-      socket.emit('explore:join', {
+      socket!.emit('explore:join', {
         callType: nextMode,
         prefs: prefsRef.current,
       });
@@ -187,8 +189,12 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     [call, socket],
   );
 
-  const joinVideo = useCallback(() => emitJoin('video'), [emitJoin]);
-  const joinVoice = useCallback(() => emitJoin('voice'), [emitJoin]);
+  const joinVideo = useCallback(() => {
+    void emitJoin('video');
+  }, [emitJoin]);
+  const joinVoice = useCallback(() => {
+    void emitJoin('voice');
+  }, [emitJoin]);
 
   const startCooldownAndRejoin = useCallback(() => {
     clearCooldownTimer();

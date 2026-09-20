@@ -11,7 +11,6 @@ import {
   AppState,
   AppStateStatus,
   Alert,
-  Linking,
   Vibration,
 } from 'react-native';
 import { useAuth } from './AuthContext';
@@ -23,7 +22,7 @@ import {
   CallMediaType,
   CallPermissionError,
   NetworkQuality,
-  ensureCallPermissions,
+  alertCallPermissionDenied,
   isWebRTCAvailable,
   getWebRTCUnavailableMessage,
 } from '../services/webrtc';
@@ -39,6 +38,7 @@ import {
   subscribePendingIncomingCall,
 } from '../utils/pendingIncomingCall';
 import { setCallSessionActive } from '../utils/callSession';
+import { ensureSocketConnected } from '../utils/ensureSocketConnected';
 import {
   reinforceCallAudio,
   setCallMicMuted,
@@ -212,6 +212,49 @@ function mergePeer(
   };
 }
 
+/** STUN-only fallback — cross-network calls need TURN from the server. */
+const FALLBACK_ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+];
+
+function iceListHasTurn(list: any[] | null | undefined): boolean {
+  if (!Array.isArray(list) || !list.length) return false;
+  return list.some((s) => {
+    const urls = [].concat(s?.urls || []);
+    return urls.some((u) => /^turns?:/i.test(String(u || '')));
+  });
+}
+
+/**
+ * Prefer ICE configs that include TURN so calls work on cellular / different
+ * Wi‑Fi (WhatsApp-style). Never rely on same-LAN host candidates alone.
+ */
+async function fetchIceServers(): Promise<any[]> {
+  try {
+    const token = await getAuthToken();
+    if (!token) return FALLBACK_ICE_SERVERS;
+    const data = await apiRequest('/api/calls/ice-servers', token);
+    const list = data?.iceServers;
+    if (Array.isArray(list) && list.length > 0) return list;
+  } catch {
+    /* use fallback */
+  }
+  return FALLBACK_ICE_SERVERS;
+}
+
+/** Merge preferred (socket payload) with a fresh API fetch; keep the TURN set. */
+async function resolveIceServers(preferred?: any[] | null): Promise<any[]> {
+  const prefer = Array.isArray(preferred) && preferred.length ? preferred : null;
+  if (prefer && iceListHasTurn(prefer)) return prefer;
+
+  const fetched = await fetchIceServers();
+  if (iceListHasTurn(fetched)) return fetched;
+  if (prefer) return prefer;
+  return fetched;
+}
+
 function peerFromOpts(opts: StartCallOpts): CallPeerInfo {
   return {
     id: String(opts.userId),
@@ -307,7 +350,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     if (endClearTimer.current) clearTimeout(endClearTimer.current);
     endClearTimer.current = setTimeout(() => {
       setState({ ...initialState, webrtcReady: isWebRTCAvailable() });
-    }, 1600);
+    }, 2200);
   }, []);
 
   const finishCall = useCallback(
@@ -511,13 +554,40 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // ── Outgoing ──────────────────────────────────────────
   const startCall = useCallback(
     async (opts: StartCallOpts) => {
-      if (stateRef.current.phase !== 'idle' && stateRef.current.phase !== 'ended') {
-        patch({ error: 'Already in a call' });
-        return;
+      const phase = stateRef.current.phase;
+      // Stuck non-idle from a failed previous attempt — clear so tap always works
+      if (phase !== 'idle' && phase !== 'ended') {
+        if (
+          phase === 'outgoing' ||
+          phase === 'ringing' ||
+          phase === 'connecting' ||
+          phase === 'reconnecting'
+        ) {
+          // User explicitly starting a new call — tear down the stuck one
+          try {
+            if (stateRef.current.callId) {
+              socket?.emit('call:cancel', { callId: stateRef.current.callId });
+              socket?.emit('call:end', { callId: stateRef.current.callId });
+            }
+          } catch {
+            /* ignore */
+          }
+          finishCall('superseded');
+          // Let state settle one tick before opening the new call
+          await new Promise((r) => setTimeout(r, 50));
+        } else {
+          Alert.alert('Already in a call', 'End the current call first.');
+          return;
+        }
       }
 
-      if (!socket?.connected) {
-        Alert.alert('Not connected', 'Check your internet and try again.');
+      // Socket disconnects on background; wait for resume reconnect before failing
+      const ready = await ensureSocketConnected(socket);
+      if (!ready) {
+        Alert.alert(
+          'Not connected',
+          'Could not reach the call server. Check your internet, wait a moment if the app just opened, and try again.',
+        );
         return;
       }
 
@@ -526,34 +596,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // 1) Mic (+ speaker/Bluetooth) permission BEFORE calling UI — like WhatsApp
-      try {
-        await ensureCallPermissions(opts.callType);
-      } catch (err) {
-        const needsSettings =
-          err instanceof CallPermissionError && err.needsSettings;
-        Alert.alert(
-          'Permission needed',
-          (err as Error).message ||
-            'Allow microphone access to place voice calls.',
-          needsSettings
-            ? [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Open Settings',
-                  onPress: () => {
-                    void Linking.openSettings();
-                  },
-                },
-              ]
-            : [{ text: 'OK' }],
-        );
-        return;
-      }
-
       if (endClearTimer.current) clearTimeout(endClearTimer.current);
 
-      // 2) Client callId up front — cancel works even before call:ringing
+      // Open calling UI immediately — permission dialog must not block the screen
       const callId = generateClientCallId();
       pendingCancelRef.current = false;
       iceServersRef.current = [];
@@ -571,16 +616,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         direction: 'outgoing',
         peer,
         speakerOn,
-        // Voice = camera never on; video = camera on
         cameraOff: opts.callType !== 'video',
         localStream: null,
         remoteStream: null,
         minimized: false,
         error: null,
         peerOffline: false,
+        isExplore: false,
       });
 
-      // Prefetch DP so blur + center render without a pop-in
       const photoUrl = resolveMediaUrl(opts.photo || '') || opts.photo;
       if (photoUrl) {
         try {
@@ -592,24 +636,38 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // 3) Open mic (and camera for video) immediately — same barrier for voice & video
+      // Calling UI is already open. Load TURN (any-network) then open mic/camera.
       if (isWebRTCAvailable()) {
-        void createPeer({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-          ],
-          isCaller: true,
-          callType: opts.callType,
-          callId,
-        }).catch((err) => {
-          const msg =
-            (err as Error)?.message ||
-            (opts.callType === 'video'
-              ? 'Camera unavailable'
-              : 'Microphone unavailable');
-          patch({ error: msg });
-        });
+        void (async () => {
+          const ice = await resolveIceServers();
+          iceServersRef.current = ice;
+          try {
+            await createPeer({
+              iceServers: ice,
+              isCaller: true,
+              callType: opts.callType,
+              callId,
+            });
+          } catch (err) {
+            if (err instanceof CallPermissionError) {
+              try {
+                socket.emit('call:cancel', { callId });
+              } catch {
+                /* ignore */
+              }
+              finishCall('permission');
+              alertCallPermissionDenied(err);
+              return;
+            }
+            const msg =
+              (err as Error)?.message ||
+              (opts.callType === 'video'
+                ? 'Camera unavailable'
+                : 'Microphone unavailable');
+            patch({ error: msg, phase: 'ended', endReason: 'media' });
+            resetSoon();
+          }
+        })();
       }
       void (async () => {
         try {
@@ -620,19 +678,26 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         }
       })();
 
-      // 4) Ring them (same callId so cancel races are safe)
       socket.emit('call:invite', {
         receiverId: opts.userId,
         callType: opts.callType,
         callId,
       });
     },
-    [createPeer, patch, socket]
+    [createPeer, finishCall, patch, resetSoon, socket]
   );
 
   const acceptCall = useCallback(async () => {
     const s = stateRef.current;
     if (!socket || !s.callId || s.phase !== 'incoming') return;
+    const ready = await ensureSocketConnected(socket);
+    if (!ready) {
+      Alert.alert(
+        'Not connected',
+        'Could not reach the call server. Check your internet and try again.',
+      );
+      return;
+    }
     if (!isWebRTCAvailable()) {
       patch({
         error: getWebRTCUnavailableMessage(),
@@ -643,59 +708,41 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     }
     Vibration.cancel();
     stopIncomingRingtone();
-    try {
-      await ensureCallPermissions(s.callType);
-    } catch (err) {
-      const needsSettings =
-        err instanceof CallPermissionError && err.needsSettings;
-      Alert.alert(
-        'Permission needed',
-        (err as Error).message ||
-          'Allow microphone access to answer calls.',
-        needsSettings
-          ? [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Open Settings',
-                onPress: () => {
-                  void Linking.openSettings();
-                },
-              },
-            ]
-          : [{ text: 'OK' }],
-      );
-      socket.emit('call:decline', { callId: s.callId });
-      finishCall('error');
-      return;
-    }
+    // Accept first, then request mic/camera when opening media (WhatsApp-style)
     patch({ phase: 'connecting', cameraOff: s.callType !== 'video' });
     await startCallAudio({
       callType: s.callType,
       speakerOn: s.speakerOn,
     });
-    // Voice + video: open local media immediately (mic always; camera for video)
     if (isWebRTCAvailable() && !peerRef.current) {
       try {
+        let ice = await resolveIceServers(iceServersRef.current);
+        iceServersRef.current = ice;
         await createPeer({
-          iceServers: iceServersRef.current.length
-            ? iceServersRef.current
-            : [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-              ],
+          iceServers: ice,
           isCaller: false,
           callType: s.callType,
           callId: s.callId,
         });
       } catch (err) {
-        patch({
-          error:
-            (err as Error).message ||
-            (s.callType === 'video'
-              ? 'Camera unavailable'
-              : 'Microphone unavailable'),
-        });
+        if (err instanceof CallPermissionError) {
+          alertCallPermissionDenied(err);
+          socket.emit('call:decline', { callId: s.callId });
+          finishCall('permission');
+          return;
+        }
+        const msg =
+          (err as Error)?.message ||
+          (s.callType === 'video'
+            ? 'Camera unavailable'
+            : 'Microphone unavailable');
+        patch({ error: msg });
+        socket.emit('call:decline', { callId: s.callId });
+        finishCall('error');
+        return;
       }
+    } else if (peerRef.current && iceServersRef.current.length) {
+      peerRef.current.updateIceServers?.(iceServersRef.current);
     }
     socket.emit('call:accept', { callId: s.callId });
   }, [createPeer, finishCall, patch, socket]);
@@ -841,12 +888,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       startCallRingback(speakerOn);
       try {
         await startCallAudio({ callType: locked, speakerOn });
-        const ice = iceServersRef.current.length
-          ? iceServersRef.current
-          : [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ];
+        let ice = await resolveIceServers(iceServersRef.current);
+        iceServersRef.current = ice;
         if (peerRef.current?.getLocalStream()) {
           // Apply server TURN (critical for cellular) without tearing down preview
           peerRef.current.updateIceServers?.(ice);
@@ -944,11 +987,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       stopIncomingRingtone();
       patch({ phase: 'connecting', callId });
 
-      const iceServers =
+      const iceServers = await resolveIceServers(
         payload.iceServers ||
-        iceServersRef.current ||
-        (onIncoming as any)._ice ||
-        [];
+          iceServersRef.current ||
+          (onIncoming as any)._ice ||
+          [],
+      );
+      iceServersRef.current = iceServers;
 
       try {
         if (payload.isCallee) {
@@ -982,14 +1027,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             return;
           }
           const mediaType = callTypeRef.current;
-          const ice =
-            iceServers.length > 0 ? iceServers : iceServersRef.current;
           // Reuse early mic/camera peer so media never blanks on pickup
           if (peerRef.current?.getLocalStream()) {
-            peerRef.current.updateIceServers?.(ice);
+            peerRef.current.updateIceServers?.(iceServers);
           } else {
             await createPeer({
-              iceServers: ice,
+              iceServers,
               isCaller: true,
               callType: mediaType,
               callId,
@@ -1091,17 +1134,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       stopHeartbeat();
       void stopCallAudio();
       callTypeRef.current = 'voice';
+      const message =
+        code === 'busy'
+          ? 'Busy on another call'
+          : code === 'not_friends'
+            ? 'You can only call friends'
+            : code === 'blocked'
+              ? payload?.error || 'You cannot call this person'
+              : payload?.error || 'Call failed';
       patch({
-        error:
-          code === 'busy'
-            ? 'Busy on another call'
-            : payload?.error || 'Call failed',
+        error: message,
         phase: 'ended',
         endReason: code,
         localStream: null,
         remoteStream: null,
         cameraOff: true,
+        minimized: false,
       });
+      // Also surface as system alert so it is never silent
+      if (code === 'not_friends' || code === 'blocked' || code === 'busy') {
+        Alert.alert('Call', message);
+      }
       resetSoon();
     };
 

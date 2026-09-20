@@ -402,7 +402,12 @@ async function queuePush(userId, notification, { badge } = {}) {
       ),
     ]);
 
-    if (!tokens.length) return;
+    if (!tokens.length) {
+      console.warn(
+        `[Notifications] ${notification.type} push skipped — no device tokens for user ${userId}`,
+      );
+      return;
+    }
 
     const badgeCount = computedBadge || 0;
 

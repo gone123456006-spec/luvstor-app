@@ -35,6 +35,8 @@ async function pushIncomingCall(io, {
     actorName: name,
     actorPhoto: (caller && caller.photo) || '',
     priority: 'high',
+    // Never suppress — killed / locked phones must ring via FCM
+    push: true,
     groupKey: `call:${callId}`,
     // One incoming push per callId — retries / double-emits collapse
     dedupeKey: `call:incoming:${callId}`,
@@ -80,6 +82,7 @@ async function pushMissedCall(io, {
     actorId: callerId,
     actorName: callerName || '',
     priority: 'high',
+    push: true,
     groupKey: `call:missed:${roomId || callId}`,
     deepLink: `/messages/${callerId}`,
     data: {

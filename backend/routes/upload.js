@@ -46,7 +46,14 @@ async function persistUploadBuffer(req, { buffer, mime, originalName, prefix, de
   fs.writeFileSync(filePath, buffer);
 
   const relativePath = `/uploads/${userId}/${fileName}`;
-  const absoluteUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
+  // Prefer public API host for absoluteUrl (FCM / clients that need https)
+  const { publicApiBase } = require('../utils/absoluteUrl');
+  const publicBase = publicApiBase();
+  const hostBase =
+    publicBase && !/localhost|127\.0\.0\.1/i.test(publicBase)
+      ? publicBase
+      : `${req.protocol}://${req.get('host')}`;
+  const absoluteUrl = `${hostBase}${relativePath}`;
 
   const upload = await Upload.create({
     userId: req.userId,

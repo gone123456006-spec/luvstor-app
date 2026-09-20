@@ -23,7 +23,12 @@ const { isReady: redisReady } = require('../utils/redis');
 const calls = require('../services/calls');
 const exploreMatchmaking = require('../services/exploreMatchmaking');
 const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
+const { toPersistentMediaUrl } = require('../utils/mediaUrl');
 
+function normalizeMessageMediaUrl(url) {
+  const n = toPersistentMediaUrl(url);
+  return n || null;
+}
 // Helper: mutual like / friends (calls unlock)
 async function areFriends(userId1, userId2) {
   const { userA, userB } = Friendship.getSortedPair(userId1, userId2);
@@ -62,7 +67,7 @@ function shapeReplyToSnapshot(parent) {
     mediaUrl:
       parent.isDeleted || isViewOnce
         ? null
-        : parent.mediaUrl || null,
+        : normalizeMessageMediaUrl(parent.mediaUrl),
     isDeleted: !!parent.isDeleted,
     viewOnce: isViewOnce,
     viewOnceOpened: !!parent.viewOnceOpened,
@@ -317,6 +322,21 @@ module.exports = function initSocket(io) {
         } = data;
         if (!receiverId || (!text && !mediaUrl)) return;
 
+        const persistentMediaUrl = mediaUrl
+          ? normalizeMessageMediaUrl(mediaUrl)
+          : null;
+        if (
+          (type === 'image' || type === 'audio') &&
+          mediaUrl &&
+          !persistentMediaUrl
+        ) {
+          return socket.emit('chat:error', {
+            error: 'Invalid media URL — upload first',
+            code: 'INVALID_MEDIA_URL',
+            clientMsgId,
+          });
+        }
+
         if (String(receiverId) === String(uid)) {
           return socket.emit('chat:error', {
             error: 'Cannot send message to yourself',
@@ -433,7 +453,7 @@ module.exports = function initSocket(io) {
           receiverId,
           text: text || '',
           type,
-          mediaUrl,
+          mediaUrl: persistentMediaUrl,
           undelivered,
           delivered: !!receiverOnline,
           deliveredAt: receiverOnline ? now : null,
@@ -513,10 +533,17 @@ module.exports = function initSocket(io) {
                 const ConversationState = require('../models/ConversationState');
                 const { createNotification } = require('../services/notifications');
 
-                // Offline → always push. Online → push unless actively viewing this chat.
+                // Offline / no live socket → always FCM (WhatsApp killed-app path).
+                // Only suppress when they have a live socket AND are viewing this chat
+                // (in-app toast already covers that case).
                 let push = true;
                 if (receiverOnline) {
-                  push = !(await isViewingChat(receiverId, uid));
+                  const live =
+                    onlineSockets.has(String(receiverId)) &&
+                    (onlineSockets.get(String(receiverId))?.size || 0) > 0;
+                  if (live && (await isViewingChat(receiverId, uid))) {
+                    push = false;
+                  }
                 }
 
                 // Mute/archive checked inside queuePush — don't block here
@@ -1369,6 +1396,15 @@ module.exports = function initSocket(io) {
         ? disc.becameOffline
         : !stillConnected;
 
+      // Always clear viewing on disconnect so a killed/backgrounded phone
+      // never stays "in chat" and suppresses FCM to all devices.
+      // Any remaining open chat will re-mark via chat:join / heartbeat.
+      try {
+        await clearViewing(uid);
+      } catch (err) {
+        console.warn('clearViewing on disconnect:', err.message);
+      }
+
       if (becameOffline) {
         await User.findByIdAndUpdate(uid, {
           isOnline: false,
@@ -1388,18 +1424,6 @@ module.exports = function initSocket(io) {
           userId: uid,
           isOnline: false,
         });
-
-        const chats = await getViewingSet(uid);
-        chats.forEach((otherUserId) => {
-          const room = String(
-            [String(uid), String(otherUserId)].sort().join('_'),
-          );
-          io.to(room).emit('user:offline', {
-            userId: uid,
-            isOnline: false,
-          });
-        });
-        await clearViewing(uid);
       }
 
       console.log(`❌ Socket disconnected: ${uid}`);

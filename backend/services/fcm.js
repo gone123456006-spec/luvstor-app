@@ -90,6 +90,9 @@ function buildMessage({
   // Relative `/uploads/...` photos never render in the tray — FCM needs https
   const resolvedImage = absoluteMediaUrl(imageUrl) || undefined;
 
+  // Incoming calls: wake Doze / show heads-up even when app is killed
+  const androidPriority = isHigh || isCallIncoming ? 'high' : 'normal';
+
   return {
     tokens,
     notification: {
@@ -99,16 +102,18 @@ function buildMessage({
     },
     data: {
       ...stringData,
+      // Always include type for client routing when OS delivers notification+data
+      type: stringData.type || type || '',
       ...(isCallIncoming ? { categoryId: 'incoming_call' } : {}),
     },
     android: {
-      priority: isHigh ? 'high' : 'normal',
+      priority: androidPriority,
       ...(collapseKey ? { collapseKey } : {}),
       ttl: resolvedTtl,
       notification: {
         channelId,
         sound: sound === 'default' || !sound ? 'default' : sound,
-        priority: isHigh ? 'max' : 'default',
+        priority: isHigh || isCallIncoming ? 'max' : 'default',
         defaultVibrateTimings: true,
         // 1 = PUBLIC — show content on lock screen (WhatsApp-style)
         visibility: 1,
@@ -117,17 +122,14 @@ function buildMessage({
         ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
         icon: 'notification_icon',
         color: '#8E2DE2',
-        ...(isCallIncoming
-          ? {
-              // Expo maps this to Accept / Decline actions registered on device
-              clickAction: 'incoming_call',
-            }
-          : {}),
+        // Do NOT set clickAction to a custom string — it can prevent the
+        // default launcher open on some OEMs. Tap routing uses `data` instead.
       },
     },
     apns: {
       headers: {
-        'apns-priority': isHigh ? '10' : '5',
+        'apns-priority': isHigh || isCallIncoming ? '10' : '5',
+        'apns-push-type': 'alert',
         // Keep chat pushes available offline (call stays high-priority short-lived)
         'apns-expiration': String(
           Math.floor(Date.now() / 1000) + Math.floor(resolvedTtl / 1000),
@@ -136,11 +138,17 @@ function buildMessage({
       },
       payload: {
         aps: {
-          sound: sound === 'default' ? 'default' : `${sound}.caf`,
+          sound: sound === 'default' || !sound ? 'default' : `${sound}.caf`,
           ...(typeof badge === 'number' ? { badge } : {}),
           ...(groupKey ? { 'thread-id': groupKey } : {}),
           'mutable-content': resolvedImage ? 1 : 0,
-          ...(isCallIncoming ? { category: 'incoming_call' } : {}),
+          ...(isCallIncoming
+            ? {
+                category: 'incoming_call',
+                // Time-sensitive — surfaces on lock screen when Focus allows
+                'interruption-level': 'time-sensitive',
+              }
+            : {}),
         },
       },
       ...(resolvedImage

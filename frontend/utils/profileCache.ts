@@ -15,7 +15,8 @@ function toAbsolute(url?: string | null) {
   return resolveMediaUrl(url) || url;
 }
 
-/** Persist uploads as relative paths so host/port changes don't break media. */
+/** Persist uploads as relative paths so host/port changes don't break media.
+ *  Never store device-local URIs — they vanish after logout / reinstall. */
 function toStoredMediaPath(url?: string | null): string {
   if (!url) return '';
   const clean = String(url).trim().split('?')[0];
@@ -23,9 +24,12 @@ function toStoredMediaPath(url?: string | null): string {
   if (
     clean.startsWith('file://') ||
     clean.startsWith('content://') ||
-    clean.startsWith('data:')
+    clean.startsWith('data:') ||
+    clean.startsWith('ph://') ||
+    clean.startsWith('assets-library://') ||
+    clean.startsWith('blob:')
   ) {
-    return clean;
+    return '';
   }
   try {
     const parsed = new URL(clean);
@@ -35,7 +39,14 @@ function toStoredMediaPath(url?: string | null): string {
     /* relative */
   }
   if (clean.startsWith('/uploads/')) return clean;
-  return clean;
+  return '';
+}
+
+function preferPersistent(
+  server?: string | null,
+  local?: string | null,
+): string {
+  return toStoredMediaPath(server) || toStoredMediaPath(local) || '';
 }
 
 export type ProfileScreenSnapshot = {
@@ -157,9 +168,12 @@ export async function buildProfileSnapshot(
     interests: me?.interests || profile?.interests,
     relationshipGoal: me?.relationshipGoal || profile?.relationshipGoal,
     height: me?.height ?? profile?.height,
-    // Store relative /uploads paths (or remote absolutes) — resolve at display time
-    photo: toStoredMediaPath(me?.photo || profile?.photo),
-    coverPhoto: toStoredMediaPath(coverPhoto || me?.coverPhoto || profile?.coverPhoto),
+    // Store relative /uploads paths (or remote absolutes) — never device URIs
+    photo: preferPersistent(me?.photo, profile?.photo),
+    coverPhoto: preferPersistent(
+      coverPhoto || me?.coverPhoto,
+      profile?.coverPhoto,
+    ),
     photos: Array.isArray(me?.photos)
       ? me.photos.map(toStoredMediaPath).filter(Boolean)
       : Array.isArray(profile?.photos)

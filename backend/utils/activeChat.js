@@ -11,8 +11,8 @@ const { getRedis, isReady } = require('./redis');
 
 const viewing = new Map(); // fallback: uid -> { otherIds: Set, expiresAt: number }
 const KEY_PREFIX = 'chatview:';
-/** Crash safety — refreshed by heartbeat while chat is open (was 30m; too long if leave is lost) */
-const TTL_SEC = 5 * 60;
+/** Crash safety — refreshed by heartbeat while chat is open */
+const TTL_SEC = 90;
 const MEMORY_TTL_MS = TTL_SEC * 1000;
 
 function key(userId) {

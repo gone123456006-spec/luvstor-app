@@ -151,7 +151,11 @@ function formatDuration(ms: number) {
 function statusLabel(
   phase: string,
   endReason: string | null,
-  opts?: { peerOffline?: boolean; callType?: 'voice' | 'video' | null },
+  opts?: {
+    peerOffline?: boolean;
+    callType?: 'voice' | 'video' | null;
+    error?: string | null;
+  },
 ) {
   switch (phase) {
     case 'outgoing':
@@ -167,14 +171,18 @@ function statusLabel(
     case 'connected':
       return '';
     case 'ended':
+      if (opts?.error) return opts.error;
       if (endReason === 'decline' || endReason === 'rejected') return 'Declined';
-      if (endReason === 'cancel') return 'Cancelled';
+      if (endReason === 'cancel' || endReason === 'superseded') return 'Cancelled';
+      if (endReason === 'permission') return 'Permission needed';
       if (endReason === 'timeout' || endReason === 'missed') {
         return 'No answer';
       }
-      if (endReason === 'busy') return 'Busy on another call';
+      if (endReason === 'busy' || endReason === 'not_friends' || endReason === 'blocked') {
+        return opts?.error || (endReason === 'busy' ? 'Busy on another call' : 'Call failed');
+      }
       if (endReason === 'offline') return 'Missed call — they’re offline';
-      if (endReason === 'error') return 'Call failed';
+      if (endReason === 'error' || endReason === 'media') return 'Call failed';
       return 'Call ended';
     default:
       return '';
@@ -395,13 +403,13 @@ export default function CallOverlay() {
   const RTCView = useMemo(() => getRTCView(), []);
 
   const isExplore = !!call.isExplore;
-  const visible =
-    call.phase !== 'idle' && call.phase !== 'ended';
+  // Keep overlay up through brief "ended" so Busy / error / duration screen is visible
+  const visible = call.phase !== 'idle';
   const isVideo = call.callType === 'video';
   const isVoice = call.callType === 'voice';
   const panelBottomRef = React.useRef<number | null>(null);
-  if (!visible) {
-    panelBottomRef.current = null;
+  if (!visible || call.phase === 'ended') {
+    if (call.phase !== 'ended') panelBottomRef.current = null;
   } else if (panelBottomRef.current == null) {
     panelBottomRef.current = Math.max(insets.bottom, 16) + 28;
   }
@@ -409,7 +417,7 @@ export default function CallOverlay() {
 
   // Smooth open — same chrome for friend + Explore
   useEffect(() => {
-    const open = visible;
+    const open = call.phase !== 'idle' && call.phase !== 'ended';
     if (open && !wasOpen.current) {
       enterOpacity.setValue(0);
       enterScale.setValue(1.02);
@@ -432,13 +440,17 @@ export default function CallOverlay() {
         ]),
       ]).start();
     }
-    if (!open) {
+    if (call.phase === 'idle') {
       enterOpacity.setValue(0);
       enterScale.setValue(1.02);
       enterY.setValue(0);
+    } else if (call.phase === 'ended') {
+      // Keep fully visible for the ended / error screen
+      enterOpacity.setValue(1);
+      enterScale.setValue(1);
     }
     wasOpen.current = open;
-  }, [visible, enterOpacity, enterScale, enterY]);
+  }, [call.phase, enterOpacity, enterScale, enterY]);
 
   useEffect(() => {
     if (call.phase !== 'connected' || !call.connectedAt) return;
@@ -494,6 +506,7 @@ export default function CallOverlay() {
         : statusLabel(call.phase, call.endReason, {
             peerOffline: !!call.peerOffline,
             callType: call.callType,
+            error: call.error,
           });
 
   const openPeerChat = () => {

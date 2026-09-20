@@ -6,13 +6,15 @@
 
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import {
+  Alert,
+  Linking,
   NativeModules,
   PermissionsAndroid,
   Platform,
   TurboModuleRegistry,
 } from 'react-native';
 
-// Optional — iOS mic prompt before getUserMedia
+// Optional — iOS mic status / prompt (only when placing or answering a call)
 let expoAudioPerms: any = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -134,13 +136,13 @@ export function getWebRTCUnavailableMessage(): string {
 
 export class CallPermissionError extends Error {
   kind: 'microphone' | 'camera';
-  /** True when Android won't show the system dialog again — open Settings. */
+  /** True when the OS won't show the system dialog again — open Settings. */
   needsSettings: boolean;
   constructor(kind: 'microphone' | 'camera', needsSettings = false) {
     super(
       kind === 'microphone'
-        ? 'Microphone permission is required to call.'
-        : 'Camera permission is required for video calls.'
+        ? 'Microphone permission is required for calls. Enable it in Settings to continue.'
+        : 'Camera permission is required for video calls. Enable it in Settings to continue.',
     );
     this.name = 'CallPermissionError';
     this.kind = kind;
@@ -148,53 +150,70 @@ export class CallPermissionError extends Error {
   }
 }
 
-function isAndroidGranted(
-  result: string | undefined | null
-): boolean {
+function androidGranted(result: string | undefined | null): boolean {
   return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-function isAndroidBlocked(
-  result: string | undefined | null
-): boolean {
+function androidBlocked(result: string | undefined | null): boolean {
   return (
     result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
-    // Some OEM / RN builds return denied with no re-prompt
     result === 'never_ask_again'
   );
 }
 
+function expoPermGranted(result: any): boolean {
+  return (
+    result?.granted === true ||
+    result?.status === 'granted' ||
+    String(result?.status || '').toLowerCase() === 'granted'
+  );
+}
+
 /**
- * Ask for mic (and camera / Bluetooth) BEFORE the calling UI.
- * Voice and video share the same mic barrier — WhatsApp-style: dialog first, then ring.
- * Always enforced (including Metro / __DEV__) so getUserMedia never races a silent deny.
+ * WhatsApp-style: request mic (and camera for video) only when a call starts
+ * or is accepted. Skip if already granted. Never call this on login / app open.
  */
 export async function ensureCallPermissions(
-  callType: CallMediaType
+  callType: CallMediaType,
 ): Promise<void> {
   if (Platform.OS === 'web') return;
 
-  // expo-audio prompt (iOS + Android) — auto system dialog for microphone
-  const req =
+  const getMic =
+    expoAudioPerms?.getRecordingPermissionsAsync ||
+    expoAudioPerms?.AudioModule?.getRecordingPermissionsAsync;
+  const reqMic =
     expoAudioPerms?.requestRecordingPermissionsAsync ||
     expoAudioPerms?.AudioModule?.requestRecordingPermissionsAsync;
-  if (typeof req === 'function') {
-    try {
-      const result = await req();
-      const granted =
-        result?.granted === true ||
-        result?.status === 'granted' ||
-        String(result?.status || '').toLowerCase() === 'granted';
-      if (!granted) {
-        const blocked = result?.canAskAgain === false;
-        throw new CallPermissionError('microphone', blocked);
+
+  // Prefer expo-audio on both platforms when available (matches voice-note path)
+  if (typeof getMic === 'function' || typeof reqMic === 'function') {
+    let micOk = false;
+    if (typeof getMic === 'function') {
+      try {
+        micOk = expoPermGranted(await getMic());
+      } catch {
+        micOk = false;
       }
-    } catch (err) {
-      if (err instanceof CallPermissionError) throw err;
-      // Fall through to PermissionsAndroid on Android
-      if (Platform.OS !== 'android') {
-        throw new CallPermissionError('microphone', true);
+    }
+    if (!micOk && typeof reqMic === 'function') {
+      try {
+        const result = await reqMic();
+        micOk = expoPermGranted(result);
+        if (!micOk) {
+          throw new CallPermissionError(
+            'microphone',
+            result?.canAskAgain === false,
+          );
+        }
+      } catch (err) {
+        if (err instanceof CallPermissionError) throw err;
+        // Fall through to PermissionsAndroid on Android
+        if (Platform.OS !== 'android') {
+          throw new CallPermissionError('microphone', true);
+        }
       }
+    } else if (!micOk && Platform.OS === 'ios') {
+      // No expo permission helpers — getUserMedia will prompt / fail clearly
     }
   }
 
@@ -203,12 +222,9 @@ export async function ensureCallPermissions(
     return;
   }
 
-  // Android — also pin RECORD_AUDIO / CAMERA via PermissionsAndroid
+  // ── Android native dialogs (authoritative for WebRTC getUserMedia) ──
   const mic = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
   const cam = PermissionsAndroid.PERMISSIONS.CAMERA;
-  const bt = (PermissionsAndroid.PERMISSIONS as any).BLUETOOTH_CONNECT as
-    | string
-    | undefined;
 
   const micAlready = await PermissionsAndroid.check(mic);
   if (!micAlready) {
@@ -216,13 +232,13 @@ export async function ensureCallPermissions(
       title: 'Microphone',
       message:
         callType === 'video'
-          ? 'Luvstor needs the microphone for video calls.'
-          : 'Luvstor needs the microphone for voice calls.',
+          ? 'Allow microphone access for video calls.'
+          : 'Allow microphone access for voice calls.',
       buttonPositive: 'Allow',
       buttonNegative: 'Deny',
     });
-    if (!isAndroidGranted(micResult)) {
-      throw new CallPermissionError('microphone', isAndroidBlocked(micResult));
+    if (!androidGranted(micResult)) {
+      throw new CallPermissionError('microphone', androidBlocked(micResult));
     }
   }
 
@@ -231,32 +247,38 @@ export async function ensureCallPermissions(
     if (!camAlready) {
       const camResult = await PermissionsAndroid.request(cam, {
         title: 'Camera',
-        message: 'Luvstor needs the camera for video calls.',
+        message: 'Allow camera access for video calls.',
         buttonPositive: 'Allow',
         buttonNegative: 'Deny',
       });
-      if (!isAndroidGranted(camResult)) {
-        throw new CallPermissionError('camera', isAndroidBlocked(camResult));
+      if (!androidGranted(camResult)) {
+        throw new CallPermissionError('camera', androidBlocked(camResult));
       }
     }
   }
+}
 
-  // Speaker / headset routing on Android 12+ (optional)
-  if (bt && Number(Platform.Version) >= 31) {
-    try {
-      const btOk = await PermissionsAndroid.check(bt);
-      if (!btOk) {
-        await PermissionsAndroid.request(bt, {
-          title: 'Nearby devices',
-          message: 'Optional — used to connect Bluetooth headsets during calls.',
-          buttonPositive: 'Allow',
-          buttonNegative: 'Deny',
-        });
-      }
-    } catch {
-      /* optional */
-    }
-  }
+/** Alert when the user denied mic/camera — always offers a path to Settings. */
+export function alertCallPermissionDenied(err: unknown): void {
+  const permErr = err instanceof CallPermissionError ? err : null;
+  const kind = permErr?.kind === 'camera' ? 'camera' : 'microphone';
+  const title =
+    kind === 'camera' ? 'Camera access needed' : 'Microphone access needed';
+  const message =
+    permErr?.message ||
+    (kind === 'camera'
+      ? 'Camera permission is required for video calls. Enable it in Settings to continue.'
+      : 'Microphone permission is required for calls. Enable it in Settings to continue.');
+
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    {
+      text: 'Open Settings',
+      onPress: () => {
+        void Linking.openSettings();
+      },
+    },
+  ]);
 }
 
 function getRTC() {
@@ -336,7 +358,19 @@ export class CallPeer {
     if (!iceServers?.length) return;
     this.iceServers = iceServers;
     try {
-      this.pc?.setConfiguration?.({ iceServers: this.iceServers });
+      this.pc?.setConfiguration?.({
+        iceServers: this.iceServers,
+        iceCandidatePoolSize: 8,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+      });
+      // Re-gather so TURN relays are available across cellular / different Wi‑Fi
+      const g = this.pc?.restartIce || this.pc?.iceRestart;
+      if (typeof this.pc?.restartIce === 'function') {
+        this.pc.restartIce();
+      } else if (typeof g === 'function') {
+        g.call(this.pc);
+      }
     } catch (err) {
       console.warn('[WebRTC] setConfiguration:', (err as Error).message);
     }
@@ -378,30 +412,66 @@ export class CallPeer {
           : false,
     };
 
+    // Request at the moment hardware is needed (not on login / chat open)
     await ensureCallPermissions(this.callType);
 
+    // Ensure recording-capable audio session before getUserMedia (avoids
+    // false "permission denied" when chat voice-note mode left mic locked)
     try {
-      this.localStream = await mediaDevices.getUserMedia(constraints);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { setAudioModeAsync } = require('expo-audio');
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: 'doNotMix',
+      });
+    } catch {
+      /* optional */
+    }
+
+    const openMedia = async () => mediaDevices.getUserMedia(constraints);
+    try {
+      this.localStream = await openMedia();
     } catch (err: any) {
       const msg = String(err?.message || err?.name || '');
-      const denied =
-        /NotAllowed|Permission|denied|SecurityError/i.test(msg) ||
-        err?.name === 'NotAllowedError';
-      if (denied) {
-        throw new CallPermissionError(
-          this.callType === 'video' ? 'camera' : 'microphone',
-          true,
-        );
+      const busy =
+        /NotReadable|AbortError|Device in use|Could not start/i.test(msg) ||
+        err?.name === 'NotReadableError' ||
+        err?.name === 'AbortError';
+      if (busy) {
+        // One retry after a short release — common after voice notes / prior call
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+          this.localStream = await openMedia();
+        } catch (retryErr: any) {
+          err = retryErr;
+        }
       }
-      throw err;
+      if (!this.localStream) {
+        const denied =
+          /NotAllowed|Permission|denied|SecurityError/i.test(
+            String(err?.message || err?.name || ''),
+          ) || err?.name === 'NotAllowedError';
+        if (denied) {
+          throw new CallPermissionError(
+            this.callType === 'video' ? 'camera' : 'microphone',
+            true,
+          );
+        }
+        throw err;
+      }
     }
     this.handlers.onLocalStream?.(this.localStream);
 
     this.pc = new RTCPeerConnection({
       iceServers: this.iceServers,
-      iceCandidatePoolSize: 4,
+      // Gather early so TURN relays are ready before the offer (any-network)
+      iceCandidatePoolSize: 10,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
+      // Do NOT set iceTransportPolicy: 'relay' — allow host/srflx too;
+      // TURN is used automatically when peers are on different networks.
     });
 
     for (const track of this.localStream.getTracks()) {

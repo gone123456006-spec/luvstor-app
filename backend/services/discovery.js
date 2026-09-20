@@ -11,6 +11,8 @@ const {
   rotationBucketForDay,
   selectDiscoveryBatch,
 } = require('./discoveryRotation');
+const { toPersistentMediaUrl, sanitizePhotosArray } = require('../utils/mediaUrl');
+const { MAX_PROFILE_PHOTOS } = require('../config/profileLimits');
 
 /**
  * Timezone used to decide when the rotation day flips. Server-side only, so a
@@ -560,9 +562,9 @@ async function buildNearbyBatch({
       name: doc.name,
       age: doc.age,
       bio: doc.bio,
-      photo: doc.photo,
-      coverPhoto: doc.coverPhoto || '',
-      photos: doc.photos || [],
+      photo: toPersistentMediaUrl(doc.photo) || '',
+      coverPhoto: toPersistentMediaUrl(doc.coverPhoto) || '',
+      photos: sanitizePhotosArray(doc.photos || [], MAX_PROFILE_PHOTOS),
       gender: doc.gender,
       interests: doc.interests,
       height: doc.height,

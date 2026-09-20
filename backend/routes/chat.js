@@ -13,7 +13,13 @@ const {
 const { getBlockState } = require('../utils/blockState');
 const { applyBlockPrivacy } = require('../utils/blockPrivacy');
 const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
+const { toPersistentMediaUrl } = require('../utils/mediaUrl');
 
+/** Store / return only durable media refs (never file:// or LAN host absolutes). */
+function normalizeMessageMediaUrl(url) {
+  const n = toPersistentMediaUrl(url);
+  return n || null;
+}
 // Helper: mutual like / friends (calls unlock)
 async function areFriends(userId1, userId2) {
   const { userA, userB } = Friendship.getSortedPair(userId1, userId2);
@@ -310,9 +316,12 @@ function applyBlockPrivacySync(otherUser, block) {
 /** Redact view-once media for the viewer (WhatsApp-style). */
 function shapeViewOnceForViewer(msg, viewerId) {
   if (!msg) return msg;
-  let out = msg;
+  let out = { ...msg };
+  // Always normalize so LAN absolutes / bad URIs don't blank after reinstall
+  if (out.mediaUrl) {
+    out.mediaUrl = normalizeMessageMediaUrl(out.mediaUrl);
+  }
   if (msg.viewOnce) {
-    out = { ...msg };
     const isSender = String(msg.senderId) === String(viewerId);
     if (msg.viewOnceOpened) {
       out.mediaUrl = null;
@@ -342,7 +351,7 @@ function shapeReplyToSnapshot(parent) {
     mediaUrl:
       parent.isDeleted || isViewOnce
         ? null
-        : parent.mediaUrl || null,
+        : normalizeMessageMediaUrl(parent.mediaUrl),
     isDeleted: !!parent.isDeleted,
     viewOnce: isViewOnce,
     viewOnceOpened: !!parent.viewOnceOpened,
@@ -557,6 +566,14 @@ router.post('/send', auth, async (req, res) => {
       return res.status(400).json({ error: 'receiverId and text or mediaUrl are required' });
     }
 
+    const persistentMediaUrl = mediaUrl ? normalizeMessageMediaUrl(mediaUrl) : null;
+    if ((type === 'image' || type === 'audio') && mediaUrl && !persistentMediaUrl) {
+      return res.status(400).json({
+        error: 'Invalid media URL — upload the file first, then send the server path',
+        code: 'INVALID_MEDIA_URL',
+      });
+    }
+
     // Validation: receiver must be a valid ID
     if (!receiverId.match(/^[0-9a-f]{24}$/i)) {
       return res.status(400).json({ error: 'Invalid receiverId' });
@@ -667,7 +684,7 @@ router.post('/send', auth, async (req, res) => {
       receiverId,
       text: text || '',
       type,
-      mediaUrl: mediaUrl || null,
+      mediaUrl: persistentMediaUrl,
       undelivered,
       delivered: !!receiverOnline,
       deliveredAt: receiverOnline ? now : null,
@@ -761,9 +778,20 @@ router.post('/send', auth, async (req, res) => {
             try {
               const { createNotification } = require('../services/notifications');
               const { isViewingChat } = require('../utils/activeChat');
-              const recipientInChat = receiverOnline
-                ? await isViewingChat(receiverId, req.userId)
-                : false;
+              const onlineSockets = io?.onlineSockets;
+              let recipientInChat = false;
+              if (receiverOnline) {
+                const live =
+                  onlineSockets instanceof Map &&
+                  onlineSockets.has(String(receiverId)) &&
+                  (onlineSockets.get(String(receiverId))?.size || 0) > 0;
+                if (live) {
+                  recipientInChat = await isViewingChat(
+                    receiverId,
+                    req.userId,
+                  );
+                }
+              }
               const preview =
                 message.viewOnce
                   ? '📷 View once photo'

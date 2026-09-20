@@ -154,6 +154,47 @@ function ensureAndroidColors() {
 }
 
 /**
+ * Voice/video calls need RECORD_AUDIO in the merged APK manifest.
+ * Older prebuilds stripped it — patch before every release build.
+ */
+function ensureAndroidCallPermissions() {
+  const manifestPath = path.join(
+    androidDir,
+    "app",
+    "src",
+    "main",
+    "AndroidManifest.xml",
+  );
+  if (!fs.existsSync(manifestPath)) return;
+  let xml = fs.readFileSync(manifestPath, "utf8");
+  const required = [
+    "android.permission.RECORD_AUDIO",
+    "android.permission.CAMERA",
+    "android.permission.MODIFY_AUDIO_SETTINGS",
+  ];
+  let changed = false;
+  if (!xml.includes('xmlns:tools=')) {
+    xml = xml.replace(
+      '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
+      '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n  xmlns:tools="http://schemas.android.com/tools"',
+    );
+    changed = true;
+  }
+  for (const perm of required) {
+    if (xml.includes(perm)) continue;
+    xml = xml.replace(
+      /(<manifest\b[^>]*>)/,
+      `$1\n  <uses-permission android:name="${perm}" tools:node="replace"/>`,
+    );
+    changed = true;
+  }
+  if (changed) {
+    fs.writeFileSync(manifestPath, xml);
+    console.log("✔ Ensured Android RECORD_AUDIO / CAMERA in AndroidManifest.xml");
+  }
+}
+
+/**
  * Keep AGP namespace + applicationId aligned with app.json android.package
  * and Kotlin sources (package com.luvstor.app). Drift causes:
  *   Unresolved reference 'R' / 'BuildConfig'
@@ -210,6 +251,7 @@ function ensureAndroidPackageAlignment() {
 /** Persist network/TLS hardening across expo prebuild regenerations. */
 function patchAndroidGradleConfig() {
   ensureAndroidColors();
+  ensureAndroidCallPermissions();
   ensureAndroidPackageAlignment();
   const propsPath = path.join(androidDir, "gradle.properties");
   if (fs.existsSync(propsPath)) {

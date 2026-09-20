@@ -67,6 +67,20 @@ services:
         value: "330"
       - key: DAILY_SUGGESTION_TZ_OFFSET_MINUTES
         value: "330"
+      # WebRTC — REQUIRED for friend calls across cellular / different Wi‑Fi
+      # (STUN alone only works on the same LAN). Set Metered/Twilio values in dashboard.
+      - key: STUN_URLS
+        value: "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302"
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false
+      - key: CALL_HEARTBEAT_TIMEOUT_MS
+        value: "60000"
+      - key: CALL_RING_TIMEOUT_MS
+        value: "45000"
 
   # ── Keep-alive: external ping every 60s (does not run inside API) ───────
   - type: cron
