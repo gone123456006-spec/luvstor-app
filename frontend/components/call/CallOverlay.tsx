@@ -157,7 +157,7 @@ function statusLabel(
     case 'outgoing':
       return 'Calling…';
     case 'ringing':
-      return opts?.peerOffline ? 'They’re offline' : 'Ringing…';
+      return 'Ringing…';
     case 'incoming':
       return opts?.callType === 'video' ? 'Incoming video call' : 'Incoming voice call';
     case 'connecting':

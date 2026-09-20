@@ -324,7 +324,12 @@ async function queuePush(userId, notification, { badge } = {}) {
           : chatUnreadCountFor(userId),
       ]);
 
-      if (!tokens.length) return;
+      if (!tokens.length) {
+        console.warn(
+          `[Notifications] chat push skipped — no device tokens for user ${userId}`,
+        );
+        return;
+      }
       const prefs = user?.notificationPrefs;
       if (prefs?.chat === false) return;
       if (muteState?.muted || muteState?.archived) return;

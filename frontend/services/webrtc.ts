@@ -165,44 +165,45 @@ function isAndroidBlocked(
 }
 
 /**
- * Production release APKs always enforce mic/camera.
- * Local Metro / `__DEV__` builds skip so emulator testing isn't blocked.
- */
-function shouldEnforceCallPermissions(): boolean {
-  if (typeof __DEV__ !== 'undefined' && __DEV__) return false;
-  return true;
-}
-
-/**
- * Ask for mic (and camera / Bluetooth for speaker routing) BEFORE the calling UI.
- * WhatsApp-style: permission dialogs first, then ring.
- * Skipped on local/dev — enforced only for production API builds.
+ * Ask for mic (and camera / Bluetooth) BEFORE the calling UI.
+ * Voice and video share the same mic barrier — WhatsApp-style: dialog first, then ring.
+ * Always enforced (including Metro / __DEV__) so getUserMedia never races a silent deny.
  */
 export async function ensureCallPermissions(
   callType: CallMediaType
 ): Promise<void> {
   if (Platform.OS === 'web') return;
-  if (!shouldEnforceCallPermissions()) return;
 
-  if (Platform.OS === 'ios') {
-    const req =
-      expoAudioPerms?.requestRecordingPermissionsAsync ||
-      expoAudioPerms?.AudioModule?.requestRecordingPermissionsAsync;
-    if (typeof req === 'function') {
+  // expo-audio prompt (iOS + Android) — auto system dialog for microphone
+  const req =
+    expoAudioPerms?.requestRecordingPermissionsAsync ||
+    expoAudioPerms?.AudioModule?.requestRecordingPermissionsAsync;
+  if (typeof req === 'function') {
+    try {
       const result = await req();
       const granted =
         result?.granted === true ||
         result?.status === 'granted' ||
         String(result?.status || '').toLowerCase() === 'granted';
-      if (!granted) throw new CallPermissionError('microphone', true);
+      if (!granted) {
+        const blocked = result?.canAskAgain === false;
+        throw new CallPermissionError('microphone', blocked);
+      }
+    } catch (err) {
+      if (err instanceof CallPermissionError) throw err;
+      // Fall through to PermissionsAndroid on Android
+      if (Platform.OS !== 'android') {
+        throw new CallPermissionError('microphone', true);
+      }
     }
-    if (callType === 'video') {
-      // Camera is prompted by getUserMedia / expo-camera when needed
-    }
+  }
+
+  if (Platform.OS === 'ios') {
+    // Camera is prompted by getUserMedia when starting a video call
     return;
   }
 
-  // Android — request one-by-one so the mic dialog always appears
+  // Android — also pin RECORD_AUDIO / CAMERA via PermissionsAndroid
   const mic = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
   const cam = PermissionsAndroid.PERMISSIONS.CAMERA;
   const bt = (PermissionsAndroid.PERMISSIONS as any).BLUETOOTH_CONNECT as
@@ -213,7 +214,10 @@ export async function ensureCallPermissions(
   if (!micAlready) {
     const micResult = await PermissionsAndroid.request(mic, {
       title: 'Microphone',
-      message: 'Luvstor needs the microphone for voice calls.',
+      message:
+        callType === 'video'
+          ? 'Luvstor needs the microphone for video calls.'
+          : 'Luvstor needs the microphone for voice calls.',
       buttonPositive: 'Allow',
       buttonNegative: 'Deny',
     });
@@ -376,7 +380,21 @@ export class CallPeer {
 
     await ensureCallPermissions(this.callType);
 
-    this.localStream = await mediaDevices.getUserMedia(constraints);
+    try {
+      this.localStream = await mediaDevices.getUserMedia(constraints);
+    } catch (err: any) {
+      const msg = String(err?.message || err?.name || '');
+      const denied =
+        /NotAllowed|Permission|denied|SecurityError/i.test(msg) ||
+        err?.name === 'NotAllowedError';
+      if (denied) {
+        throw new CallPermissionError(
+          this.callType === 'video' ? 'camera' : 'microphone',
+          true,
+        );
+      }
+      throw err;
+    }
     this.handlers.onLocalStream?.(this.localStream);
 
     this.pc = new RTCPeerConnection({

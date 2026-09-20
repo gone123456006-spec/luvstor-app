@@ -37,6 +37,7 @@ import {
   setBadge,
   syncToken,
   unregisterToken,
+  setPushTrayReady,
 } from '../utils/push';
 import { setPendingIncomingCall } from '../utils/pendingIncomingCall';
 
@@ -74,7 +75,14 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
 
   const isChatVisible = useCallback((senderId?: string) => {
     if (!senderId) return false;
-    return !!pathnameRef.current?.includes(`/messages/${senderId}`);
+    const path = pathnameRef.current || '';
+    // Match /messages/:id even with query strings or nested segments
+    return (
+      path === `/messages/${senderId}` ||
+      path.startsWith(`/messages/${senderId}?`) ||
+      path.startsWith(`/messages/${senderId}/`) ||
+      path.includes(`/messages/${senderId}`)
+    );
   }, []);
 
   const markHandled = useCallback((id?: string) => {
@@ -127,6 +135,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     if (isExpoGo) {
       // Expo Go dropped remote push support; a dev build is required
       setPermissionGranted(false);
+      setPushTrayReady(false);
       return false;
     }
 
@@ -135,18 +144,35 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
 
       const permission = await requestPermission();
       setPermissionGranted(permission.granted);
-      if (!permission.granted) return false;
+      if (!permission.granted) {
+        setPushTrayReady(false);
+        return false;
+      }
 
       const token = await getFcmToken();
-      if (!token) return false;
+      if (!token) {
+        console.warn('[Push] No FCM token — message tray pushes will not work');
+        setPushTrayReady(false);
+        return false;
+      }
       setFcmToken(token);
 
       const authToken = await getAuthToken();
-      if (!authToken) return false;
+      if (!authToken) {
+        setPushTrayReady(false);
+        return false;
+      }
 
-      return await syncToken(authToken, token);
+      // Force upsert so backend always has this install after login / resume
+      const ok = await syncToken(authToken, token, { force: true });
+      setPushTrayReady(ok);
+      if (!ok) {
+        console.warn('[Push] Token register failed — retry on next resume');
+      }
+      return ok;
     } catch (err: any) {
       console.warn('[Push] register failed:', err?.message);
+      setPushTrayReady(false);
       return false;
     }
   }, []);
@@ -160,6 +186,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) {
       setFcmToken(null);
+      setPushTrayReady(false);
       getAuthToken()
         .then((t) => unregisterToken(t))
         .catch(() => undefined);

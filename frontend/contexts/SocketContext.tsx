@@ -33,6 +33,8 @@ import {
   messagePreviewText,
 } from '../utils/chatListPreviewPatch';
 import WhatsAppAvatar from '../components/WhatsAppAvatar';
+import { isPushTrayReady, presentChatMessageNotification } from '../utils/push';
+import { isCallSessionActive } from '../utils/callSession';
 
 type ToastKind = 'message' | 'like' | 'unlike' | 'friends';
 
@@ -390,6 +392,24 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         // wiped badges when this event arrived last with incrementUnread:false)
         if (onThatChat) return;
 
+        // WhatsApp: while app is open + notifications allowed, post to the
+        // system panel (local). FCM covers background / killed / locked.
+        if (AppState.currentState === 'active' && isPushTrayReady()) {
+          void presentChatMessageNotification({
+            senderId: fromId,
+            senderName: payload.fromName || 'New message',
+            body: preview,
+            senderPhoto: payload.fromPhoto || '',
+            senderGender: payload.fromGender || '',
+            roomId: payload.roomId ? String(payload.roomId) : undefined,
+            messageId: payload.messageId
+              ? String(payload.messageId)
+              : undefined,
+          });
+          return;
+        }
+
+        // Fallback in-app toast when notification permission isn't granted
         showToast({
           kind: 'message',
           title: payload.fromName || 'New message',
@@ -414,6 +434,15 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           pathnameRef.current === `/messages/${otherId}` ||
           pathnameRef.current?.includes(`/messages/${otherId}`);
         const archived = isArchivedInChatCache(sessionVersion, otherId);
+        // CRITICAL: fromName/fromPhoto are always the SENDER.
+        // When fromMe, that is MY profile — never write it onto the peer row.
+        const peerProfile = fromMe
+          ? {}
+          : {
+              name: msg.fromName || msg.senderName,
+              photo: msg.fromPhoto || msg.senderPhoto,
+              gender: msg.fromGender || msg.senderGender,
+            };
         bumpChatPreview({
           otherUserId: otherId,
           lastMessage: messagePreviewText(msg),
@@ -423,9 +452,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           incrementUnread: !fromMe && !onThatChat,
           resetUnread: fromMe || onThatChat,
           fromMe,
-          name: msg.fromName || msg.senderName,
-          photo: msg.fromPhoto || msg.senderPhoto,
-          gender: msg.fromGender || msg.senderGender,
+          ...peerProfile,
         });
         // Archived unread stays under Archive badge — not the main chat badge
         if (
@@ -495,16 +522,23 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       });
 
       active.on('profile:update', (payload: any) => {
+        const uid = String(payload.userId || '');
+        if (!uid) return;
         applyProfileUpdate({
-          userId: String(payload.userId || ''),
+          userId: uid,
           publicId: payload.publicId || '',
-          name: payload.name || '',
-          bio: payload.bio || '',
-          photo: payload.photo || '',
-          photos: Array.isArray(payload.photos) ? payload.photos : [],
-          age: payload.age ?? null,
-          gender: payload.gender || '',
-          height: payload.height ?? null,
+          // Only pass fields that were actually present — avoid wiping DP with ''
+          ...(payload.name != null ? { name: String(payload.name) } : {}),
+          ...(payload.bio != null ? { bio: String(payload.bio) } : {}),
+          ...(payload.photo !== undefined
+            ? { photo: payload.photo ? String(payload.photo) : '' }
+            : {}),
+          ...(Array.isArray(payload.photos) ? { photos: payload.photos } : {}),
+          ...(payload.age !== undefined ? { age: payload.age ?? null } : {}),
+          ...(payload.gender != null ? { gender: String(payload.gender) } : {}),
+          ...(payload.height !== undefined
+            ? { height: payload.height ?? null }
+            : {}),
         });
       });
 
@@ -602,13 +636,27 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       presenceIv = null;
     };
 
-    /** Online = app open in foreground only */
+    /** Online = app open in foreground only — except during an active call */
     const goOffline = () => {
+      // WhatsApp: keep socket + call heartbeats while on a voice/video call
+      if (isCallSessionActive()) {
+        const s = socket;
+        if (s?.connected) {
+          try {
+            s.emit('chat:leave', {});
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
       stop();
       stopPresence();
       const s = socket;
       if (s?.connected) {
         try {
+          // Clear push-suppress BEFORE disconnect so FCM can fire immediately
+          s.emit('chat:leave', {});
           s.disconnect();
         } catch {
           /* ignore */

@@ -4,7 +4,13 @@ import {
   getChatListCache,
   setChatListCache,
 } from './chatListCache';
-import { resolveMediaUrl } from './media';
+import {
+  isUsableName,
+  isUsablePhoto,
+  mergePeerProfile,
+  rememberPeerProfile,
+  resolvePeerPhoto,
+} from './peerProfile';
 
 export type ChatPreviewPatch = {
   otherUserId: string;
@@ -102,17 +108,35 @@ export function applyChatListPreviewPatch(
     return prev;
   };
 
-  // Socket payloads carry relative /uploads paths — resolve before caching
-  const patchPhoto = patch.photo ? resolveMediaUrl(patch.photo) || '' : '';
+  // Merge peer identity keyed by otherUserId — never wipe good name/DP with empty
+  const peer = mergePeerProfile(
+    otherId,
+    {
+      name: existing?.name,
+      photo: existing?.photo,
+      gender: existing?.gender,
+    },
+    otherId,
+    {
+      name: patch.name,
+      photo: patch.photo,
+      gender: patch.gender,
+    },
+  );
+  if (isUsableName(peer.name) || isUsablePhoto(peer.photo)) {
+    rememberPeerProfile(otherId, peer);
+  }
 
   const rowUpdate: Partial<ConversationItem> = {
     unread: unreadFor(existing?.unread ?? 0),
     ...(touchPreview && lastMessage != null
       ? { lastMessage, lastMessageAt: at }
       : null),
-    ...(patch.name ? { name: patch.name } : null),
-    ...(patchPhoto ? { photo: patchPhoto } : null),
-    ...(patch.gender ? { gender: patch.gender } : null),
+    ...(isUsableName(peer.name) ? { name: peer.name! } : null),
+    ...(isUsablePhoto(peer.photo)
+      ? { photo: resolvePeerPhoto(peer.photo) }
+      : null),
+    ...(peer.gender ? { gender: peer.gender } : null),
   };
 
   // Keep archived — WhatsApp "Keep chats archived"
@@ -144,9 +168,9 @@ export function applyChatListPreviewPatch(
     ? { ...existing, ...rowUpdate }
     : {
         otherId,
-        name: patch.name || 'User',
-        photo: patchPhoto,
-        gender: patch.gender || '',
+        name: isUsableName(peer.name) ? peer.name! : 'User',
+        photo: isUsablePhoto(peer.photo) ? resolvePeerPhoto(peer.photo) : '',
+        gender: peer.gender || '',
         isOnline: false,
         lastMessage: lastMessage || 'Message',
         lastMessageAt: at,

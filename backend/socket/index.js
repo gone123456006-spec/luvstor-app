@@ -710,47 +710,9 @@ module.exports = function initSocket(io) {
 
         const room = roomId(uid, receiverId);
 
-        // Offline friend: no ring — leave a WhatsApp-style missed-call chat line
-        if (!calleeOnline) {
-          const offlineCallId = preferredId || calls.generateCallId();
-          try {
-            const Call = require('../models/Call');
-            await Call.create({
-              callId: offlineCallId,
-              callerId: uid,
-              calleeId: receiverId,
-              callType,
-              status: 'missed',
-              endReason: 'offline',
-              endedAt: new Date(),
-              roomId: room,
-            });
-          } catch {
-            /* ignore duplicate */
-          }
-          try {
-            const { postCallChatEvent } = require('../utils/callChatMessage');
-            await postCallChatEvent(io, {
-              callerId: uid,
-              calleeId: receiverId,
-              roomId: room,
-              callId: offlineCallId,
-              callType,
-              status: 'missed',
-              endReason: 'offline',
-              durationSec: 0,
-            });
-          } catch (err) {
-            console.error('offline call chat:', err.message);
-          }
-          socket.emit('call:error', {
-            error: 'User is offline',
-            code: 'OFFLINE',
-            callId: offlineCallId,
-          });
-          return;
-        }
-
+        // WhatsApp-style: always start a ringing session + FCM wake-up, even if
+        // the callee has no live socket (app backgrounded / killed / locked).
+        // Ring timeout → missed; reconnect delivers via call:sync / connect bootstrap.
         const result = await calls.startOutgoing({
           callerId: uid,
           calleeId: receiverId,
@@ -812,10 +774,13 @@ module.exports = function initSocket(io) {
           caller: result.caller,
           iceServers: result.iceServers,
           ringTimeoutMs: result.ringTimeoutMs,
+          calleeOnline,
         };
 
+        // Deliver over socket when they have one (in-app UI)
         notifyUser(io, receiverId, 'call:incoming', incomingPayload);
 
+        // Always FCM — wakes locked / killed / backgrounded devices
         try {
           const { pushIncomingCall } = require('../utils/callPush');
           await pushIncomingCall(io, {

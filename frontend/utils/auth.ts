@@ -342,6 +342,8 @@ export async function logout(): Promise<void> {
     try {
       const { clearChatListCache } = await import('./chatListCache');
       clearChatListCache();
+      const { clearPeerProfileMemory } = await import('./peerProfile');
+      clearPeerProfileMemory();
     } catch {
       /* ignore */
     }

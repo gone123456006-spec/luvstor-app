@@ -27,6 +27,14 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { apiRequest } from "../../utils/api";
 import { resolveMediaUrl } from "../../utils/media";
+import {
+  getRememberedPeerProfile,
+  isUsableName,
+  isUsablePhoto,
+  mergePeerProfile,
+  rememberPeerProfile,
+  resolvePeerPhoto,
+} from "../../utils/peerProfile";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import {
     archiveConversation,
@@ -95,7 +103,7 @@ const C = {
  */
 function resolvePhotoUrl(photo: string): string {
   if (!photo) return "";
-  return resolveMediaUrl(photo) || "";
+  return resolvePeerPhoto(photo) || resolveMediaUrl(photo) || "";
 }
 
 type ChatCategory = "friend" | "request" | "stranger";
@@ -200,12 +208,31 @@ function archivedApiToItem(c: any, myId: string): ConversationItem | null {
         : String(msg.senderId);
   }
   if (!otherId) return null;
+  const privacyHidden = !!c.theyBlocked || !!c.privacyHidden;
+  const profileId = String(other.id || other._id || "");
+  const safeOther =
+    !profileId || profileId === otherId ? other : {};
+  const remembered = getRememberedPeerProfile(otherId);
+  const peer = mergePeerProfile(
+    otherId,
+    remembered || {},
+    otherId,
+    {
+      name: safeOther.name,
+      photo: privacyHidden ? "" : safeOther.photo,
+      gender: safeOther.gender,
+      clearPhoto: privacyHidden,
+    },
+  );
+  if (!privacyHidden && (isUsableName(peer.name) || isUsablePhoto(peer.photo))) {
+    rememberPeerProfile(otherId, peer);
+  }
   return {
     otherId,
-    name: other.name || "User",
-    photo: resolvePhotoUrl(other.photo || ""),
-    gender: other.gender || "",
-    isOnline: !!other.isOnline,
+    name: peer.name || "User",
+    photo: privacyHidden ? "" : peer.photo || "",
+    gender: peer.gender || "",
+    isOnline: !!safeOther.isOnline,
     lastMessage:
       msg?.type === "call"
         ? msg?.text || "📞 Voice call"
@@ -223,7 +250,7 @@ function archivedApiToItem(c: any, myId: string): ConversationItem | null {
     relationshipStatus: c.friendshipStatus || "none",
     areFriends: !!c.areFriends,
     iLiked: !!c.iLiked,
-    privacyHidden: !!c.theyBlocked,
+    privacyHidden,
     iBlocked: !!c.iBlocked,
     theyBlocked: !!c.theyBlocked,
   };
@@ -236,12 +263,18 @@ type FilterKey = ChatFilterKey;
 function apiConversationToItem(c: any, myId: string): ConversationItem | null {
   const msg = c.lastMessage;
   if (!msg) return null;
+  const other = c.otherUser || {};
+  // Conversation participant = other party on the last message
   const otherId =
     String(msg.senderId) === myId
       ? String(msg.receiverId)
       : String(msg.senderId);
+  if (!otherId) return null;
+  // Only use otherUser fields when they belong to this participant
+  const profileId = String(other.id || other._id || "");
+  const safeOther =
+    !profileId || profileId === otherId ? other : {};
 
-  const other = c.otherUser || {};
   const category: ChatCategory =
     c.category === "friend"
       ? "friend"
@@ -249,15 +282,31 @@ function apiConversationToItem(c: any, myId: string): ConversationItem | null {
         ? "request"
         : "stranger";
 
-  const privacyHidden = !!c.theyBlocked;
+  const privacyHidden = !!c.theyBlocked || !!c.privacyHidden;
   const blockedEither = !!c.iBlocked || !!c.theyBlocked;
+
+  const remembered = getRememberedPeerProfile(otherId);
+  const peer = mergePeerProfile(
+    otherId,
+    remembered || {},
+    otherId,
+    {
+      name: safeOther.name,
+      photo: privacyHidden ? "" : safeOther.photo,
+      gender: safeOther.gender,
+      clearPhoto: privacyHidden,
+    },
+  );
+  if (!privacyHidden && (isUsableName(peer.name) || isUsablePhoto(peer.photo))) {
+    rememberPeerProfile(otherId, peer);
+  }
 
   return {
     otherId,
-    name: other.name || "User",
-    photo: privacyHidden ? "" : resolvePhotoUrl(other.photo || ""),
-    gender: other.gender || "",
-    isOnline: blockedEither ? false : !!other.isOnline,
+    name: peer.name || "User",
+    photo: privacyHidden ? "" : peer.photo || "",
+    gender: peer.gender || "",
+    isOnline: blockedEither ? false : !!safeOther.isOnline,
     lastMessage:
       msg.type === "call"
         ? msg.text || "📞 Voice call"
@@ -442,6 +491,25 @@ export default function ChatScreen() {
       for (const row of next) {
         if (skip.has(row.otherId) || deleted.has(row.otherId)) continue;
         const local = prevMap.get(row.otherId);
+        // Profile: prefer API when valid; never let stale local wrong name/DP win
+        const peer = mergePeerProfile(
+          row.otherId,
+          { name: local?.name, photo: local?.photo, gender: local?.gender },
+          row.otherId,
+          {
+            name: row.name,
+            photo: row.privacyHidden ? "" : row.photo,
+            gender: row.gender,
+            clearPhoto: !!row.privacyHidden,
+          },
+        );
+        if (
+          !row.privacyHidden &&
+          (isUsableName(peer.name) || isUsablePhoto(peer.photo))
+        ) {
+          rememberPeerProfile(row.otherId, peer);
+        }
+
         if (local && (local.lastMessageAt || 0) > (row.lastMessageAt || 0)) {
           // Socket patch newer than API — keep instant preview + unread badge
           map.set(row.otherId, {
@@ -449,19 +517,27 @@ export default function ChatScreen() {
             lastMessage: local.lastMessage || row.lastMessage,
             lastMessageAt: local.lastMessageAt,
             unread: Math.max(local.unread || 0, row.unread || 0),
-            name: local.name || row.name,
-            photo: local.photo || row.photo,
-            gender: local.gender || row.gender,
+            name: peer.name || row.name,
+            photo: row.privacyHidden ? "" : peer.photo || row.photo,
+            gender: peer.gender || row.gender,
             isOnline: row.isOnline,
           });
         } else if (local) {
           map.set(row.otherId, {
             ...row,
+            name: peer.name || row.name,
+            photo: row.privacyHidden ? "" : peer.photo || row.photo,
+            gender: peer.gender || row.gender,
             // API caught up on time — still never drop a higher live unread
             unread: Math.max(local.unread || 0, row.unread || 0),
           });
         } else {
-          map.set(row.otherId, row);
+          map.set(row.otherId, {
+            ...row,
+            name: peer.name || row.name,
+            photo: row.privacyHidden ? "" : peer.photo || row.photo,
+            gender: peer.gender || row.gender,
+          });
         }
       }
       for (const row of prev) {
@@ -489,22 +565,42 @@ export default function ChatScreen() {
       const hydrated = await hydrateChatListCache(email, sessionVersion);
       if (cancelled) return;
       if (hydrated.loaded) {
-        setConversations(hydrated.conversations);
-        setFriendRows(hydrated.friendRows);
-        setRequestRows(hydrated.requestRows);
+        const fix = (rows: ConversationItem[]) =>
+          rows.map((row) => {
+            // Re-resolve media URLs; seed memory only when name+photo look consistent
+            const photo = row.privacyHidden
+              ? ""
+              : resolvePhotoUrl(row.photo || "");
+            const next = { ...row, photo };
+            if (
+              !row.privacyHidden &&
+              isUsableName(row.name) &&
+              isUsablePhoto(photo)
+            ) {
+              rememberPeerProfile(row.otherId, {
+                name: row.name,
+                photo,
+                gender: row.gender,
+              });
+            }
+            return next;
+          });
+        setConversations(fix(hydrated.conversations));
+        setFriendRows(fix(hydrated.friendRows));
+        setRequestRows(fix(hydrated.requestRows));
         // Never restore Online tab from disk — it goes stale and shows fake "Online now"
         setOnlineRows([]);
-        setArchiveRows(hydrated.archiveRows || []);
+        setArchiveRows(fix(hydrated.archiveRows || []));
         setActiveFilter(hydrated.activeFilter);
         hasLoadedOnce.current = true;
         setLoading(false);
         listSnapshotRef.current = {
           ...listSnapshotRef.current,
-          conversations: hydrated.conversations,
-          friendRows: hydrated.friendRows,
-          requestRows: hydrated.requestRows,
+          conversations: fix(hydrated.conversations),
+          friendRows: fix(hydrated.friendRows),
+          requestRows: fix(hydrated.requestRows),
           onlineRows: [],
-          archiveRows: hydrated.archiveRows || [],
+          archiveRows: fix(hydrated.archiveRows || []),
         };
       }
     })();
@@ -1123,16 +1219,26 @@ export default function ChatScreen() {
     const uid = String(lastProfileUpdate.userId);
     const patch = (item: ConversationItem): ConversationItem => {
       if (item.otherId !== uid) return item;
+      const privacy = !!item.privacyHidden || !!item.theyBlocked;
+      const peer = mergePeerProfile(uid, item, uid, {
+        name: lastProfileUpdate.name,
+        photo: lastProfileUpdate.photo,
+        gender: lastProfileUpdate.gender,
+        // Only clear DP when server explicitly sent empty photo (removal)
+        clearPhoto:
+          privacy ||
+          (lastProfileUpdate.photo !== undefined &&
+            lastProfileUpdate.photo !== null &&
+            !String(lastProfileUpdate.photo || "").trim()),
+      });
+      if (!privacy && (isUsableName(peer.name) || isUsablePhoto(peer.photo))) {
+        rememberPeerProfile(uid, peer);
+      }
       return {
         ...item,
-        name: lastProfileUpdate.name || item.name,
-        photo:
-          lastProfileUpdate.photo != null
-            ? lastProfileUpdate.photo
-              ? resolvePhotoUrl(lastProfileUpdate.photo)
-              : ""
-            : item.photo,
-        gender: lastProfileUpdate.gender || item.gender,
+        name: peer.name || item.name,
+        photo: privacy ? "" : peer.photo || item.photo,
+        gender: peer.gender || item.gender,
       };
     };
     const snap = listSnapshotRef.current;
@@ -1808,6 +1914,7 @@ export default function ChatScreen() {
           name={item.name}
           gender={item.gender}
           size={52}
+          recyclingKey={item.otherId}
           online={
             !!item.isOnline &&
             !item.privacyHidden &&

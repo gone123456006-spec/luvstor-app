@@ -10,7 +10,7 @@ const { notifyUser } = require('../utils/realtime');
 const { isReady: redisReady, getRedis } = require('../utils/redis');
 
 const RING_TIMEOUT_MS = Number(process.env.CALL_RING_TIMEOUT_MS || 45_000);
-const HEARTBEAT_TIMEOUT_MS = Number(process.env.CALL_HEARTBEAT_TIMEOUT_MS || 25_000);
+const HEARTBEAT_TIMEOUT_MS = Number(process.env.CALL_HEARTBEAT_TIMEOUT_MS || 60_000);
 const CLEANUP_INTERVAL_MS = 8_000;
 
 /** @type {Map<string, object>} callId → session */
