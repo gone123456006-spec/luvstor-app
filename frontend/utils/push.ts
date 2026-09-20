@@ -12,7 +12,7 @@
 import { isRunningInExpoGo } from 'expo';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiRequest } from './api';
@@ -21,6 +21,17 @@ import { getOrCreateDeviceId } from './device';
 const STORED_TOKEN_KEY = 'luvstor_fcm_token';
 
 export const isExpoGo = isRunningInExpoGo();
+
+/** True after permission + FCM token registered — FG toast can defer to system tray */
+let pushTrayReady = false;
+
+export function setPushTrayReady(ready: boolean) {
+  pushTrayReady = !!ready;
+}
+
+export function isPushTrayReady() {
+  return pushTrayReady;
+}
 
 type NotificationsModule = typeof import('expo-notifications');
 
@@ -64,6 +75,8 @@ export const CHANNELS = {
     importance: IMPORTANCE.MAX,
     vibrationPattern: [0, 250, 250, 250],
     lightColor: '#8E2DE2',
+    /** Show sender + preview on lock screen (WhatsApp default) */
+    lockscreenVisibility: 1,
   },
   calls: {
     name: 'Calls',
@@ -71,6 +84,7 @@ export const CHANNELS = {
     importance: IMPORTANCE.MAX,
     vibrationPattern: [0, 500, 500, 500],
     lightColor: '#8E2DE2',
+    lockscreenVisibility: 1,
   },
   social: {
     name: 'Matches & Likes',
@@ -154,8 +168,12 @@ export async function ensureCallNotificationCategory(): Promise<void> {
 }
 
 /**
- * Foreground presentation. The in-app toast already covers chat, so a banner
- * would double up — everything else is shown.
+ * Foreground presentation — WhatsApp-style:
+ * - Actively viewing that chat → silent
+ * - App open elsewhere → local tray (from socket) owns chat alerts; suppress
+ *   duplicate remote FCM chat so the shade doesn't double-post
+ * - Incoming call UI already on screen → suppress duplicate call FCM
+ * - Background / killed → OS shows remote FCM (handler not used)
  */
 export function configureForegroundHandler(
   isChatVisible: (senderId?: string) => boolean,
@@ -167,20 +185,41 @@ export function configureForegroundHandler(
     handleNotification: async (notification) => {
       const data = (notification.request.content.data || {}) as Record<string, any>;
       const isChat = data.type === 'chat';
-      const onThatChat =
-        isChat &&
-        isChatVisible(String(data.actorId || data.userId || ''));
+      const isIncomingCall =
+        data.type === 'call' &&
+        (data.action === 'incoming' || data.categoryId === 'incoming_call');
+      const senderId = String(data.actorId || data.userId || '');
+      const onThatChat = isChat && !!senderId && isChatVisible(senderId);
 
-      // Foreground: in-app toast handles chat; suppress system banner to avoid doubles.
-      // Still suppress entirely when that conversation is already open.
-      const showBanner = isChat ? false : !onThatChat;
+      const trigger = notification.request.trigger as { type?: string } | null;
+      const isRemotePush =
+        trigger != null &&
+        typeof trigger === 'object' &&
+        (trigger.type === 'push' ||
+          (trigger as { remoteMessage?: unknown }).remoteMessage != null);
 
+      // App is open: socket CallOverlay / local chat tray already owns the alert
+      if (
+        isRemotePush &&
+        AppState.currentState === 'active' &&
+        (isChat || isIncomingCall)
+      ) {
+        return {
+          shouldShowBanner: false,
+          shouldShowList: false,
+          shouldPlaySound: false,
+          shouldSetBadge: true,
+          shouldShowAlert: false,
+        } as any;
+      }
+
+      const show = !onThatChat;
       return {
-        shouldShowBanner: showBanner,
-        shouldShowList: !onThatChat,
-        shouldPlaySound: !onThatChat && !isChat,
+        shouldShowBanner: show,
+        shouldShowList: show,
+        shouldPlaySound: show,
         shouldSetBadge: true,
-        shouldShowAlert: showBanner,
+        shouldShowAlert: show,
       } as any;
     },
   });
@@ -202,7 +241,9 @@ export async function ensureChannels() {
         importance: cfg.importance,
         vibrationPattern: (cfg as { vibrationPattern?: number[] }).vibrationPattern,
         lightColor: cfg.lightColor,
-        lockscreenVisibility: VISIBILITY_PRIVATE,
+        lockscreenVisibility:
+          (cfg as { lockscreenVisibility?: number }).lockscreenVisibility ??
+          VISIBILITY_PRIVATE,
         enableVibrate: true,
         showBadge: true,
       };
@@ -230,6 +271,30 @@ export async function requestPermission(): Promise<PermissionResult> {
   const Notifications = loadNotifications();
   if (!Notifications || !Device.isDevice) {
     return { granted: false, canAskAgain: false, status: 'unavailable' };
+  }
+
+  // Android 13+ — explicit POST_NOTIFICATIONS (Expo alone can miss on some OEMs)
+  if (Platform.OS === 'android' && Number(Platform.Version) >= 33) {
+    try {
+      const { PermissionsAndroid } = require('react-native');
+      const already = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+      );
+      if (!already) {
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+          {
+            title: 'Notifications',
+            message:
+              'Luvstor needs notification access so you see new messages and calls.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Deny',
+          },
+        );
+      }
+    } catch {
+      /* fall through to expo-notifications */
+    }
   }
 
   const current = await Notifications.getPermissionsAsync();
@@ -433,6 +498,75 @@ export async function presentIncomingCallLocalNotification(opts: {
     });
   } catch (err: any) {
     console.warn('[Push] local incoming call notify failed:', err?.message);
+  }
+}
+
+/**
+ * WhatsApp-style message tray while the app is in the foreground.
+ * Same conversation reuses one identifier so rapid messages collapse.
+ * Background / killed still rely on FCM from the server.
+ */
+export async function presentChatMessageNotification(opts: {
+  senderId: string;
+  senderName: string;
+  body: string;
+  senderPhoto?: string;
+  senderGender?: string;
+  roomId?: string;
+  messageId?: string;
+}): Promise<void> {
+  if (isExpoGo) return;
+  const Notifications = loadNotifications();
+  if (!Notifications || !Device.isDevice) return;
+
+  const senderId = String(opts.senderId || '');
+  if (!senderId) return;
+
+  const groupKey = opts.roomId
+    ? `chat:${opts.roomId}`
+    : `chat:${senderId}`;
+  const title = (opts.senderName || 'New message').trim() || 'New message';
+  const body = (opts.body || 'New message').trim() || 'New message';
+
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        sound: true,
+        data: {
+          type: 'chat',
+          notificationId: opts.messageId
+            ? `chat:${groupKey}:${opts.messageId}`
+            : groupKey,
+          deepLink: `/messages/${senderId}`,
+          groupKey,
+          actorId: senderId,
+          userId: senderId,
+          actorName: title,
+          actorPhoto: opts.senderPhoto || '',
+          actorGender: opts.senderGender || '',
+          screen: 'messages',
+          messageId: opts.messageId || '',
+          roomId: opts.roomId || '',
+        },
+        ...(Platform.OS === 'android'
+          ? {
+              channelId: 'messages' as const,
+              priority: Notifications.AndroidNotificationPriority?.MAX,
+              sticky: false,
+            }
+          : {
+              // iOS threads stack by conversation like WhatsApp
+              threadIdentifier: groupKey,
+            }),
+      },
+      trigger: null,
+      // One shade entry per conversation — new msgs replace the previous
+      identifier: groupKey,
+    });
+  } catch (err: any) {
+    console.warn('[Push] local chat notify failed:', err?.message);
   }
 }
 

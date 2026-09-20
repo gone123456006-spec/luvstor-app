@@ -30,7 +30,12 @@ function getInCallManager(): InCallManagerModule | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('react-native-incall-manager');
     const candidate = (mod?.default || mod) as InCallManagerModule | null;
-    if (candidate && typeof candidate.start === 'function') {
+    // Native module often missing in Expo Go / partial links — probe before use
+    if (
+      candidate &&
+      typeof candidate.start === 'function' &&
+      typeof candidate.stop === 'function'
+    ) {
       InCall = candidate;
     } else {
       InCall = null;
@@ -39,6 +44,11 @@ function getInCallManager(): InCallManagerModule | null {
     InCall = null;
   }
   return InCall;
+}
+
+/** Drop broken native bridge after a failed call so we stay on expo-audio. */
+function markInCallBroken() {
+  InCall = null;
 }
 
 async function applyExpoAudio(speakerOn: boolean) {
@@ -67,7 +77,7 @@ export async function startCallAudio(opts: {
   const mgr = getInCallManager();
   if (mgr) {
     try {
-      mgr.start?.({
+      mgr.start({
         media: opts.callType === 'video' ? 'video' : 'audio',
         auto: false,
       });
@@ -76,6 +86,7 @@ export async function startCallAudio(opts: {
         mgr.startProximitySensor?.();
       }
     } catch (err) {
+      markInCallBroken();
       console.warn('[CallAudio] InCall start:', (err as Error).message);
     }
   }
@@ -122,6 +133,7 @@ export async function stopCallAudio() {
       mgr.setMicrophoneMute?.(false);
       mgr.stop?.();
     } catch (err) {
+      markInCallBroken();
       console.warn('[CallAudio] InCall stop:', (err as Error).message);
     }
   }

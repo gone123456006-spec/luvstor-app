@@ -219,6 +219,8 @@ async function enrichConversationsBatch(reqUserId, conversations) {
     const otherForClient = safeOther
       ? {
           ...safeOther,
+          id: String(safeOther._id || otherId),
+          _id: safeOther._id || otherId,
           isOnline: block.blocked ? false : !!safeOther.isOnline,
           lastSeen: block.blocked ? null : safeOther.lastSeen,
         }

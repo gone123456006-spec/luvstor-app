@@ -92,6 +92,13 @@ import {
   UPLOAD_FETCH_TIMEOUT_MS,
 } from "../../utils/api";
 import { resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
+import {
+  getRememberedPeerProfile,
+  isUsableName,
+  isUsablePhoto,
+  mergePeerProfile,
+  rememberPeerProfile,
+} from "../../utils/peerProfile";
 import { getSheetBottomPadding } from "../../utils/navigation";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import {
@@ -2463,16 +2470,32 @@ export default function MessageScreen() {
     router,
   ]);
 
-  // Keep header name/photo in sync with route params + live profile updates
+  // Keep header name/photo in sync with route params (never wipe good values)
   useEffect(() => {
     const blocked =
       !!friendshipStatus?.theyBlocked || !!friendshipStatus?.iBlocked;
     const hidden =
       !!friendshipStatus?.theyBlocked || privacyHiddenParam === "true";
     setPrivacyHidden(hidden);
-    setDisplayName(name || "User");
-    setDisplayPhoto(hidden ? "" : resolveMediaUrl(photo) || photo || "");
-    setDisplayGender(gender || "");
+    const peerIdStr = String(id || "");
+    const remembered = getRememberedPeerProfile(peerIdStr);
+    const peer = mergePeerProfile(
+      peerIdStr,
+      remembered || {},
+      peerIdStr,
+      {
+        name: name || remembered?.name,
+        photo: hidden ? "" : photo || remembered?.photo,
+        gender: gender || remembered?.gender,
+        clearPhoto: hidden,
+      },
+    );
+    if (!hidden && (isUsableName(peer.name) || isUsablePhoto(peer.photo))) {
+      rememberPeerProfile(peerIdStr, peer);
+    }
+    setDisplayName(peer.name || name || "User");
+    setDisplayPhoto(hidden ? "" : peer.photo || "");
+    if (peer.gender) setDisplayGender(peer.gender);
     if (blocked || hidden) {
       setOtherUserOnline(false);
     }
@@ -2499,29 +2522,48 @@ export default function MessageScreen() {
     } else {
       setPrivacyHidden(false);
     }
-    if (lastProfileUpdate.name) setDisplayName(lastProfileUpdate.name);
-    if (!hidden && lastProfileUpdate.photo != null) {
-      setDisplayPhoto(
-        resolveMediaUrl(lastProfileUpdate.photo) ||
-          lastProfileUpdate.photo ||
-          "",
-      );
+    const peer = mergePeerProfile(
+      String(id),
+      { name: displayName, photo: displayPhoto, gender: displayGender },
+      String(lastProfileUpdate.userId),
+      {
+        name: lastProfileUpdate.name,
+        photo: lastProfileUpdate.photo,
+        gender: lastProfileUpdate.gender,
+        clearPhoto:
+          hidden ||
+          (lastProfileUpdate.photo !== undefined &&
+            lastProfileUpdate.photo !== null &&
+            !String(lastProfileUpdate.photo || "").trim()),
+      },
+    );
+    if (!hidden && (isUsableName(peer.name) || isUsablePhoto(peer.photo))) {
+      rememberPeerProfile(String(id), peer);
     }
-    if (lastProfileUpdate.gender) setDisplayGender(lastProfileUpdate.gender);
+    if (isUsableName(peer.name)) setDisplayName(peer.name!);
+    if (!hidden) {
+      if (isUsablePhoto(peer.photo)) setDisplayPhoto(peer.photo!);
+      else if (
+        lastProfileUpdate.photo !== undefined &&
+        lastProfileUpdate.photo !== null &&
+        !String(lastProfileUpdate.photo || "").trim()
+      ) {
+        setDisplayPhoto("");
+      }
+    }
+    if (peer.gender) setDisplayGender(peer.gender);
     if (lastProfileUpdate.bio != null) setDisplayBio(lastProfileUpdate.bio);
     setProfileUser((prev) =>
       prev
         ? {
             ...prev,
-            name: lastProfileUpdate.name || prev.name,
+            name: peer.name || prev.name,
             bio:
               lastProfileUpdate.bio != null ? lastProfileUpdate.bio : prev.bio,
             photo: hidden
               ? ""
-              : lastProfileUpdate.photo != null
-                ? resolveMediaUrl(lastProfileUpdate.photo) ||
-                  lastProfileUpdate.photo ||
-                  ""
+              : isUsablePhoto(peer.photo)
+                ? peer.photo!
                 : prev.photo,
             photos: Array.isArray(lastProfileUpdate.photos)
               ? (lastProfileUpdate.photos
@@ -2530,7 +2572,7 @@ export default function MessageScreen() {
               : prev.photos,
             age:
               lastProfileUpdate.age != null ? lastProfileUpdate.age : prev.age,
-            gender: lastProfileUpdate.gender || prev.gender,
+            gender: peer.gender || prev.gender,
             height:
               lastProfileUpdate.height !== undefined
                 ? lastProfileUpdate.height
@@ -2546,6 +2588,8 @@ export default function MessageScreen() {
           }
         : prev,
     );
+    // display* used as merge base only — omit from deps to avoid loops
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileTick, lastProfileUpdate, id, friendshipStatus?.theyBlocked]);
 
   // Load latest name / bio / photo for this chat partner
@@ -2557,11 +2601,20 @@ export default function MessageScreen() {
         if (!token || !id) return;
         const { user } = await fetchUserProfile(token, String(id));
         if (cancelled || !user) return;
-        setDisplayName(user.name || "User");
-        if (user.photo) {
-          setDisplayPhoto(resolveMediaUrl(user.photo) || user.photo);
-        }
-        if (user.gender) setDisplayGender(user.gender);
+        const peer = mergePeerProfile(
+          String(id),
+          getRememberedPeerProfile(String(id)) || {},
+          String(id),
+          {
+            name: user.name,
+            photo: user.photo,
+            gender: user.gender,
+          },
+        );
+        rememberPeerProfile(String(id), peer);
+        if (isUsableName(peer.name)) setDisplayName(peer.name!);
+        if (isUsablePhoto(peer.photo)) setDisplayPhoto(peer.photo!);
+        if (peer.gender) setDisplayGender(peer.gender);
         setDisplayBio(user.bio || "");
         setProfileUser((prev) => ({
           ...(prev || {
@@ -2576,6 +2629,8 @@ export default function MessageScreen() {
             isOnline: otherUserOnline,
           }),
           ...user,
+          name: peer.name || user.name,
+          photo: peer.photo || user.photo,
           isOnline: otherUserOnline,
         }));
       } catch {
@@ -2585,7 +2640,7 @@ export default function MessageScreen() {
     return () => {
       cancelled = true;
     };
-  }, [id, sessionVersion, profileTick]);
+  }, [id, sessionVersion]);
 
   // Fallback poll only when socket is disconnected (live path is Socket.IO)
   useFocusEffect(
@@ -4625,6 +4680,7 @@ export default function MessageScreen() {
                   name={displayName}
                   gender={displayGender}
                   size={40}
+                  recyclingKey={String(id)}
                   online={
                     !privacyHidden &&
                     !friendshipStatus?.theyBlocked &&

@@ -36,6 +36,8 @@ async function pushIncomingCall(io, {
     actorPhoto: (caller && caller.photo) || '',
     priority: 'high',
     groupKey: `call:${callId}`,
+    // One incoming push per callId — retries / double-emits collapse
+    dedupeKey: `call:incoming:${callId}`,
     deepLink: `/messages/${callerId}`,
     data: {
       screen: 'call',

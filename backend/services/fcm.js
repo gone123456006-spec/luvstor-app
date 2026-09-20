@@ -107,9 +107,12 @@ function buildMessage({
       ttl: resolvedTtl,
       notification: {
         channelId,
-        sound,
+        sound: sound === 'default' || !sound ? 'default' : sound,
         priority: isHigh ? 'max' : 'default',
         defaultVibrateTimings: true,
+        // 1 = PUBLIC — show content on lock screen (WhatsApp-style)
+        visibility: 1,
+        ...(typeof badge === 'number' ? { notificationCount: badge } : {}),
         ...(groupKey ? { tag: groupKey } : {}),
         ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
         icon: 'notification_icon',

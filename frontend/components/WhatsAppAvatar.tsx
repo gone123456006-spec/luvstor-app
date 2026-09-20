@@ -244,6 +244,8 @@ type Props = {
   privacyHidden?: boolean;
   /** Dating photo-verified shield */
   photoVerified?: boolean;
+  /** FlatList recycle guard — must be the peer userId */
+  recyclingKey?: string;
 };
 
 /**
@@ -263,6 +265,7 @@ function WhatsAppAvatarInner({
   badgeExpiresAt = null,
   privacyHidden = false,
   photoVerified: _photoVerified = false,
+  recyclingKey,
 }: Props) {
   const [photoFailed, setPhotoFailed] = useState(false);
   const photoRaw = String(photo || "").trim();
@@ -272,7 +275,7 @@ function WhatsAppAvatarInner({
 
   useEffect(() => {
     setPhotoFailed(false);
-  }, [photoId]);
+  }, [photoId, recyclingKey]);
 
   const liveBadge = useLiveSubscriptionBadge(badge, badgeExpiresAt);
   const hasPlanBadge = !privacyHidden && !!liveBadge;
@@ -292,6 +295,7 @@ function WhatsAppAvatarInner({
           contentFit="cover"
           cachePolicy="memory-disk"
           transition={0}
+          recyclingKey={recyclingKey || undefined}
           onExhausted={() => setPhotoFailed(true)}
         />
       )}
