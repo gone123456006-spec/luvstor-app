@@ -104,9 +104,12 @@ function profilePhotoUrls(user) {
 }
 
 function resolveLocalUploadPath(urlPath) {
-  const rel = urlPath.replace(/^\/uploads\//, 'uploads/');
-  const abs = path.join(__dirname, '..', rel);
-  if (!abs.startsWith(path.join(__dirname, '..', 'uploads'))) return null;
+  const { getUploadsDir } = require('../utils/uploadsPath');
+  const root = getUploadsDir();
+  const rel = String(urlPath || '').replace(/^\/uploads\//, '');
+  if (!rel || rel.includes('..')) return null;
+  const abs = path.join(root, rel);
+  if (!abs.startsWith(root)) return null;
   return abs;
 }
 

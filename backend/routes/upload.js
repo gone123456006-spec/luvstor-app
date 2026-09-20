@@ -4,12 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const auth = require('../middleware/auth');
 const Upload = require('../models/Upload');
+const { ensureUploadsDir } = require('../utils/uploadsPath');
 
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
-
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
+const UPLOADS_DIR = ensureUploadsDir();
 
 function parseDataUri(base64) {
   const matches = String(base64 || '').match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
@@ -25,7 +22,7 @@ function extensionForMime(mime, fallback = 'bin') {
   if (m.includes('gif')) return 'gif';
   if (m.includes('webp')) return 'webp';
   if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
-  if (m.includes('m4a') || m.includes('mp4') || m.includes('aac')) return 'm4a';
+  if (m.includes('m4a') || m.includes('mp4') || m.includes('aac') || m === 'audio/mp4') return 'm4a';
   if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
   if (m.includes('wav')) return 'wav';
   if (m.includes('3gpp') || m.includes('3gp')) return '3gp';

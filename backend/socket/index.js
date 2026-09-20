@@ -75,6 +75,8 @@ const REPLY_TO_SELECT =
 
 module.exports = function initSocket(io) {
   calls.setIo(io);
+  /** Throttle Mongo lastSeen writes — Redis TTL is the live source of truth. */
+  const lastSeenWriteAt = new Map();
 
   // Map: userId → socket.id (latest socket for direct messaging)
   const onlineUsers = new Map();
@@ -194,6 +196,26 @@ module.exports = function initSocket(io) {
           /* ignore */
         }
       }
+
+      // If someone is ringing this user, deliver the incoming call now that
+      // their socket is back (covers offline→online during the ring window).
+      try {
+        const ringing = calls.getRingingIncomingForUser(uid);
+        if (ringing) {
+          const caller = await calls.actorSnapshot(ringing.callerId);
+          socket.emit('call:incoming', {
+            callId: ringing.callId,
+            from: ringing.callerId,
+            callType: ringing.callType,
+            roomId: ringing.roomId,
+            caller,
+            iceServers: calls.getIceServers(),
+            ringTimeoutMs: calls.RING_TIMEOUT_MS,
+          });
+        }
+      } catch (err) {
+        console.error('deliver ringing call error:', err.message);
+      }
     };
 
     // ── Join a chat room ──────────────────────────────
@@ -218,10 +240,9 @@ module.exports = function initSocket(io) {
         }
 
         let otherOnline = false;
-        const redisOnline = await presence.isUserOnline(otherUserId);
-        if (redisOnline !== null) {
-          otherOnline = redisOnline;
-        } else {
+        try {
+          otherOnline = !!(await presence.isUserOnline(otherUserId));
+        } catch {
           otherOnline =
             onlineSockets.has(String(otherUserId)) &&
             (onlineSockets.get(String(otherUserId))?.size || 0) > 0;
@@ -263,6 +284,24 @@ module.exports = function initSocket(io) {
       }
     });
 
+    // Foreground presence — refresh Redis TTL + lastSeen so "Active now"
+    // cannot stick after the app is closed or the process dies mid-session.
+    socket.on('presence:ping', async () => {
+      try {
+        const hb = await presence.heartbeat(uid);
+        if (hb.ok === false) return;
+        const lastWrite = lastSeenWriteAt.get(uid) || 0;
+        if (Date.now() - lastWrite < 45_000) return;
+        lastSeenWriteAt.set(uid, Date.now());
+        await User.findByIdAndUpdate(uid, {
+          isOnline: true,
+          lastSeen: new Date(),
+        });
+      } catch (err) {
+        console.error('presence:ping error:', err.message);
+      }
+    });
+
     // ── Send a message ────────────────────────────────
     socket.on('chat:message', async (data) => {
       try {
@@ -279,7 +318,10 @@ module.exports = function initSocket(io) {
         if (!receiverId || (!text && !mediaUrl)) return;
 
         if (String(receiverId) === String(uid)) {
-          return socket.emit('chat:error', { error: 'Cannot send message to yourself' });
+          return socket.emit('chat:error', {
+            error: 'Cannot send message to yourself',
+            clientMsgId,
+          });
         }
 
         // One friendship read for block state (was two round-trips)
@@ -288,6 +330,7 @@ module.exports = function initSocket(io) {
           return socket.emit('chat:error', {
             error: 'Unblock this person to send messages',
             code: 'BLOCKED',
+            clientMsgId,
           });
         }
         const undelivered = !!block.theyBlocked;
@@ -307,6 +350,7 @@ module.exports = function initSocket(io) {
             tokenBalance: access.tokenBalance,
             remainingMs: access.remainingMs,
             sessionExpiresAt: access.sessionExpiresAt,
+            clientMsgId,
           });
         }
 
@@ -315,18 +359,23 @@ module.exports = function initSocket(io) {
             return socket.emit('chat:error', {
               error: 'Only text messages can be sent while blocked.',
               code: 'BLOCKED_MEDIA',
+              clientMsgId,
             });
           }
-          // Image / voice unlock only after both users have sent a DM
+          // Image / voice: friends always; strangers need a two-way chat first
           if (type === 'image' || type === 'audio') {
-            const bothMessaged = await hasBidirectionalChat(uid, receiverId);
-            if (!bothMessaged) {
-              return socket.emit('chat:error', {
-                error:
-                  'Photos and voice unlock when they reply to your message.',
-                code: 'MEDIA_LOCKED',
-                requiresReply: true,
-              });
+            const friendsStatus = await areFriends(uid, receiverId);
+            if (!friendsStatus) {
+              const bothMessaged = await hasBidirectionalChat(uid, receiverId);
+              if (!bothMessaged) {
+                return socket.emit('chat:error', {
+                  error:
+                    'Photos and voice unlock when they reply to your message.',
+                  code: 'MEDIA_LOCKED',
+                  requiresReply: true,
+                  clientMsgId,
+                });
+              }
             }
           } else {
             const friendsStatus = await areFriends(uid, receiverId);
@@ -336,6 +385,7 @@ module.exports = function initSocket(io) {
                   'Only friends can send files. Send a like and become friends first!',
                 code: 'NOT_FRIENDS',
                 requiresFriendship: true,
+                clientMsgId,
               });
             }
           }
@@ -346,16 +396,16 @@ module.exports = function initSocket(io) {
             error: canSend.message,
             code: canSend.code,
             consecutiveCount: canSend.consecutiveCount,
+            clientMsgId,
           });
         }
 
         const room = String([String(uid), String(receiverId)].sort().join('_'));
         let receiverOnline = false;
         if (!undelivered) {
-          const redisOnline = await presence.isUserOnline(receiverId);
-          if (redisOnline !== null) {
-            receiverOnline = redisOnline;
-          } else {
+          try {
+            receiverOnline = !!(await presence.isUserOnline(receiverId));
+          } catch {
             receiverOnline =
               onlineSockets.has(String(receiverId)) &&
               (onlineSockets.get(String(receiverId))?.size || 0) > 0;
@@ -512,7 +562,10 @@ module.exports = function initSocket(io) {
         });
       } catch (err) {
         console.error('chat:message error:', err);
-        socket.emit('chat:error', { error: 'Failed to send message' });
+        socket.emit('chat:error', {
+          error: 'Failed to send message',
+          clientMsgId: data?.clientMsgId,
+        });
       }
     });
 
@@ -646,18 +699,58 @@ module.exports = function initSocket(io) {
           return;
         }
 
-        // Callee offline → unavailable (still create history via startOutgoing busy path skip)
         let calleeOnline = false;
-        const redisOnline = await presence.isUserOnline(receiverId);
-        if (redisOnline !== null) {
-          calleeOnline = redisOnline;
-        } else {
+        try {
+          calleeOnline = !!(await presence.isUserOnline(receiverId));
+        } catch {
           calleeOnline =
             onlineSockets.has(String(receiverId)) &&
             (onlineSockets.get(String(receiverId))?.size || 0) > 0;
         }
 
         const room = roomId(uid, receiverId);
+
+        // Offline friend: no ring — leave a WhatsApp-style missed-call chat line
+        if (!calleeOnline) {
+          const offlineCallId = preferredId || calls.generateCallId();
+          try {
+            const Call = require('../models/Call');
+            await Call.create({
+              callId: offlineCallId,
+              callerId: uid,
+              calleeId: receiverId,
+              callType,
+              status: 'missed',
+              endReason: 'offline',
+              endedAt: new Date(),
+              roomId: room,
+            });
+          } catch {
+            /* ignore duplicate */
+          }
+          try {
+            const { postCallChatEvent } = require('../utils/callChatMessage');
+            await postCallChatEvent(io, {
+              callerId: uid,
+              calleeId: receiverId,
+              roomId: room,
+              callId: offlineCallId,
+              callType,
+              status: 'missed',
+              endReason: 'offline',
+              durationSec: 0,
+            });
+          } catch (err) {
+            console.error('offline call chat:', err.message);
+          }
+          socket.emit('call:error', {
+            error: 'User is offline',
+            code: 'OFFLINE',
+            callId: offlineCallId,
+          });
+          return;
+        }
+
         const result = await calls.startOutgoing({
           callerId: uid,
           calleeId: receiverId,
@@ -677,38 +770,37 @@ module.exports = function initSocket(io) {
               from: uid,
               callType,
             });
+            try {
+              const { postCallChatEvent } = require('../utils/callChatMessage');
+              await postCallChatEvent(io, {
+                callerId: uid,
+                calleeId: receiverId,
+                roomId: room,
+                callId: result.callId,
+                callType,
+                status: 'busy',
+                endReason: 'busy',
+                durationSec: 0,
+              });
+            } catch (err) {
+              console.error('busy call chat:', err.message);
+            }
+            try {
+              const { pushMissedCall } = require('../utils/callPush');
+              const snap = await calls.actorSnapshot(uid);
+              await pushMissedCall(io, {
+                calleeId: receiverId,
+                callerId: uid,
+                callerName: snap?.name,
+                callId: result.callId,
+                callType,
+                roomId: room,
+                reason: 'busy',
+              });
+            } catch (err) {
+              console.error('busy missed push:', err.message);
+            }
           }
-          return;
-        }
-
-        if (!calleeOnline) {
-          await calls.destroySession(result.session.callId, {
-            status: 'unavailable',
-            endReason: 'offline',
-            endedBy: null,
-          });
-          socket.emit('call:error', {
-            error: 'User is offline',
-            code: 'OFFLINE',
-            callId: result.session.callId,
-          });
-          await createNotification(io, {
-            userId: receiverId,
-            type: 'call',
-            title: 'Missed call',
-            body: callType === 'video' ? 'Missed video call' : 'Missed voice call',
-            actorId: uid,
-            priority: 'high',
-            groupKey: `call:missed:${room}`,
-            deepLink: `/messages/${uid}`,
-            data: {
-              screen: 'messages',
-              userId: String(uid),
-              callId: result.session.callId,
-              callType,
-              missed: true,
-            },
-          });
           return;
         }
 
@@ -724,25 +816,20 @@ module.exports = function initSocket(io) {
 
         notifyUser(io, receiverId, 'call:incoming', incomingPayload);
 
-        // High-priority push — wake device / show incoming when backgrounded
-        await createNotification(io, {
-          userId: receiverId,
-          type: 'call',
-          title: result.caller.name || 'Incoming call',
-          body: callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
-          actorId: uid,
-          priority: 'high',
-          groupKey: `call:${result.session.callId}`,
-          deepLink: `/messages/${uid}`,
-          data: {
-            screen: 'call',
-            userId: String(uid),
-            roomId: room,
+        try {
+          const { pushIncomingCall } = require('../utils/callPush');
+          await pushIncomingCall(io, {
+            calleeId: receiverId,
+            caller: result.caller,
+            callerId: uid,
             callId: result.session.callId,
-            callType,
-            action: 'incoming',
-          },
-        });
+            callType: result.session.callType,
+            roomId: room,
+            calleeOnline,
+          });
+        } catch (err) {
+          console.error('incoming call push:', err.message);
+        }
 
         socket.emit('call:ringing', {
           callId: result.session.callId,
@@ -751,6 +838,7 @@ module.exports = function initSocket(io) {
           iceServers: result.iceServers,
           ringTimeoutMs: result.ringTimeoutMs,
           callType: result.session.callType,
+          calleeOnline,
         });
       } catch (err) {
         console.error('call:invite error:', err.message);
@@ -781,6 +869,23 @@ module.exports = function initSocket(io) {
           session,
           isCallee: true,
         });
+
+        // Replay offer/ICE buffered while this user was offline
+        const pending = calls.takePendingSignaling(callId);
+        if (pending.offer?.sdp) {
+          socket.emit('call:offer', {
+            callId,
+            sdp: pending.offer.sdp,
+            from: pending.offer.from,
+          });
+        }
+        for (const ice of pending.ice) {
+          socket.emit('call:ice-candidate', {
+            callId,
+            candidate: ice.candidate,
+            from: ice.from,
+          });
+        }
       } catch (err) {
         console.error('call:accept error:', err.message);
         socket.emit('call:error', { error: 'Could not accept call', callId });
@@ -806,7 +911,12 @@ module.exports = function initSocket(io) {
       try {
         if (!callId) return;
         const session = calls.getSession(callId);
-        if (!session || String(session.callerId) !== String(uid)) return;
+        if (!session) {
+          // Invite may still be in flight — remember cancel so we don't ring
+          calls.markPendingCancel(callId);
+          return;
+        }
+        if (String(session.callerId) !== String(uid)) return;
         await calls.destroySession(callId, {
           status: 'cancelled',
           endReason: 'cancel',
@@ -814,6 +924,26 @@ module.exports = function initSocket(io) {
         });
       } catch (err) {
         console.error('call:cancel error:', err.message);
+      }
+    });
+
+    // Re-deliver ringing incoming after push wake / app reopen
+    socket.on('call:sync', async () => {
+      try {
+        const ringing = calls.getRingingIncomingForUser(uid);
+        if (!ringing) return;
+        const caller = await calls.actorSnapshot(ringing.callerId);
+        socket.emit('call:incoming', {
+          callId: ringing.callId,
+          from: ringing.callerId,
+          callType: ringing.callType,
+          roomId: ringing.roomId,
+          caller,
+          iceServers: calls.getIceServers(),
+          ringTimeoutMs: calls.RING_TIMEOUT_MS,
+        });
+      } catch (err) {
+        console.error('call:sync error:', err.message);
       }
     });
 
@@ -898,6 +1028,11 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !sdp) return;
       const otherId = calls.otherParty(session, uid);
+      // Buffer while ringing — delivered on accept (covers offline callees)
+      if (session.status === 'ringing') {
+        calls.storePendingOffer(callId, sdp, uid);
+        return;
+      }
       notifyUser(io, otherId, 'call:offer', { callId, sdp, from: uid });
     });
 
@@ -912,6 +1047,11 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !candidate) return;
       const otherId = calls.otherParty(session, uid);
+      // Buffer while ringing — replayed with the offer on accept
+      if (session.status === 'ringing') {
+        calls.storePendingIce(callId, candidate, uid);
+        return;
+      }
       notifyUser(io, otherId, 'call:ice-candidate', {
         callId,
         candidate,
@@ -1257,10 +1397,12 @@ module.exports = function initSocket(io) {
         }
       }
 
-      const disc = await presence.socketDisconnected(uid);
+      const stillConnected =
+        onlineSockets.has(uid) && (onlineSockets.get(uid)?.size || 0) > 0;
+      const disc = await presence.socketDisconnected(uid, { stillConnected });
       const becameOffline = redisReady()
         ? disc.becameOffline
-        : !onlineSockets.has(uid);
+        : !stillConnected;
 
       if (becameOffline) {
         await User.findByIdAndUpdate(uid, {

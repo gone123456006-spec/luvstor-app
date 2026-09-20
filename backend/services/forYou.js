@@ -253,6 +253,8 @@ async function hydrateUsers(viewer, rankedSlice, now) {
     User.find({ _id: { $in: oids } }).select(FOR_YOU_SELECT).lean(),
     getFriendshipMap(viewer._id, ids),
   ]);
+  const { resolveOnlineMap } = require("../utils/onlineStatus");
+  const onlineMap = await resolveOnlineMap(docs);
   const byId = new Map(docs.map((d) => [String(d._id), d]));
   const metaById = new Map(rankedSlice.map((r) => [r.id, r]));
 
@@ -290,7 +292,7 @@ async function hydrateUsers(viewer, rankedSlice, now) {
         interests: doc.interests,
         height: doc.height,
         relationshipGoal: doc.relationshipGoal || "",
-        isOnline: !!doc.isOnline,
+        isOnline: onlineMap.get(id) === true,
         distance: metres,
         distanceKm: metres != null ? (metres / 1000).toFixed(1) : null,
         friendshipStatus: friendship?.status || "stranger",

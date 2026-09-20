@@ -18,9 +18,16 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     numInstances: 1
+    # Survive deploys — without this, DP / cover / posts vanish (ephemeral disk)
+    disk:
+      name: luvstor-uploads
+      mountPath: /var/data/uploads
+      sizeGB: 5
     envVars:
       - key: NODE_ENV
         value: production
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET

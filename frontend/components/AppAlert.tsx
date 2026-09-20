@@ -10,7 +10,7 @@ import React, {
 import {
   Alert,
   Animated,
-  Modal,
+  BackHandler,
   Pressable,
   StyleSheet,
   Text,
@@ -18,7 +18,9 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { getSheetBottomPadding } from "../utils/navigation";
+import { useStableBottomInset } from "../hooks/useStableBottomInset";
+import { useTabBarOverlayInset } from "../hooks/useTabBarOverlayInset";
 
 export type AlertButtonStyle = "default" | "cancel" | "destructive" | "primary";
 
@@ -36,7 +38,10 @@ export type AppAlertOptions = {
   buttons?: AlertButton[];
   /** Kept for API compat — not shown */
   icon?: string;
-  /** Side-by-side actions: destructive left, others right. Cancel stays on its own row below. */
+  /**
+   * `horizontal` — actions side-by-side in one card (default when exactly 2 buttons).
+   * `vertical` — stacked list; Cancel stays on its own card below.
+   */
   actionsLayout?: "vertical" | "horizontal";
 };
 
@@ -53,8 +58,8 @@ const C = {
   title: "#000000",
   message: "#3C3C43",
   divider: "rgba(60, 60, 67, 0.29)",
-  card: "#FFFFFF",
-  backdrop: "rgba(0, 0, 0, 0.4)",
+  card: "#E4E6EB",
+  backdrop: "rgba(0, 0, 0, 0.55)",
 };
 
 function normalizeButtons(buttons?: AlertButton[]): AlertButton[] {
@@ -84,6 +89,7 @@ function mapNativeButtons(
 
 function buttonTextStyle(style?: AlertButtonStyle) {
   if (style === "destructive") return styles.sheetBtnDanger;
+  if (style === "cancel") return styles.sheetCancelText;
   return styles.sheetBtnText;
 }
 
@@ -111,7 +117,8 @@ function renderActionLabel(btn: AlertButton, horizontal?: boolean) {
 export const nativeAlert = Alert.alert.bind(Alert);
 
 export function AppAlertProvider({ children }: { children: React.ReactNode }) {
-  const insets = useSafeAreaInsets();
+  const stableBottom = useStableBottomInset();
+  const tabClearance = useTabBarOverlayInset();
   const [visible, setVisible] = useState(false);
   const [options, setOptions] = useState<AppAlertOptions | null>(null);
   const opacity = useRef(new Animated.Value(0)).current;
@@ -212,6 +219,15 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
     [animateOut, finishClose],
   );
 
+  useEffect(() => {
+    if (!visible) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      close();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible, close]);
+
   const handlePress = useCallback(
     (btn: AlertButton) => {
       close(() => btn.onPress?.());
@@ -231,111 +247,141 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
     return rank(a.style) - rank(b.style);
   });
 
-  const isHorizontal = options?.actionsLayout === "horizontal" && iosActions.length > 0;
+  // Two-option alerts → one row: [action | Cancel]. Explicit vertical opts out.
+  const isHorizontal =
+    options?.actionsLayout === "horizontal" ||
+    (options?.actionsLayout !== "vertical" && buttons.length === 2);
+
+  // Only fold Cancel into the row when there are exactly two choices
+  const cancelInRow = isHorizontal && buttons.length === 2 && !!cancelBtn;
+
+  const rowButtons = isHorizontal
+    ? cancelInRow
+      ? [...iosActions, cancelBtn]
+      : iosActions.length > 0
+        ? iosActions
+        : buttons
+    : [];
+
+  const showSeparateCancel = !!cancelBtn && !cancelInRow;
+
+  // Sit just above footer tabs when on tab screens; otherwise clear system nav
+  const sheetBottomPad =
+    tabClearance > 0 ? tabClearance : getSheetBottomPadding(stableBottom);
 
   return (
     <AppAlertContext.Provider value={value}>
-      {children}
-      <Modal
-        visible={visible}
-        transparent
-        animationType="none"
-        statusBarTranslucent
-        presentationStyle="overFullScreen"
-        onRequestClose={() => close()}
-      >
-        <Animated.View
-          style={[styles.backdrop, { opacity }]}
-        >
-          <Pressable style={styles.backdropPress} onPress={() => close()} />
-
-          <Animated.View
-            style={[
-              styles.sheetWrap,
-              {
-                paddingBottom: Math.max(insets.bottom, 10),
-                opacity,
-                transform: [{ translateY: slide }],
-              },
-            ]}
+      <View style={styles.root}>
+        {children}
+        {visible ? (
+          <View
+            style={styles.host}
+            pointerEvents="box-none"
+            accessibilityViewIsModal
           >
-            {isHorizontal ? (
-              <View style={styles.sheetCard}>
-                {(!!options?.title || !!options?.message) && (
-                  <View style={styles.sheetHeader}>
-                    {!!options?.title && (
-                      <Text style={styles.sheetTitle}>{options.title}</Text>
-                    )}
-                    {!!options?.message && (
-                      <Text style={styles.sheetMessage}>{options.message}</Text>
-                    )}
+            {/* Dim above footer tabs so nav stays readable */}
+            <Animated.View
+              style={[
+                styles.dim,
+                { bottom: tabClearance, opacity },
+              ]}
+            >
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => close()} />
+            </Animated.View>
+
+            <Animated.View
+              style={[
+                styles.sheetWrap,
+                {
+                  paddingBottom: sheetBottomPad,
+                  opacity,
+                  transform: [{ translateY: slide }],
+                },
+              ]}
+              pointerEvents="box-none"
+            >
+              {isHorizontal ? (
+                <View style={styles.sheetCard}>
+                  {(!!options?.title || !!options?.message) && (
+                    <View style={styles.sheetHeader}>
+                      {!!options?.title && (
+                        <Text style={styles.sheetTitle}>{options.title}</Text>
+                      )}
+                      {!!options?.message && (
+                        <Text style={styles.sheetMessage}>
+                          {options.message}
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                  {(!!options?.title || !!options?.message) && (
+                    <View style={styles.dividerH} />
+                  )}
+                  <View style={styles.sheetRow}>
+                    {rowButtons.map((btn, i) => (
+                      <React.Fragment key={`${btn.text}-${i}`}>
+                        {i > 0 ? <View style={styles.dividerV} /> : null}
+                        <View style={styles.sheetRowCell}>
+                          <TouchableOpacity
+                            activeOpacity={0.55}
+                            onPress={() => handlePress(btn)}
+                            style={styles.sheetRowBtn}
+                          >
+                            {renderActionLabel(btn, true)}
+                          </TouchableOpacity>
+                        </View>
+                      </React.Fragment>
+                    ))}
                   </View>
-                )}
-                {(!!options?.title || !!options?.message) && (
-                  <View style={styles.dividerH} />
-                )}
-                <View style={styles.sheetRow}>
-                  {iosActions.map((btn, i) => (
-                    <React.Fragment key={`${btn.text}-${i}`}>
-                      {i > 0 ? <View style={styles.dividerV} /> : null}
-                      <View style={styles.sheetRowCell}>
+                </View>
+              ) : (
+                <View style={styles.sheetCard}>
+                  {(!!options?.title || !!options?.message) && (
+                    <View style={styles.sheetHeader}>
+                      {!!options?.title && (
+                        <Text style={styles.sheetTitle}>{options.title}</Text>
+                      )}
+                      {!!options?.message && (
+                        <Text style={styles.sheetMessage}>
+                          {options.message}
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                  {iosActions.map((btn, i) => {
+                    const showDivider =
+                      i > 0 || !!options?.title || !!options?.message;
+                    return (
+                      <React.Fragment key={`${btn.text}-${i}`}>
+                        {showDivider ? <View style={styles.dividerH} /> : null}
                         <TouchableOpacity
                           activeOpacity={0.55}
                           onPress={() => handlePress(btn)}
-                          style={styles.sheetRowBtn}
+                          style={styles.sheetBtn}
                         >
-                          {renderActionLabel(btn, true)}
+                          <Text style={buttonTextStyle(btn.style)}>
+                            {btn.text}
+                          </Text>
                         </TouchableOpacity>
-                      </View>
-                    </React.Fragment>
-                  ))}
+                      </React.Fragment>
+                    );
+                  })}
                 </View>
-              </View>
-            ) : (
-              <View style={styles.sheetCard}>
-                {(!!options?.title || !!options?.message) && (
-                  <View style={styles.sheetHeader}>
-                    {!!options?.title && (
-                      <Text style={styles.sheetTitle}>{options.title}</Text>
-                    )}
-                    {!!options?.message && (
-                      <Text style={styles.sheetMessage}>{options.message}</Text>
-                    )}
-                  </View>
-                )}
-                {iosActions.map((btn, i) => {
-                  const showDivider =
-                    i > 0 || !!options?.title || !!options?.message;
-                  return (
-                    <React.Fragment key={`${btn.text}-${i}`}>
-                      {showDivider ? <View style={styles.dividerH} /> : null}
-                      <TouchableOpacity
-                        activeOpacity={0.55}
-                        onPress={() => handlePress(btn)}
-                        style={styles.sheetBtn}
-                      >
-                        <Text style={buttonTextStyle(btn.style)}>
-                          {btn.text}
-                        </Text>
-                      </TouchableOpacity>
-                    </React.Fragment>
-                  );
-                })}
-              </View>
-            )}
+              )}
 
-            {cancelBtn ? (
-              <TouchableOpacity
-                activeOpacity={0.55}
-                onPress={() => handlePress(cancelBtn)}
-                style={styles.sheetCancel}
-              >
-                <Text style={styles.sheetCancelText}>{cancelBtn.text}</Text>
-              </TouchableOpacity>
-            ) : null}
-          </Animated.View>
-        </Animated.View>
-      </Modal>
+              {showSeparateCancel ? (
+                <TouchableOpacity
+                  activeOpacity={0.55}
+                  onPress={() => handlePress(cancelBtn)}
+                  style={styles.sheetCancel}
+                >
+                  <Text style={styles.sheetCancelText}>{cancelBtn.text}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </Animated.View>
+          </View>
+        ) : null}
+      </View>
     </AppAlertContext.Provider>
   );
 }
@@ -349,18 +395,31 @@ export function useAppAlert() {
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
+  root: {
     flex: 1,
-    backgroundColor: C.backdrop,
-    justifyContent: "flex-end",
-    paddingHorizontal: 10,
   },
-  backdropPress: {
+  host: {
     ...StyleSheet.absoluteFillObject,
+    zIndex: 10000,
+    elevation: 10000,
+  },
+  dim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: C.backdrop,
   },
   sheetWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
     width: "100%",
+    paddingHorizontal: 10,
     gap: 8,
+    zIndex: 1,
+    elevation: 1,
   },
   sheetCard: {
     backgroundColor: C.card,

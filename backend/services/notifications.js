@@ -17,6 +17,7 @@ const { notifyUser, actorPayload } = require('../utils/realtime');
 const { isViewingChat } = require('../utils/activeChat');
 const deviceTokens = require('./deviceTokens');
 const pushQueue = require('./pushQueue');
+const { absoluteMediaUrl } = require('../utils/absoluteUrl');
 
 /**
  * Per-type push defaults.
@@ -252,6 +253,7 @@ async function unreadCountFor(userId) {
     return await Notification.countDocuments({
       userId,
       read: false,
+      deletedAt: null,
       type: { $nin: [...HIDE_FROM_CENTER] },
     });
   } catch {
@@ -339,6 +341,10 @@ async function queuePush(userId, notification, { badge } = {}) {
           ? String(notification._id)
           : `chat:${notification.groupKey || ''}:${notification.data?.messageId || Date.now()}`;
 
+      const photoAbs = absoluteMediaUrl(
+        notification.imageUrl || notification.actorPhoto || '',
+      );
+
       pushQueue.enqueue({
         userId: String(userId),
         notificationId: notification._id,
@@ -346,8 +352,8 @@ async function queuePush(userId, notification, { badge } = {}) {
         payload: {
           title,
           body,
-          imageUrl: notification.imageUrl || undefined,
-          channelId: TYPE_CHANNEL.chat || 'chat',
+          imageUrl: photoAbs || undefined,
+          channelId: TYPE_CHANNEL.chat || 'messages',
           priority: notification.priority || opts.priority,
           sound: opts.sound,
           groupKey: notification.groupKey || undefined,
@@ -360,7 +366,7 @@ async function queuePush(userId, notification, { badge } = {}) {
             groupKey: notification.groupKey || '',
             actorId: actorId ? String(actorId) : '',
             actorName: notification.actorName || '',
-            actorPhoto: notification.actorPhoto || '',
+            actorPhoto: photoAbs || notification.actorPhoto || '',
             actorGender: notification.actorGender || '',
             badge: String(badgeCount),
             ...(notification.data || {}),
@@ -400,6 +406,10 @@ async function queuePush(userId, notification, { badge } = {}) {
         ? String(notification._id)
         : `chat:${notification.groupKey || ''}:${notification.data?.messageId || Date.now()}`;
 
+    const photoAbs = absoluteMediaUrl(
+      notification.imageUrl || notification.actorPhoto || '',
+    );
+
     pushQueue.enqueue({
       userId: String(userId),
       notificationId: notification._id,
@@ -407,7 +417,7 @@ async function queuePush(userId, notification, { badge } = {}) {
       payload: {
         title: preview.title,
         body: preview.body,
-        imageUrl: notification.imageUrl || undefined,
+        imageUrl: photoAbs || undefined,
         channelId: TYPE_CHANNEL[notification.type] || 'system',
         priority: notification.priority || opts.priority,
         sound: opts.sound,
@@ -421,7 +431,7 @@ async function queuePush(userId, notification, { badge } = {}) {
           groupKey: notification.groupKey || '',
           actorId: notification.actorId ? String(notification.actorId) : '',
           actorName: notification.actorName || '',
-          actorPhoto: notification.actorPhoto || '',
+          actorPhoto: photoAbs || notification.actorPhoto || '',
           actorGender: notification.actorGender || '',
           badge: String(badgeCount),
           ...(notification.data || {}),
@@ -528,6 +538,18 @@ async function createNotification(io, opts = {}) {
 
     let doc;
     try {
+      // Soft-deleted rows with the same dedupeKey must stay gone — never revive
+      if (dedupeKey) {
+        const gone = await Notification.findOne({
+          userId,
+          dedupeKey,
+          deletedAt: { $ne: null },
+        })
+          .select('_id')
+          .lean();
+        if (gone) return null;
+      }
+
       doc = await Notification.create({
         userId,
         type,
@@ -547,7 +569,7 @@ async function createNotification(io, opts = {}) {
         pushStatus: push ? 'pending' : 'skipped',
       });
     } catch (err) {
-      // Duplicate dedupeKey — the notification already exists, nothing to do
+      // Duplicate dedupeKey — the notification already exists (or was cleared)
       if (err.code === 11000) return null;
       throw err;
     }

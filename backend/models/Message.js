@@ -5,8 +5,16 @@ const messageSchema = new mongoose.Schema({
   senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   receiverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   text: { type: String, default: '' },
-  type: { type: String, enum: ['text', 'image', 'audio'], default: 'text' },
+  type: { type: String, enum: ['text', 'image', 'audio', 'call'], default: 'text' },
   mediaUrl: { type: String, default: null },
+  /** WhatsApp-style call event embedded in the chat thread */
+  callMeta: {
+    callId: { type: String, default: '' },
+    callType: { type: String, enum: ['voice', 'video', ''], default: '' },
+    status: { type: String, default: '' },
+    endReason: { type: String, default: '' },
+    durationSec: { type: Number, default: 0 },
+  },
   /** WhatsApp ticks: delivered → double gray, read → blue */
   delivered: { type: Boolean, default: false, index: true },
   deliveredAt: { type: Date, default: null },

@@ -36,6 +36,7 @@ import {
     AppState,
     BackHandler,
     Dimensions,
+    Easing,
     FlatList,
     InteractionManager,
     Keyboard,
@@ -80,8 +81,18 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useCall } from "../../contexts/CallContext";
 import { usePush } from "../../contexts/PushContext";
 import { useSocket } from "../../contexts/SocketContext";
-import { apiRequest, getApiBase } from "../../utils/api";
+import {
+  prepareChatRecordingAudio,
+  restoreChatPlaybackAudio,
+} from "../../utils/callAudio";
+import {
+  apiRequest,
+  fetchWithTimeout,
+  getApiBase,
+  UPLOAD_FETCH_TIMEOUT_MS,
+} from "../../utils/api";
 import { resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
+import { getSheetBottomPadding } from "../../utils/navigation";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import {
     ChatAccessStatus,
@@ -185,7 +196,7 @@ interface ChatMsg {
   _id: string;
   sender: "me" | "other";
   text: string;
-  type: "text" | "image" | "audio";
+  type: "text" | "image" | "audio" | "call";
   mediaUrl?: string | null;
   /** Tiny JPEG data URI so the receiver sees the photo immediately */
   mediaThumb?: string | null;
@@ -195,6 +206,8 @@ interface ChatMsg {
   isDeleted?: boolean;
   createdAt: number;
   pending?: boolean;
+  /** Server rejected the send (blocked / limit / tokens / network) — tap to retry */
+  failed?: boolean;
   /** Blocked path — never delivered */
   undelivered?: boolean;
   /** Reached the recipient's device (double gray) */
@@ -204,6 +217,14 @@ interface ChatMsg {
   /** WhatsApp-style view-once photo */
   viewOnce?: boolean;
   viewOnceOpened?: boolean;
+  /** Embedded call event (Missed voice call, etc.) */
+  callMeta?: {
+    callId?: string;
+    callType?: "voice" | "video" | string;
+    status?: string;
+    endReason?: string;
+    durationSec?: number;
+  };
 }
 
 function getCachedThread(chatId: string): ChatMsg[] {
@@ -213,6 +234,7 @@ function getCachedThread(chatId: string): ChatMsg[] {
 function DeliveryTicks({
   isMe,
   pending,
+  failed,
   undelivered,
   delivered,
   read,
@@ -220,12 +242,24 @@ function DeliveryTicks({
 }: {
   isMe: boolean;
   pending?: boolean;
+  failed?: boolean;
   undelivered?: boolean;
   delivered?: boolean;
   read?: boolean;
   light?: boolean;
 }) {
   if (!isMe) return null;
+
+  if (failed) {
+    return (
+      <Ionicons
+        name="alert-circle"
+        size={13}
+        color="#F15C6D"
+        style={styles.singleDeliveryTick}
+      />
+    );
+  }
 
   // Single tick: sending / offline / blocked / not yet delivered
   if (pending || undelivered || !delivered) {
@@ -278,6 +312,7 @@ function MessageBubbleText({
   isMe,
   createdAt,
   pending,
+  failed,
   undelivered,
   delivered,
   read,
@@ -286,6 +321,7 @@ function MessageBubbleText({
   isMe: boolean;
   createdAt: number;
   pending?: boolean;
+  failed?: boolean;
   undelivered?: boolean;
   delivered?: boolean;
   read?: boolean;
@@ -313,18 +349,23 @@ function MessageBubbleText({
           isMultiLine && styles.messageMetaInlineMultiLine,
         ]}
       >
-        <Text
-          style={[
-            styles.messageTime,
-            isMe ? styles.myMessageTime : styles.otherMessageTime,
-          ]}
-        >
-          {timeLabel}
-        </Text>
+        {failed ? (
+          <Text style={styles.failedRetryLabel}>Tap to retry</Text>
+        ) : (
+          <Text
+            style={[
+              styles.messageTime,
+              isMe ? styles.myMessageTime : styles.otherMessageTime,
+            ]}
+          >
+            {timeLabel}
+          </Text>
+        )}
         {isMe ? (
           <DeliveryTicks
             isMe
             pending={pending}
+            failed={failed}
             undelivered={undelivered}
             delivered={delivered}
             read={read}
@@ -346,6 +387,7 @@ const VoiceMessage = ({
   isMe,
   createdAt,
   pending,
+  failed,
   undelivered,
   delivered,
   read,
@@ -354,6 +396,7 @@ const VoiceMessage = ({
   isMe: boolean;
   createdAt: number;
   pending?: boolean;
+  failed?: boolean;
   undelivered?: boolean;
   delivered?: boolean;
   read?: boolean;
@@ -513,6 +556,7 @@ const VoiceMessage = ({
               <DeliveryTicks
                 isMe
                 pending={pending}
+                failed={failed}
                 undelivered={undelivered}
                 delivered={delivered}
                 read={read}
@@ -529,6 +573,7 @@ const VoiceMessage = ({
 // ── Message row ───────────────────────────────────────────────────
 function replyPreviewLabel(m?: ChatMsg | null) {
   if (!m || m.isDeleted) return "Original message";
+  if (m.type === "call") return m.text || "Voice call";
   // Audio first — mediaUrl alone must not be treated as a photo
   if (m.type === "audio" || !!m.localVoiceUri) return "Voice message";
   if (m.text?.trim()) return m.text.trim();
@@ -800,6 +845,7 @@ const MessageItem = React.memo(function MessageItem({
   onImagePress,
   onViewOnceOpen,
   onToggleSelect,
+  onRetry,
   isSelected,
   selectionMode,
   highlighted,
@@ -811,6 +857,7 @@ const MessageItem = React.memo(function MessageItem({
   onImagePress: (uri: string) => void;
   onViewOnceOpen: (m: ChatMsg) => void;
   onToggleSelect: (id: string) => void;
+  onRetry: (m: ChatMsg) => void;
   isSelected: boolean;
   selectionMode: boolean;
   highlighted: boolean;
@@ -944,6 +991,21 @@ const MessageItem = React.memo(function MessageItem({
       </Swipeable>
     );
   };
+
+  // WhatsApp-style centered call event (Missed voice call / Voice call · 1:23)
+  if (item.type === "call") {
+    const callType = item.callMeta?.callType || "voice";
+    const icon = callType === "video" ? "videocam" : "call";
+    const label = item.text || "Voice call";
+    return (
+      <View style={styles.callEventRow}>
+        <View style={styles.callEventChip}>
+          <Ionicons name={icon as any} size={14} color="#667781" />
+          <Text style={styles.callEventText}>{label}</Text>
+        </View>
+      </View>
+    );
+  }
 
   if (item.isDeleted) {
     return (
@@ -1108,6 +1170,7 @@ const MessageItem = React.memo(function MessageItem({
                           <DeliveryTicks
                             isMe
                             pending={item.pending}
+                            failed={item.failed}
                             undelivered={item.undelivered}
                             delivered={item.delivered}
                             read={item.read}
@@ -1223,6 +1286,7 @@ const MessageItem = React.memo(function MessageItem({
                       <DeliveryTicks
                         isMe
                         pending={item.pending}
+                        failed={item.failed}
                         undelivered={item.undelivered}
                         delivered={item.delivered}
                         read={item.read}
@@ -1284,6 +1348,7 @@ const MessageItem = React.memo(function MessageItem({
                 isMe={isMe}
                 createdAt={item.createdAt}
                 pending={item.pending}
+                failed={item.failed}
                 undelivered={item.undelivered}
                 delivered={item.delivered}
                 read={item.read}
@@ -1303,7 +1368,9 @@ const MessageItem = React.memo(function MessageItem({
       onPress={
         selectionMode && !item.isDeleted
           ? () => onToggleSelect(item._id)
-          : undefined
+          : item.failed && isMe
+            ? () => onRetry(item)
+            : undefined
       }
       style={rowStyle}
     >
@@ -1338,6 +1405,7 @@ const MessageItem = React.memo(function MessageItem({
               isMe={isMe}
               createdAt={item.createdAt}
               pending={item.pending}
+              failed={item.failed}
               undelivered={item.undelivered}
               delivered={item.delivered}
               read={item.read}
@@ -1378,13 +1446,51 @@ export default function MessageScreen() {
   const router = useRouter();
   const { showAlert } = useAppAlert();
   const { sessionVersion, user } = useAuth();
-  const { startCall: startMediaCall } = useCall();
+  const { startCall: startMediaCall, phase: callPhase, isExplore: callIsExplore, minimized: callMinimized } = useCall();
+  const chatLeaveOpacity = useRef(new Animated.Value(1)).current;
+  const chatLeaveScale = useRef(new Animated.Value(1)).current;
+
+  // Smoothly tuck the chat away when a full-screen call opens
+  // (do NOT block on "ended" — that left chat untouchable / mic dead after calls)
+  const callUiBlocking =
+    !callIsExplore &&
+    !callMinimized &&
+    (callPhase === "outgoing" ||
+      callPhase === "ringing" ||
+      callPhase === "incoming" ||
+      callPhase === "connecting" ||
+      callPhase === "reconnecting" ||
+      callPhase === "connected");
+
+  useEffect(() => {
+    const hide = callUiBlocking;
+    Animated.parallel([
+      Animated.timing(chatLeaveOpacity, {
+        toValue: hide ? 0 : 1,
+        duration: hide ? 380 : 320,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(chatLeaveScale, {
+        toValue: hide ? 0.96 : 1,
+        duration: hide ? 420 : 340,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [callUiBlocking, chatLeaveOpacity, chatLeaveScale]);
+
+  // After any call ends, reclaim the mic for chat voice notes
+  useEffect(() => {
+    if (callPhase === "idle" || callPhase === "ended") {
+      void restoreChatPlaybackAudio();
+    }
+  }, [callPhase]);
   const { clearConversation } = usePush();
   const {
     socket: globalSocket,
     friendTick,
     lastFriendUpdate,
-    refreshUnread,
     profileTick,
     lastProfileUpdate,
     presenceTick,
@@ -1411,6 +1517,7 @@ export default function MessageScreen() {
   const [recording, setRecording] = useState<AudioRecorder | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingRef = useRef<AudioRecorder | null>(null);
   const [selectedImage, setSelectedImage] = useState<{
     uri: string;
     width: number;
@@ -1447,7 +1554,7 @@ export default function MessageScreen() {
                 ? "mutual_match"
                 : "friends",
             areFriends: true,
-            canSendMedia: false,
+            canSendMedia: true,
             canCall: true,
             iLiked: iLikedParam !== "false",
             theyLiked: theyLikedParam !== "false",
@@ -1471,6 +1578,9 @@ export default function MessageScreen() {
     let me = false;
     let other = false;
     for (const m of messages) {
+      if (m.isDeleted) continue;
+      // Call-event lines don't count as a real DM reply for media unlock
+      if (m.type === "call") continue;
       if (m.sender === "me") me = true;
       else if (m.sender === "other") other = true;
       if (me && other) return true;
@@ -1478,7 +1588,14 @@ export default function MessageScreen() {
     return false;
   }, [messages]);
 
-  const isMediaUnlocked = !!friendshipStatus?.canSendMedia || bothSidesMessaged;
+  // Friends / mutual match can send voice & photos without waiting for a reply.
+  // Strangers still need a two-way chat (or server canSendMedia).
+  const isMediaUnlocked =
+    !!friendshipStatus?.canSendMedia ||
+    bothSidesMessaged ||
+    !!friendshipStatus?.areFriends ||
+    friendshipStatus?.status === "friends" ||
+    friendshipStatus?.status === "mutual_match";
 
   useEffect(() => {
     if (!bothSidesMessaged) return;
@@ -1562,6 +1679,10 @@ export default function MessageScreen() {
   const [likingHeader, setLikingHeader] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menuOpen;
+  /** Message list updates deferred while Options is open (avoids loop blink). */
+  const deferredMessagesRef = useRef<ChatMsg[] | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [blockSheetOpen, setBlockSheetOpen] = useState(false);
   const [reasonPickerOpen, setReasonPickerOpen] = useState(false);
@@ -1593,6 +1714,9 @@ export default function MessageScreen() {
     isOnlineParam === "true",
   );
   const socketRef = useRef<Socket | null>(null);
+  /** Reused by the HTTP-fallback send path to reconcile the same way as the live socket event */
+  const handleIncomingMessageRef = useRef<((msg: any) => void) | null>(null);
+  const lastChatMetaAtRef = useRef(0);
   /** Latest message timestamp for WhatsApp-style reconnect catch-up */
   const messagesLatestAtRef = useRef(0);
   /** Oldest loaded timestamp — cursor for paging older history */
@@ -1671,7 +1795,7 @@ export default function MessageScreen() {
     try {
       const token = await getAuthToken();
       if (!token) return;
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${getApiBase()}/api/chat/conversation-status/${id}`,
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -1936,6 +2060,11 @@ export default function MessageScreen() {
     setReportOpen(false);
     setReasonPickerOpen(false);
     setPendingAlsoBlock(false);
+    if (deferredMessagesRef.current) {
+      const deferred = deferredMessagesRef.current;
+      deferredMessagesRef.current = null;
+      setMessages(deferred);
+    }
     if (after) {
       InteractionManager.runAfterInteractions(() => {
         requestAnimationFrame(after);
@@ -2514,19 +2643,14 @@ export default function MessageScreen() {
         }
       };
 
-      // Seed latest timestamp from current messages
-      setMessages((prev) => {
-        latestAtRef.current = prev.reduce(
-          (max, m) => Math.max(max, m.createdAt || 0),
-          0,
-        );
-        return prev;
-      });
+      latestAtRef.current = messagesLatestAtRef.current;
 
       // Light refresh on focus (once), then rare poll if offline
       void (async () => {
         try {
-          refreshUnread();
+          const stale = Date.now() - lastChatMetaAtRef.current > 60_000;
+          if (!stale) return;
+          lastChatMetaAtRef.current = Date.now();
           const token = await getAuthToken();
           if (!token || cancelled) return;
           await Promise.all([
@@ -2542,13 +2666,13 @@ export default function MessageScreen() {
       })();
 
       syncOnce();
-      const iv = setInterval(syncOnce, 5000);
+      const iv = setInterval(syncOnce, 15_000);
 
       return () => {
         cancelled = true;
         clearInterval(iv);
       };
-    }, [id, refreshUnread]),
+    }, [id]),
   );
 
   useEffect(() => {
@@ -2563,6 +2687,9 @@ export default function MessageScreen() {
     const expires = new Date(chatAccess.sessionExpiresAt).getTime();
     const tick = () => {
       const left = Math.max(0, expires - Date.now());
+      // Options Modal re-renders on every setState — skipping while open
+      // stops the continuous full-page blink on Android.
+      if (menuOpenRef.current) return;
       setRemainingMs(left);
       if (left <= 0) {
         setChatAccess((prev) =>
@@ -2761,6 +2888,7 @@ export default function MessageScreen() {
       replyTo,
       viewOnce: !!m.viewOnce,
       viewOnceOpened: !!m.viewOnceOpened,
+      callMeta: m.callMeta || undefined,
       // Invalid timestamps would become NaN and corrupt ordering
       createdAt: Number.isFinite(new Date(m.createdAt).getTime())
         ? new Date(m.createdAt).getTime()
@@ -2899,6 +3027,68 @@ export default function MessageScreen() {
   };
 
   /**
+   * Send a text message over the live socket, or fall back to REST when the
+   * shared socket isn't connected yet (e.g. cold start) so the message still
+   * goes out immediately instead of sitting stuck on "pending".
+   */
+  const deliverTextMessage = useCallback(
+    async (optId: string, text: string, replyToId: string | null) => {
+      const sock = socketRef.current;
+      if (sock?.connected) {
+        sock.emit("chat:message", {
+          receiverId: id,
+          text,
+          type: "text",
+          replyTo: replyToId,
+          clientMsgId: optId,
+        });
+        return;
+      }
+      try {
+        const token = await getAuthToken();
+        if (!token) throw new Error("Not authenticated");
+        const saved = await apiRequest("/api/chat/send", token, {
+          method: "POST",
+          body: JSON.stringify({
+            receiverId: id,
+            text,
+            type: "text",
+            replyTo: replyToId,
+          }),
+        });
+        handleIncomingMessageRef.current?.({ ...saved, clientMsgId: optId });
+      } catch (e) {
+        console.error("Send message failed", e);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m._id === optId ? { ...m, pending: false, failed: true } : m,
+          ),
+        );
+      }
+    },
+    [id],
+  );
+
+  const retryFailedMessage = useCallback(
+    (msg: ChatMsg) => {
+      if (!msg.failed || msg.sender !== "me" || msg.type !== "text") return;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._id === msg._id ? { ...m, failed: false, pending: true } : m,
+        ),
+      );
+      void deliverTextMessage(
+        msg._id,
+        msg.text,
+        msg.replyTo && /^[0-9a-f]{24}$/i.test(String(msg.replyTo._id))
+          ? String(msg.replyTo._id)
+          : null,
+      );
+    },
+    [deliverTextMessage],
+  );
+
+  /**
    * Stable renderItem so typing / unrelated state changes don't rebuild every
    * bubble. MessageItem is memoized, so identity here matters.
    */
@@ -2911,6 +3101,7 @@ export default function MessageScreen() {
         onImagePress={handleImagePress}
         onViewOnceOpen={openViewOncePhoto}
         onToggleSelect={handleToggleSelect}
+        onRetry={retryFailedMessage}
         isSelected={selectedMessageSet.has(item._id)}
         selectionMode={selectionMode}
         highlighted={highlightedMessageId === item._id}
@@ -2923,6 +3114,7 @@ export default function MessageScreen() {
       handleImagePress,
       openViewOncePhoto,
       handleToggleSelect,
+      retryFailedMessage,
       selectedMessageSet,
       selectionMode,
       highlightedMessageId,
@@ -3146,7 +3338,7 @@ export default function MessageScreen() {
         }
       }, 60_000);
 
-      bind("chat:message", (msg: any) => {
+      const handleIncomingMessage = (msg: any) => {
         const incoming = mapMsg(msg, authUser.id);
         const clientMsgId = msg.clientMsgId;
         const fs = friendshipStatusRef.current;
@@ -3164,12 +3356,13 @@ export default function MessageScreen() {
         setMessages((prev) => {
           if (prev.some((m) => m._id === incoming._id)) return prev;
 
+          let next: ChatMsg[];
           if (clientMsgId) {
             const idx = prev.findIndex((m) => m._id === clientMsgId);
             if (idx !== -1) {
               const prevMsg = prev[idx];
-              const newArr = [...prev];
-              newArr[idx] = {
+              next = [...prev];
+              next[idx] = {
                 ...incoming,
                 // Keep local preview + view-once flag across ack
                 localImageUri: prevMsg.localImageUri || incoming.localImageUri,
@@ -3181,11 +3374,20 @@ export default function MessageScreen() {
                 ),
                 replyTo: incoming.replyTo || prevMsg.replyTo,
               };
-              return newArr;
+            } else {
+              next = [...prev, incoming];
             }
+          } else {
+            next = [...prev, incoming];
           }
 
-          return [...prev, incoming];
+          // Don't rebuild Options every incoming message — Android loop-blinks.
+          // Apply the list when Options closes.
+          if (menuOpenRef.current) {
+            deferredMessagesRef.current = next;
+            return prev;
+          }
+          return next;
         });
         if (incoming.createdAt) {
           messagesLatestAtRef.current = Math.max(
@@ -3205,7 +3407,9 @@ export default function MessageScreen() {
           socket.emit("chat:read", { otherUserId: id });
           markChatAsRead(String(id));
         }
-      });
+      };
+      handleIncomingMessageRef.current = handleIncomingMessage;
+      bind("chat:message", handleIncomingMessage);
 
       bind("chat:image-preview", (msg: any) => {
         if (cancelled) return;
@@ -3395,6 +3599,16 @@ export default function MessageScreen() {
 
       bind("chat:error", (payload: any) => {
         console.warn("chat:error", payload?.error || payload);
+        // Server rejected this specific send — stop showing it as "pending"
+        // forever and let the sender tap to retry (WhatsApp-style).
+        if (payload?.clientMsgId) {
+          const cid = String(payload.clientMsgId);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m._id === cid ? { ...m, pending: false, failed: true } : m,
+            ),
+          );
+        }
         if (payload?.code === "INSUFFICIENT_TOKENS") {
           if (typeof payload.tokenBalance === "number") {
             setChatAccess((prev) =>
@@ -3511,6 +3725,8 @@ export default function MessageScreen() {
   useEffect(() => {
     if (presenceTick === 0 || !lastPresence?.userId) return;
     if (String(lastPresence.userId) !== String(id)) return;
+    // Don't rebuild Options every presence tick — causes loop blink
+    if (menuOpenRef.current) return;
     const fs = friendshipStatusRef.current;
     if (fs?.theyBlocked || fs?.iBlocked || privacyHidden) {
       setOtherUserOnline(false);
@@ -3596,11 +3812,15 @@ export default function MessageScreen() {
 
       const blobRes = await fetch(uri);
       const blob = await blobRes.blob();
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: blob,
-      });
+      const res = await fetchWithTimeout(
+        url,
+        {
+          method: "POST",
+          headers,
+          body: blob,
+        },
+        UPLOAD_FETCH_TIMEOUT_MS,
+      );
       const json = await res.json();
       if (!res.ok) {
         console.error("Image upload failed", json?.error || res.status);
@@ -3615,7 +3835,10 @@ export default function MessageScreen() {
 
   const sendMessage = async () => {
     const trimmedText = inputText.trim();
-    if ((!trimmedText && !selectedImage) || !socketRef.current) return;
+    if (!trimmedText && !selectedImage) return;
+    // Image sends still need the live socket for upload progress; text can
+    // fall back to REST via deliverTextMessage below.
+    if (selectedImage && !socketRef.current) return;
 
     // Local gates only — no network wait before the bubble appears (WhatsApp-feel)
     if (
@@ -3658,12 +3881,6 @@ export default function MessageScreen() {
       return;
     }
 
-    // Free users: start OR reply both need a paid 2h session for this chat
-    if (!chatAccess?.unlimitedChat && !chatAccess?.hasActiveSession) {
-      const allowed = await requireChatAccess();
-      if (!allowed) return;
-    }
-
     if (selectedImage) {
       const localUri = selectedImage.uri;
       setSelectedImage(null);
@@ -3700,17 +3917,11 @@ export default function MessageScreen() {
       });
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-      socketRef.current.emit("chat:message", {
-        receiverId: id,
-        text: trimmedText,
-        type: "text",
-        replyTo: replyTargetId(replyingTo),
-        clientMsgId: optId,
-      });
+      void deliverTextMessage(optId, trimmedText, replyTargetId(replyingTo));
     }
 
     setReplyingTo(null);
-    socketRef.current.emit("chat:typing", { receiverId: id, isTyping: false });
+    socketRef.current?.emit("chat:typing", { receiverId: id, isTyping: false });
   };
 
   const sendImageFromUri = async (localUri: string, viewOnce = false) => {
@@ -3770,12 +3981,15 @@ export default function MessageScreen() {
       return;
     }
 
-    if (!chatAccess?.unlimitedChat && !chatAccess?.hasActiveSession) {
-      const allowed = await requireChatAccess();
-      if (!allowed) {
-        setSendingPhoto(false);
-        return;
-      }
+    if (
+      chatAccess &&
+      !chatAccess.unlimitedChat &&
+      !chatAccess.hasActiveSession &&
+      chatAccess.canChat === false
+    ) {
+      setSendingPhoto(false);
+      showInsufficientTokensPopup();
+      return;
     }
 
     const optId = `opt-img-${Date.now()}`;
@@ -3861,7 +4075,12 @@ export default function MessageScreen() {
         setMessages((prev) =>
           prev.map((m) =>
             m._id === optId
-              ? { ...m, pending: false, text: "Image failed to send" }
+              ? {
+                  ...m,
+                  pending: false,
+                  failed: true,
+                  text: "Image failed to send",
+                }
               : m,
           ),
         );
@@ -3878,7 +4097,12 @@ export default function MessageScreen() {
       setMessages((prev) =>
         prev.map((m) =>
           m._id === optId
-            ? { ...m, pending: false, text: "Image failed to send" }
+            ? {
+                ...m,
+                pending: false,
+                failed: true,
+                text: "Image failed to send",
+              }
             : m,
         ),
       );
@@ -3946,9 +4170,17 @@ export default function MessageScreen() {
     try {
       const token = await getAuthToken();
       if (!token) return null;
+      const encoding =
+        (FileSystem as any).EncodingType?.Base64 ||
+        (FileSystem as any).EncodingType?.base64 ||
+        "base64";
       const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+        encoding,
+      } as any);
+      if (!base64) {
+        console.error("Audio upload failed: empty base64");
+        return null;
+      }
       const ext = uri.split(".").pop()?.toLowerCase()?.split("?")[0] || "m4a";
       const mimeType =
         ext === "mp3"
@@ -3961,18 +4193,24 @@ export default function MessageScreen() {
                 ? "audio/x-caf"
                 : ext === "ogg"
                   ? "audio/ogg"
-                  : "audio/m4a";
+                  : ext === "webm"
+                    ? "audio/webm"
+                    : "audio/mp4";
       const dataUri = `data:${mimeType};base64,${base64}`;
 
-      const res = await fetch(`${getApiBase()}/api/upload/audio`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const res = await fetchWithTimeout(
+        `${getApiBase()}/api/upload/audio`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ base64: dataUri }),
         },
-        body: JSON.stringify({ base64: dataUri }),
-      });
-      const json = await res.json();
+        UPLOAD_FETCH_TIMEOUT_MS,
+      );
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         console.error("Audio upload failed", json?.error || res.status);
         return null;
@@ -3985,62 +4223,92 @@ export default function MessageScreen() {
   };
 
   async function startRecording() {
+    if (recordingRef.current || isRecording) return;
     if (!requireMediaUnlocked()) return;
 
-    const keepKeyboard = isKeyboardVisible;
-
-    const perm = await getRecordingPermissionsAsync();
-    if (perm.status !== "granted") {
-      const np = await requestRecordingPermissionsAsync();
-      if (np.status !== "granted") return;
-    }
-    await setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-      interruptionMode: "doNotMix",
-    });
-    const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
-    await rec.prepareToRecordAsync();
-    rec.record();
-    setRecording(rec);
-    setIsRecording(true);
-    setRecordingDuration(0);
-    const tick = setInterval(() => {
-      try {
-        const st = rec.getStatus();
-        if (st?.isRecording) setRecordingDuration(st.durationMillis || 0);
-      } catch {
-        /* ignore */
+    try {
+      const perm = await getRecordingPermissionsAsync();
+      if (perm.status !== "granted") {
+        const np = await requestRecordingPermissionsAsync();
+        if (np.status !== "granted") {
+          showAlert({
+            title: "Microphone",
+            message: "Allow microphone access to send voice messages.",
+            icon: "mic",
+          });
+          return;
+        }
       }
-    }, 200);
-    (rec as any).__durationTick = tick;
 
-    if (keepKeyboard) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-      setTimeout(() => inputRef.current?.focus(), 80);
+      // Reclaim session after voice/video calls (InCallManager / WebRTC)
+      await prepareChatRecordingAudio();
+
+      const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      await rec.prepareToRecordAsync();
+      rec.record();
+      recordingRef.current = rec;
+      setRecording(rec);
+      setIsRecording(true);
+      setRecordingDuration(0);
+      const tick = setInterval(() => {
+        try {
+          const st = rec.getStatus();
+          if (st?.isRecording) setRecordingDuration(st.durationMillis || 0);
+        } catch {
+          /* ignore */
+        }
+      }, 200);
+      (rec as any).__durationTick = tick;
+    } catch (e) {
+      console.error("startRecording failed", e);
+      recordingRef.current = null;
+      setIsRecording(false);
+      setRecording(null);
+      showAlert({
+        title: "Voice message",
+        message:
+          "Could not start recording. Close any call screen and try again.",
+        icon: "mic",
+      });
+      void restoreChatPlaybackAudio();
     }
   }
 
   async function stopRecording() {
-    if (!recording) return;
+    const rec = recordingRef.current;
+    if (!rec) return;
     setIsRecording(false);
-    if ((recording as any).__durationTick) {
-      clearInterval((recording as any).__durationTick);
+    if ((rec as any).__durationTick) {
+      clearInterval((rec as any).__durationTick);
     }
-    await recording.stop();
-    await setAudioModeAsync({
-      allowsRecording: false,
-      playsInSilentMode: true,
-      interruptionMode: "duckOthers",
-      shouldRouteThroughEarpiece: false,
-    });
-    const uri = recording.uri;
+    try {
+      await rec.stop();
+    } catch (e) {
+      console.warn("recording.stop", e);
+    }
+    await restoreChatPlaybackAudio();
+    const uri = rec.uri;
+    recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
-    if (!uri) return;
+    if (!uri) {
+      showAlert({
+        title: "Voice message",
+        message: "Recording was empty. Hold a moment longer, then tap stop.",
+        icon: "mic",
+      });
+      return;
+    }
 
-    const allowed = await requireChatAccess();
-    if (!allowed) return;
+    if (
+      chatAccess &&
+      !chatAccess.unlimitedChat &&
+      !chatAccess.hasActiveSession &&
+      chatAccess.canChat === false
+    ) {
+      showInsufficientTokensPopup();
+      return;
+    }
 
     const optId = `voice-${Date.now()}`;
     const reply = sanitizeReplyQuote(replyingTo);
@@ -4083,26 +4351,39 @@ export default function MessageScreen() {
       setMessages((prev) =>
         prev.map((m) =>
           m._id === optId
-            ? { ...m, pending: false, text: "Voice failed to send" }
+            ? {
+                ...m,
+                pending: false,
+                failed: true,
+                text: "Voice failed to send",
+              }
             : m,
         ),
       );
+      showAlert({
+        title: "Voice message",
+        message: uploadedUrl
+          ? "Not connected. Check your internet and try again."
+          : "Upload failed. Check your internet and try again.",
+        icon: "mic",
+      });
     }
   }
 
   async function cancelRecording() {
-    if (!recording) return;
+    const rec = recordingRef.current;
+    if (!rec) return;
     setIsRecording(false);
-    if ((recording as any).__durationTick) {
-      clearInterval((recording as any).__durationTick);
+    if ((rec as any).__durationTick) {
+      clearInterval((rec as any).__durationTick);
     }
-    await recording.stop();
-    await setAudioModeAsync({
-      allowsRecording: false,
-      playsInSilentMode: true,
-      interruptionMode: "duckOthers",
-      shouldRouteThroughEarpiece: false,
-    });
+    try {
+      await rec.stop();
+    } catch {
+      /* ignore */
+    }
+    await restoreChatPlaybackAudio();
+    recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
   }
@@ -4250,6 +4531,16 @@ export default function MessageScreen() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
+      <Animated.View
+        style={[
+          styles.chatLeaveLayer,
+          {
+            opacity: chatLeaveOpacity,
+            transform: [{ scale: chatLeaveScale }],
+          },
+        ]}
+        pointerEvents={callUiBlocking ? "none" : "auto"}
+      >
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView edges={["top"]} style={{ backgroundColor: "#FFFFFF" }}>
         {selectionMode ? (
@@ -4384,6 +4675,7 @@ export default function MessageScreen() {
                     });
                     return;
                   }
+                  // Offline: still place the call — server leaves a missed-call chat line
                   void startMediaCall({
                     userId: String(id),
                     name:
@@ -4815,39 +5107,50 @@ export default function MessageScreen() {
                 ) : null}
 
                 <TouchableOpacity
-                  onPress={
-                    showSendIcon
-                      ? sendMessage
-                      : isRecording
-                        ? stopRecording
-                        : friendshipStatus?.theyBlocked
-                          ? () =>
-                              showAlert({
-                                title: "Text only",
-                                message:
-                                  "Only text messages can be sent right now.",
-                                icon: "ban",
-                              })
-                          : startRecording
-                  }
+                  onPress={() => {
+                    if (showSendIcon) {
+                      void sendMessage();
+                      return;
+                    }
+                    if (isRecording) {
+                      void stopRecording();
+                      return;
+                    }
+                    if (friendshipStatus?.theyBlocked) {
+                      showAlert({
+                        title: "Text only",
+                        message:
+                          "Only text messages can be sent right now.",
+                        icon: "ban",
+                      });
+                      return;
+                    }
+                    if (
+                      !conversationStatus.canSend &&
+                      !friendshipStatus?.theyBlocked
+                    ) {
+                      showAlert({
+                        title: "Waiting for reply",
+                        message:
+                          conversationStatus.message ||
+                          "Wait for them to reply before sending more.",
+                        icon: "chatbubbles",
+                      });
+                      return;
+                    }
+                    void startRecording();
+                  }}
                   style={[
                     styles.sendButton,
-                    !conversationStatus.canSend &&
-                      !friendshipStatus?.theyBlocked &&
+                    !showSendIcon &&
+                      !isRecording &&
+                      (!isMediaUnlocked ||
+                        (!conversationStatus.canSend &&
+                          !friendshipStatus?.theyBlocked)) &&
                       styles.sendButtonDisabled,
                   ]}
                   activeOpacity={0.6}
-                  disabled={
-                    !conversationStatus.canSend &&
-                    !friendshipStatus?.theyBlocked &&
-                    !isRecording
-                  }
                   delayPressIn={0}
-                  onPressIn={() => {
-                    if (!showSendIcon && !isRecording) {
-                      inputRef.current?.focus();
-                    }
-                  }}
                 >
                   <LinearGradient
                     colors={[...LUVSTOR_GRADIENT]}
@@ -5022,7 +5325,7 @@ export default function MessageScreen() {
       {/* Chat Options — full page (same as profile Options) */}
       <Modal
         visible={menuOpen}
-        animationType="slide"
+        animationType="none"
         presentationStyle="fullScreen"
         statusBarTranslucent
         onRequestClose={() => {
@@ -5033,7 +5336,12 @@ export default function MessageScreen() {
           else closeChatMenu();
         }}
       >
-        <View style={styles.optionsPage}>
+        <View
+          style={styles.optionsPage}
+          collapsable={false}
+          renderToHardwareTextureAndroid
+          shouldRasterizeIOS
+        >
           <View
             style={[
               styles.optionsHeader,
@@ -5057,7 +5365,7 @@ export default function MessageScreen() {
           <View
             style={[
               styles.optionsBody,
-              { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+              { paddingBottom: getSheetBottomPadding(insets.bottom) },
             ]}
           >
             <View style={styles.optionsAvatarBlock}>
@@ -5192,20 +5500,6 @@ export default function MessageScreen() {
                   {optionsAlert.message}
                 </Text>
                 <View style={styles.optAlertActions}>
-                  {optionsAlert.cancelText ? (
-                    <>
-                      <TouchableOpacity
-                        style={styles.optAlertBtn}
-                        onPress={() => setOptionsAlert(null)}
-                        activeOpacity={0.55}
-                      >
-                        <Text style={styles.optAlertBtnCancel}>
-                          {optionsAlert.cancelText}
-                        </Text>
-                      </TouchableOpacity>
-                      <View style={styles.optAlertVDivider} />
-                    </>
-                  ) : null}
                   <TouchableOpacity
                     style={styles.optAlertBtn}
                     onPress={() => {
@@ -5225,6 +5519,20 @@ export default function MessageScreen() {
                       {optionsAlert.confirmText}
                     </Text>
                   </TouchableOpacity>
+                  {optionsAlert.cancelText ? (
+                    <>
+                      <View style={styles.optAlertVDivider} />
+                      <TouchableOpacity
+                        style={styles.optAlertBtn}
+                        onPress={() => setOptionsAlert(null)}
+                        activeOpacity={0.55}
+                      >
+                        <Text style={styles.optAlertBtnCancel}>
+                          {optionsAlert.cancelText}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : null}
                 </View>
               </View>
             </View>
@@ -5241,7 +5549,7 @@ export default function MessageScreen() {
                 style={[
                   styles.optSheet,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16),
+                    paddingBottom: getSheetBottomPadding(insets.bottom),
                     transform: [
                       {
                         translateY: optionsSheetAnim.interpolate({
@@ -5315,7 +5623,7 @@ export default function MessageScreen() {
                 style={[
                   styles.optSheet,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16),
+                    paddingBottom: getSheetBottomPadding(insets.bottom),
                     transform: [
                       {
                         translateY: optionsSheetAnim.interpolate({
@@ -5387,7 +5695,7 @@ export default function MessageScreen() {
                 style={[
                   styles.optSheet,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16),
+                    paddingBottom: getSheetBottomPadding(insets.bottom),
                     transform: [
                       {
                         translateY: optionsSheetAnim.interpolate({
@@ -5447,12 +5755,14 @@ export default function MessageScreen() {
           ) : null}
         </View>
       </Modal>
+      </Animated.View>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#ECE5DD", position: "relative" },
+  chatLeaveLayer: { flex: 1 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -5627,7 +5937,7 @@ const styles = StyleSheet.create({
   optAlertCard: {
     width: "100%",
     maxWidth: 300,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderRadius: 16,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
@@ -5683,7 +5993,7 @@ const styles = StyleSheet.create({
   },
   optSheet: {
     width: "100%",
-    backgroundColor: "#FDF8FF",
+    backgroundColor: "#E4E6EB",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 14,
@@ -5980,6 +6290,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  callEventRow: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+  },
+  callEventChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(17, 27, 33, 0.06)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    maxWidth: "90%",
+  },
+  callEventText: {
+    color: "#667781",
+    fontSize: 12.5,
+    fontWeight: "600",
+  },
   highlightedMessageRow: {
     backgroundColor: "rgba(103, 80, 164, 0.18)",
   },
@@ -6065,6 +6397,12 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   myMessageTime: { color: "rgba(255,255,255,0.75)" },
+  failedRetryLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    lineHeight: 14,
+    color: "#F15C6D",
+  },
   otherMessageTime: { color: "#667781" },
   singleDeliveryTick: {
     marginLeft: 3,

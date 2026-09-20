@@ -332,7 +332,7 @@ test('calling an offline friend reports OFFLINE rather than hanging', async (t) 
   const callee = await makeUser(devB);
   await befriend(caller, callee);
 
-  // callee never connects
+  // callee never connects — voice requires online
   const sockA = await connectClient(tokenFor(caller, devA));
 
   try {

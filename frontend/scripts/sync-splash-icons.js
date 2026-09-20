@@ -16,9 +16,10 @@ const resRoot = path.join(root, "android", "app", "src", "main", "res");
 const SPLASH = path.join(root, "assets", "images", "spashscreen.png");
 const ICON = path.join(root, "assets", "images", "app-icon.png");
 const MONO = path.join(root, "assets", "images", "android-icon-monochrome.png");
-const PURPLE = "#370372";
-const SPLASH_BG = "#FFFFFF";
-const IMAGE_WIDTH = 160;
+const PURPLE = "#5A2FC7";
+/** Match adaptive icon background so splash ↔ icon feel continuous. */
+const SPLASH_BG = PURPLE;
+const IMAGE_WIDTH = 220;
 
 const SPLASH_DPI = {
   mdpi: 1,
@@ -123,6 +124,21 @@ async function main() {
     console.warn("android/ res missing — skip native sync (run expo prebuild later)");
     return;
   }
+
+  // Adaptive icons reference @color/iconBackground — must exist or AAPT fails
+  const colorsPath = path.join(resRoot, "values", "colors.xml");
+  fs.mkdirSync(path.dirname(colorsPath), { recursive: true });
+  fs.writeFileSync(
+    colorsPath,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<resources>
+  <color name="splashscreen_background">${SPLASH_BG}</color>
+  <color name="iconBackground">${PURPLE}</color>
+</resources>
+`,
+  );
+  console.log("✔ colors.xml (splash + iconBackground)");
+
   await writeSplash();
   await writeIcons();
   console.log("\nDone. Rebuild the APK to see splash + icon on device.");

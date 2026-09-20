@@ -634,6 +634,17 @@ router.get("/profile/:userId", auth, async (req, res) => {
 
     const sub = serializeSubscription(user);
 
+    const { mongoLooksOnline } = require("../utils/onlineStatus");
+    const presence = require("../utils/presence");
+    let isOnline = false;
+    if (!safe.privacyHidden) {
+      try {
+        isOnline = !!(await presence.isUserOnline(String(safe._id || safe.id)));
+      } catch {
+        isOnline = mongoLooksOnline(safe);
+      }
+    }
+
     // Return LIMITED profile (safe for discovery/matching)
     res.json({
       id: safe._id || safe.id,
@@ -648,7 +659,7 @@ router.get("/profile/:userId", auth, async (req, res) => {
       interests: safe.interests || [],
       height: safe.height ?? null,
       relationshipGoal: safe.relationshipGoal || "",
-      isOnline: safe.privacyHidden ? false : !!safe.isOnline,
+      isOnline,
       lastSeen: safe.privacyHidden ? null : safe.lastSeen || null,
       photoVerified:
         !safe.privacyHidden && safe.photoVerification?.status === "approved",
@@ -738,6 +749,15 @@ router.get("/search-by-id", auth, async (req, res) => {
 
     const sub = serializeSubscription(user);
 
+    const { mongoLooksOnline } = require("../utils/onlineStatus");
+    const presence = require("../utils/presence");
+    let isOnline = false;
+    try {
+      isOnline = !!(await presence.isUserOnline(String(user._id)));
+    } catch {
+      isOnline = mongoLooksOnline(user);
+    }
+
     res.json({
       id: user._id,
       publicId: user.publicId || "",
@@ -751,7 +771,7 @@ router.get("/search-by-id", auth, async (req, res) => {
       interests: user.interests,
       height: user.height,
       relationshipGoal: user.relationshipGoal || "",
-      isOnline: user.isOnline,
+      isOnline,
       lastSeen: user.lastSeen,
       distance: Number.isFinite(distM) ? Math.round(distM) : null,
       distanceKm: Number.isFinite(distM) ? (distM / 1000).toFixed(1) : null,

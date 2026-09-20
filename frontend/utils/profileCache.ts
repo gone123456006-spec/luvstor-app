@@ -1,4 +1,4 @@
-import { apiRequest, getApiBase } from './api';
+import { apiRequest } from './api';
 import {
   AuthUser,
   getAuthToken,
@@ -12,7 +12,30 @@ import { resolveMediaUrl } from './media';
 
 function toAbsolute(url?: string | null) {
   if (!url) return '';
-  return resolveMediaUrl(url) || `${getApiBase()}${url.startsWith('/') ? url : `/${url}`}`;
+  return resolveMediaUrl(url) || url;
+}
+
+/** Persist uploads as relative paths so host/port changes don't break media. */
+function toStoredMediaPath(url?: string | null): string {
+  if (!url) return '';
+  const clean = String(url).trim().split('?')[0];
+  if (!clean) return '';
+  if (
+    clean.startsWith('file://') ||
+    clean.startsWith('content://') ||
+    clean.startsWith('data:')
+  ) {
+    return clean;
+  }
+  try {
+    const parsed = new URL(clean);
+    if (parsed.pathname.startsWith('/uploads/')) return parsed.pathname;
+    return clean; // Google / CDN — keep absolute
+  } catch {
+    /* relative */
+  }
+  if (clean.startsWith('/uploads/')) return clean;
+  return clean;
 }
 
 export type ProfileScreenSnapshot = {
@@ -77,8 +100,11 @@ async function snapshotFromLocal(
   if (!isValidPublicId(profile.publicId)) {
     profile.publicId = '';
   }
-  profile.photo = toAbsolute(profile.photo);
-  profile.coverPhoto = toAbsolute(profile.coverPhoto);
+  // Resolve for display — do not bake absolute LAN hosts into storage later
+  const displayPhoto = toAbsolute(profile.photo);
+  const displayCover = toAbsolute(profile.coverPhoto);
+  profile.photo = displayPhoto;
+  profile.coverPhoto = displayCover;
 
   const gallery = Array.isArray(profile.photos)
     ? profile.photos.map(toAbsolute).filter(Boolean)
@@ -87,7 +113,7 @@ async function snapshotFromLocal(
   return {
     profile,
     gallery,
-    coverPhoto: toAbsolute(profile.coverPhoto),
+    coverPhoto: displayCover,
     subscriptionBadge: cached?.subscriptionBadge ?? null,
     subscriptionExpiresAt: cached?.subscriptionExpiresAt ?? null,
     at: Date.now(),
@@ -131,9 +157,14 @@ export async function buildProfileSnapshot(
     interests: me?.interests || profile?.interests,
     relationshipGoal: me?.relationshipGoal || profile?.relationshipGoal,
     height: me?.height ?? profile?.height,
-    photo: toAbsolute(me?.photo || profile?.photo),
-    coverPhoto: coverPhoto || null,
-    photos: Array.isArray(me?.photos) ? me.photos : profile?.photos,
+    // Store relative /uploads paths (or remote absolutes) — resolve at display time
+    photo: toStoredMediaPath(me?.photo || profile?.photo),
+    coverPhoto: toStoredMediaPath(coverPhoto || me?.coverPhoto || profile?.coverPhoto),
+    photos: Array.isArray(me?.photos)
+      ? me.photos.map(toStoredMediaPath).filter(Boolean)
+      : Array.isArray(profile?.photos)
+        ? profile.photos.map(toStoredMediaPath).filter(Boolean)
+        : [],
     userId: String(me?.id || me?._id || profile?.userId || authUser.id || ''),
     publicId: isValidPublicId(serverPublicId) ? serverPublicId : '',
     photoVerification: pv
@@ -147,7 +178,19 @@ export async function buildProfileSnapshot(
   };
 
   await saveLocalProfile(authUser.email, next);
-  profile = next;
+
+  // UI snapshot uses resolved absolute URLs
+  const displayProfile: StoredProfile = {
+    ...next,
+    photo: toAbsolute(next.photo),
+    coverPhoto: toAbsolute(next.coverPhoto),
+    photos: Array.isArray(next.photos)
+      ? next.photos.map(toAbsolute).filter(Boolean)
+      : [],
+  };
+  profile = displayProfile;
+  gallery = displayProfile.photos || gallery;
+  coverPhoto = toAbsolute(next.coverPhoto) || coverPhoto;
 
   if (me?.subscription?.isActive && me?.subscription?.badge) {
     subscriptionBadge = me.subscription.badge;

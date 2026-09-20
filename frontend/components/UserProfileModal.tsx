@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import React from "react";
 import {
@@ -20,10 +19,12 @@ import {
 import { MAX_PROFILE_GALLERY } from "../constants/profile";
 import { getAuthToken, isValidPublicId } from "../utils/auth";
 import { blockUser, ReportReason, reportUser } from "../utils/friends";
-import { resolveMediaUrl } from "../utils/media";
+import { mediaIdentity, resolveMediaUrl } from "../utils/media";
+import { getSheetBottomPadding } from "../utils/navigation";
 import { showMeLabel } from "../utils/showMe";
 import { useAppAlert } from "./AppAlert";
 import CopyablePublicId, { sharePublicProfile } from "./CopyablePublicId";
+import MediaImage, { prefetchMedia } from "./MediaImage";
 import ProfileInstagramSection from "./ProfileInstagramSection";
 import ProfilePhotoViewer from "./ProfilePhotoViewer";
 import WhatsAppAvatar, {
@@ -106,6 +107,77 @@ interface UserProfile {
   photoVerified?: boolean;
 }
 
+
+/** Same media file even if host/query differs — used to freeze DP/cover/posts. */
+function sameMedia(a?: string | null, b?: string | null): boolean {
+  const ia = mediaIdentity(a);
+  const ib = mediaIdentity(b);
+  if (ia && ib) return ia === ib;
+  return String(a || "").trim() === String(b || "").trim();
+}
+
+/**
+ * Merge incoming profile updates without swapping media URL strings when the
+ * underlying file is unchanged. Returns `prev` unchanged when nothing visible
+ * changed — avoids re-render loops that flip the screen.
+ */
+function mergeStableUser(
+  prev: UserProfile | null,
+  next: UserProfile,
+): UserProfile {
+  if (!prev || prev.id !== next.id) return next;
+
+  const nextPhotos = Array.isArray(next.photos) ? next.photos : [];
+  const prevPhotos = Array.isArray(prev.photos) ? prev.photos : [];
+
+  let photos = nextPhotos;
+  if (nextPhotos.length === 0 && prevPhotos.length > 0) {
+    photos = prevPhotos;
+  } else if (
+    nextPhotos.length === prevPhotos.length &&
+    nextPhotos.every((p, i) => sameMedia(p, prevPhotos[i]))
+  ) {
+    photos = prevPhotos;
+  }
+
+  const photo = sameMedia(prev.photo, next.photo) ? prev.photo : next.photo;
+  const coverPhoto = sameMedia(prev.coverPhoto, next.coverPhoto)
+    ? prev.coverPhoto
+    : next.coverPhoto;
+
+  const merged: UserProfile = {
+    ...next,
+    photo,
+    coverPhoto,
+    photos,
+  };
+
+  if (
+    merged.name === prev.name &&
+    merged.age === prev.age &&
+    merged.bio === prev.bio &&
+    merged.photo === prev.photo &&
+    merged.coverPhoto === prev.coverPhoto &&
+    merged.photos === prev.photos &&
+    merged.gender === prev.gender &&
+    merged.isOnline === prev.isOnline &&
+    merged.iLiked === prev.iLiked &&
+    merged.areFriends === prev.areFriends &&
+    merged.theyLiked === prev.theyLiked &&
+    merged.friendshipStatus === prev.friendshipStatus &&
+    merged.subscriptionBadge === prev.subscriptionBadge &&
+    merged.photoVerified === prev.photoVerified &&
+    merged.distanceKm === prev.distanceKm &&
+    merged.relationshipGoal === prev.relationshipGoal &&
+    merged.height === prev.height &&
+    merged.showMe === prev.showMe
+  ) {
+    return prev;
+  }
+
+  return merged;
+}
+
 interface Props {
   visible: boolean;
   user: UserProfile | null;
@@ -118,7 +190,7 @@ interface Props {
   likingInProgress?: boolean;
 }
 
-export default function UserProfileModal({
+function UserProfileModal({
   visible,
   user,
   onClose,
@@ -144,6 +216,18 @@ export default function UserProfileModal({
   const [actionBusy, setActionBusy] = React.useState(false);
   const waSheetAnim = React.useRef(new Animated.Value(0)).current;
   const waSheetVisible = blockConfirmOpen || reportOpen || reasonPickerOpen;
+  /** While Options/Info open, ignore parent user churn (presence) — stops loop blink. */
+  const overlayOpenRef = React.useRef(false);
+  overlayOpenRef.current = menuOpen || infoVisible;
+
+  // Keep last known user so the Modal never unmounts mid-open / mid-fetch.
+  const [displayUser, setDisplayUser] = React.useState<UserProfile | null>(user);
+
+  React.useEffect(() => {
+    if (!user) return;
+    if (overlayOpenRef.current) return;
+    setDisplayUser((prev) => mergeStableUser(prev, user));
+  }, [user]);
 
   React.useEffect(() => {
     if (!waSheetVisible) {
@@ -176,21 +260,33 @@ export default function UserProfileModal({
   }, [visible, user?.id, user?.iLiked, user?.areFriends]);
 
   const gallery = React.useMemo(() => {
-    if (!user) return [] as string[];
+    if (!displayUser) return [] as string[];
     const seen = new Set<string>();
     const list: string[] = [];
-    const toUrl = (url?: string) => resolveMediaUrl(url) || url || "";
-    for (const url of user.photos || []) {
-      const resolved = toUrl(url);
+    for (const url of displayUser.photos || []) {
+      const resolved = resolveMediaUrl(url) || url || "";
       if (!resolved) continue;
-      const key = String(resolved).split("?")[0];
+      const key = mediaIdentity(resolved) || resolved;
       if (seen.has(key)) continue;
       seen.add(key);
       list.push(resolved);
       if (list.length >= MAX_PROFILE_GALLERY) break;
     }
     return list;
-  }, [user?.photos]);
+  }, [displayUser?.id, displayUser?.photos]);
+
+  React.useEffect(() => {
+    if (!visible || !displayUser) return;
+    prefetchMedia(displayUser.photo);
+    prefetchMedia(displayUser.coverPhoto);
+    for (const uri of gallery) prefetchMedia(uri);
+  }, [
+    visible,
+    displayUser?.id,
+    displayUser?.photo,
+    displayUser?.coverPhoto,
+    gallery,
+  ]);
 
   React.useEffect(() => {
     if (!visible) {
@@ -207,16 +303,19 @@ export default function UserProfileModal({
     }
   }, [visible]);
 
-  if (!user) return null;
+  if (!visible || !displayUser) return null;
 
-  const displayName = getDisplayName(user.name, user.publicId);
+  const displayName = getDisplayName(displayUser.name, displayUser.publicId);
   const alreadyLiked = likedLocal;
   const coverUri =
-    resolveMediaUrl(user.coverPhoto) || user.coverPhoto || null;
+    resolveMediaUrl(displayUser.coverPhoto) || displayUser.coverPhoto || null;
   const coverHeight = 148 + Math.max(insets.top, 0);
-  const avatarPhoto = resolveMediaUrl(user.photo) || user.photo || "";
+  const avatarPhoto = displayUser.photo || "";
 
-  const rawKm = user.distanceKm != null ? String(user.distanceKm).trim() : "";
+  const rawKm =
+    displayUser.distanceKm != null
+      ? String(displayUser.distanceKm).trim()
+      : "";
   const kmFromField =
     rawKm && rawKm !== "?" ? rawKm.replace(/\s*km$/i, "").trim() : "";
   // Only show distance when the list/API provided distanceKm (nearby only).
@@ -228,28 +327,28 @@ export default function UserProfileModal({
       icon: "person" as const,
       color: "#9C27B0",
       title: "Gender",
-      value: user.gender,
+      value: displayUser.gender,
     },
     {
       icon: "resize" as const,
       color: "#FF9800",
       title: "Height",
-      value: user.height ? `${user.height} cm` : undefined,
+      value: displayUser.height ? `${displayUser.height} cm` : undefined,
     },
     {
       icon: "heart" as const,
       color: "#FF4B6E",
       title: "Looking for",
-      value: user.relationshipGoal
-        ? `${GOAL_EMOJIS[user.relationshipGoal] || ""} ${user.relationshipGoal}`.trim()
+      value: displayUser.relationshipGoal
+        ? `${GOAL_EMOJIS[displayUser.relationshipGoal] || ""} ${displayUser.relationshipGoal}`.trim()
         : undefined,
     },
     {
       icon: "people" as const,
       color: "#2196F3",
       title: "Show me",
-      value: user.showMe
-        ? showMeLabel(user.gender, user.showMe)
+      value: displayUser.showMe
+        ? showMeLabel(displayUser.gender, displayUser.showMe)
         : undefined,
     },
     {
@@ -260,7 +359,7 @@ export default function UserProfileModal({
     },
   ];
 
-  const optionsInterests = (user.interests || []).filter(Boolean);
+  const optionsInterests = (displayUser.interests || []).filter(Boolean);
 
   const showViewer = (uris: string[], index: number, title: string) => {
     const clean = uris.filter(Boolean);
@@ -280,7 +379,7 @@ export default function UserProfileModal({
 
   const handleLikeToggle = () => {
     if (likingInProgress) return;
-    if (user.areFriends) {
+    if (displayUser.areFriends) {
       onUnlike?.();
       return;
     }
@@ -293,7 +392,7 @@ export default function UserProfileModal({
   const handleShare = () => {
     closeMenuNow();
     void sharePublicProfile({
-      publicId: user.publicId,
+      publicId: displayUser.publicId,
       name: displayName,
     });
   };
@@ -305,9 +404,9 @@ export default function UserProfileModal({
     try {
       const token = await getAuthToken();
       if (!token) return;
-      await blockUser(token, user.id);
+      await blockUser(token, displayUser.id);
       closeMenuNow();
-      onBlocked?.(user.id);
+      onBlocked?.(displayUser.id);
       onClose();
       setTimeout(() => {
         showAlert({
@@ -355,10 +454,10 @@ export default function UserProfileModal({
     try {
       const token = await getAuthToken();
       if (!token) return;
-      await reportUser(token, user.id, reason, { alsoBlock });
+      await reportUser(token, displayUser.id, reason, { alsoBlock });
       closeMenuNow();
       if (alsoBlock) {
-        onBlocked?.(user.id);
+        onBlocked?.(displayUser.id);
         onClose();
       }
       setTimeout(() => {
@@ -387,7 +486,7 @@ export default function UserProfileModal({
     <>
       <Modal
         visible={visible}
-        animationType="slide"
+        animationType="none"
         presentationStyle="fullScreen"
         onRequestClose={() => {
           if (reasonPickerOpen) setReasonPickerOpen(false);
@@ -446,8 +545,8 @@ export default function UserProfileModal({
                 disabled={!coverUri}
               >
                 {coverUri ? (
-                  <Image
-                    source={{ uri: coverUri }}
+                  <MediaImage
+                    uri={coverUri}
                     style={{ width: "100%", height: coverHeight }}
                     contentFit="cover"
                     cachePolicy="memory-disk"
@@ -467,28 +566,29 @@ export default function UserProfileModal({
                 <TouchableOpacity
                   style={styles.avatarWrap}
                   onPress={() => {
-                    if (avatarPhoto) showViewer([avatarPhoto], 0, displayName);
+                    const uri = resolveMediaUrl(avatarPhoto) || avatarPhoto;
+                    if (uri) showViewer([uri], 0, displayName);
                   }}
                   activeOpacity={0.85}
                   disabled={!avatarPhoto}
                 >
                   <WhatsAppAvatar
                     photo={avatarPhoto || undefined}
-                    name={user.name}
-                    publicId={user.publicId}
+                    name={displayUser.name}
+                    publicId={displayUser.publicId}
                     size={78}
-                    online={!!user.isOnline}
-                    badge={user.subscriptionBadge}
-                    badgeExpiresAt={user.subscriptionExpiresAt}
-                    photoVerified={!!user.photoVerified}
+                    online={!!displayUser.isOnline}
+                    badge={displayUser.subscriptionBadge}
+                    badgeExpiresAt={displayUser.subscriptionExpiresAt}
+                    photoVerified={!!displayUser.photoVerified}
                   />
                 </TouchableOpacity>
                 <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <Text style={styles.userName}>
                     {displayName}
-                    {user.age ? `, ${user.age}` : ""}
+                    {displayUser.age ? `, ${displayUser.age}` : ""}
                   </Text>
-                  {user.photoVerified ? (
+                  {displayUser.photoVerified ? (
                     <Ionicons
                       name="shield-checkmark"
                       size={18}
@@ -498,7 +598,7 @@ export default function UserProfileModal({
                   ) : null}
                 </View>
                 <CopyablePublicId
-                  publicId={user.publicId}
+                  publicId={displayUser.publicId}
                   name={displayName}
                   showShare={false}
                 />
@@ -506,9 +606,9 @@ export default function UserProfileModal({
             </View>
 
             <ProfileInstagramSection
-              bio={user.bio}
-              relationshipGoal={user.relationshipGoal}
-              interests={user.interests}
+              bio={displayUser.bio}
+              relationshipGoal={displayUser.relationshipGoal}
+              interests={displayUser.interests}
               gallery={gallery}
               maxSlots={MAX_PROFILE_GALLERY}
               onPhotoPress={openPhotoViewer}
@@ -539,7 +639,7 @@ export default function UserProfileModal({
                     alreadyLiked && { color: "#FF4B6E" },
                   ]}
                 >
-                  {user.areFriends
+                  {displayUser.areFriends
                     ? "Friends"
                     : alreadyLiked
                       ? "Liked"
@@ -571,14 +671,10 @@ export default function UserProfileModal({
 
           {menuOpen ? (
             <View
-              style={[
-                styles.optionsPage,
-                {
-                  width: Dimensions.get("window").width,
-                  height: Dimensions.get("window").height,
-                },
-              ]}
+              style={styles.optionsPage}
               collapsable={false}
+              renderToHardwareTextureAndroid
+              shouldRasterizeIOS
             >
               <View
                 style={[
@@ -606,7 +702,7 @@ export default function UserProfileModal({
                 style={styles.optionsScroll}
                 contentContainerStyle={[
                   styles.optionsScrollContent,
-                  { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+                  { paddingBottom: getSheetBottomPadding(insets.bottom) },
                 ]}
                 bounces={false}
                 showsVerticalScrollIndicator={false}
@@ -614,13 +710,13 @@ export default function UserProfileModal({
                 <View style={styles.optionsAvatarBlock}>
                   <WhatsAppAvatar
                     photo={avatarPhoto || undefined}
-                    name={user.name}
-                    publicId={user.publicId}
+                    name={displayUser.name}
+                    publicId={displayUser.publicId}
                     size={96}
-                    online={!!user.isOnline}
-                    badge={user.subscriptionBadge}
-                    badgeExpiresAt={user.subscriptionExpiresAt}
-                    photoVerified={!!user.photoVerified}
+                    online={!!displayUser.isOnline}
+                    badge={displayUser.subscriptionBadge}
+                    badgeExpiresAt={displayUser.subscriptionExpiresAt}
+                    photoVerified={!!displayUser.photoVerified}
                   />
                   <Text style={styles.optionsUserName} numberOfLines={1}>
                     {displayName}
@@ -670,13 +766,7 @@ export default function UserProfileModal({
               {/* Block — WhatsApp-style sheet */}
               {blockConfirmOpen ? (
                 <View
-                  style={[
-                    styles.waSheetOverlay,
-                    {
-                      width: Dimensions.get("window").width,
-                      height: Dimensions.get("window").height,
-                    },
-                  ]}
+                  style={styles.waSheetOverlay}
                   pointerEvents="box-none"
                 >
                   <Pressable
@@ -687,7 +777,7 @@ export default function UserProfileModal({
                     style={[
                       styles.waSheet,
                       {
-                        paddingBottom: Math.max(insets.bottom, 16),
+                        paddingBottom: getSheetBottomPadding(insets.bottom),
                         transform: [
                           {
                             translateY: waSheetAnim.interpolate({
@@ -762,13 +852,7 @@ export default function UserProfileModal({
               {/* Report — WhatsApp-style sheet */}
               {reportOpen ? (
                 <View
-                  style={[
-                    styles.waSheetOverlay,
-                    {
-                      width: Dimensions.get("window").width,
-                      height: Dimensions.get("window").height,
-                    },
-                  ]}
+                  style={styles.waSheetOverlay}
                   pointerEvents="box-none"
                 >
                   <Pressable
@@ -779,7 +863,7 @@ export default function UserProfileModal({
                     style={[
                       styles.waSheet,
                       {
-                        paddingBottom: Math.max(insets.bottom, 16),
+                        paddingBottom: getSheetBottomPadding(insets.bottom),
                         transform: [
                           {
                             translateY: waSheetAnim.interpolate({
@@ -852,13 +936,7 @@ export default function UserProfileModal({
               {/* Report reason picker — same sheet UI as Block/Report */}
               {reasonPickerOpen ? (
                 <View
-                  style={[
-                    styles.waSheetOverlay,
-                    {
-                      width: Dimensions.get("window").width,
-                      height: Dimensions.get("window").height,
-                    },
-                  ]}
+                  style={styles.waSheetOverlay}
                   pointerEvents="box-none"
                 >
                   <Pressable
@@ -869,7 +947,7 @@ export default function UserProfileModal({
                     style={[
                       styles.waSheet,
                       {
-                        paddingBottom: Math.max(insets.bottom, 16),
+                        paddingBottom: getSheetBottomPadding(insets.bottom),
                         transform: [
                           {
                             translateY: waSheetAnim.interpolate({
@@ -924,14 +1002,10 @@ export default function UserProfileModal({
 
           {infoVisible ? (
             <View
-              style={[
-                styles.optionsPage,
-                {
-                  width: Dimensions.get("window").width,
-                  height: Dimensions.get("window").height,
-                },
-              ]}
+              style={styles.optionsPage}
               collapsable={false}
+              renderToHardwareTextureAndroid
+              shouldRasterizeIOS
             >
               <View
                 style={[
@@ -959,7 +1033,7 @@ export default function UserProfileModal({
                 style={styles.optionsScroll}
                 contentContainerStyle={[
                   styles.optionsScrollContent,
-                  { paddingBottom: Math.max(insets.bottom, 20) + 24 },
+                  { paddingBottom: getSheetBottomPadding(insets.bottom) },
                 ]}
                 bounces={false}
                 showsVerticalScrollIndicator={false}
@@ -967,21 +1041,21 @@ export default function UserProfileModal({
                 <View style={styles.optionsAvatarBlock}>
                   <WhatsAppAvatar
                     photo={avatarPhoto || undefined}
-                    name={user.name}
-                    publicId={user.publicId}
+                    name={displayUser.name}
+                    publicId={displayUser.publicId}
                     size={96}
-                    online={!!user.isOnline}
-                    badge={user.subscriptionBadge}
-                    badgeExpiresAt={user.subscriptionExpiresAt}
-                    photoVerified={!!user.photoVerified}
+                    online={!!displayUser.isOnline}
+                    badge={displayUser.subscriptionBadge}
+                    badgeExpiresAt={displayUser.subscriptionExpiresAt}
+                    photoVerified={!!displayUser.photoVerified}
                   />
                   <Text style={styles.optionsUserName} numberOfLines={1}>
                     {displayName}
-                    {user.age ? `, ${user.age}` : ""}
+                    {displayUser.age ? `, ${displayUser.age}` : ""}
                   </Text>
-                  {isValidPublicId(user.publicId) ? (
+                  {isValidPublicId(displayUser.publicId) ? (
                     <CopyablePublicId
-                      publicId={user.publicId}
+                      publicId={displayUser.publicId}
                       name={displayName}
                       textStyle={styles.optionsUserId}
                       showShare={false}
@@ -1062,6 +1136,16 @@ export default function UserProfileModal({
     </>
   );
 }
+
+export default React.memo(UserProfileModal, (prev, next) => {
+  if (prev.visible !== next.visible) return false;
+  if (prev.likingInProgress !== next.likingInProgress) return false;
+  if (prev.user === next.user) return true;
+  if (!prev.user || !next.user) return prev.user === next.user;
+  // Skip re-render when parent only churned object identity (presence ticks)
+  return mergeStableUser(prev.user, next.user) === prev.user;
+});
+
 
 const PHOTO_GAP = 8;
 const PHOTO_PAD = 16;
@@ -1665,7 +1749,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sheetCard: {
-    backgroundColor: WA.white,
+    backgroundColor: "#E4E6EB",
     borderRadius: 16,
     overflow: "hidden",
   },
@@ -1691,7 +1775,7 @@ const styles = StyleSheet.create({
     marginLeft: 18,
   },
   sheetCancel: {
-    backgroundColor: WA.white,
+    backgroundColor: "#E4E6EB",
     borderRadius: 16,
     paddingVertical: 16,
     alignItems: "center",

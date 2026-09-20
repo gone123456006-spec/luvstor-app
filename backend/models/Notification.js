@@ -88,6 +88,8 @@ const notificationSchema = new mongoose.Schema(
     actorGender: { type: String, default: '' },
     read: { type: Boolean, default: false, index: true },
     readAt: { type: Date, default: null },
+    /** Soft-delete — cleared/dismissed rows stay out of the center forever */
+    deletedAt: { type: Date, default: null, index: true },
     /** Push delivery outcome for this notification */
     pushStatus: {
       type: String,
@@ -99,10 +101,12 @@ const notificationSchema = new mongoose.Schema(
 );
 
 notificationSchema.index({ userId: 1, createdAt: -1 });
-notificationSchema.index({ userId: 1, read: 1 });
+notificationSchema.index({ userId: 1, read: 1, deletedAt: 1 });
 notificationSchema.index({ userId: 1, type: 1, read: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, type: 1, actorId: 1, read: 1 });
-// Dedupe guard: same key can only exist once per user
+notificationSchema.index({ userId: 1, deletedAt: 1, createdAt: -1 });
+// Dedupe guard: same key can only exist once per user (incl. soft-deleted —
+// so clearing a notification permanently blocks the same event from returning)
 notificationSchema.index(
   { userId: 1, dedupeKey: 1 },
   { unique: true, partialFilterExpression: { dedupeKey: { $type: 'string' } } },

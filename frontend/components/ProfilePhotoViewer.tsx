@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import React from "react";
 import {
   Dimensions,
@@ -12,6 +11,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { resolveMediaUrl } from "../utils/media";
+import MediaImage from "./MediaImage";
 
 type Props = {
   visible: boolean;
@@ -110,15 +110,15 @@ function PhotoPager({
           initialNumToRender={1}
           maxToRenderPerBatch={1}
           removeClippedSubviews={false}
-          renderItem={({ item }) => (
+          renderItem={({ item, index: i }) => (
             <View style={{ width, height, backgroundColor: "#FFFFFF" }}>
-              <Image
-                source={{ uri: item }}
+              <MediaImage
+                uri={item}
                 style={{ width, height }}
                 contentFit="contain"
                 cachePolicy="memory-disk"
                 transition={0}
-                recyclingKey={`viewer-${item}`}
+                recyclingKey={`viewer-${i}`}
               />
             </View>
           )}

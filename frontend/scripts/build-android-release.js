@@ -8,27 +8,85 @@
  *   node ./scripts/build-android-release.js apk --offline
  *   node ./scripts/build-android-release.js bundle --offline
  *
+ * Release JS bundle talks to production API:
+ *   https://luvstor-api.onrender.com
+ * (override with EXPO_PUBLIC_API_URL in the environment or .env.production)
+ *
  * Outputs:
  *   APK  → android/app/build/outputs/apk/release/app-release.apk
  *         (+ copy to dist/luvstor-release.apk)
  *   AAB  → android/app/build/outputs/bundle/release/app-release.aab
  *         (+ copy to dist/luvstor-release.aab)
- *
- * Gradle cache defaults to D:/gradle-cache (same as android:build).
  */
-const { spawn, spawnSync } = require("child_process");
+const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const root = path.join(__dirname, "..");
 const androidDir = path.join(root, "android");
 const distDir = path.join(root, "dist");
-const gradleHome = process.env.GRADLE_USER_HOME || "D:/gradle-cache";
+const PRODUCTION_API = "https://luvstor-api.onrender.com";
+
+const gradleHome =
+  process.env.GRADLE_USER_HOME ||
+  (process.platform === "win32"
+    ? "D:/gradle-cache"
+    : path.join(os.homedir(), ".gradle"));
 
 const args = process.argv.slice(2);
 const mode = (args.find((a) => !a.startsWith("-")) || "apk").toLowerCase();
-const wantOffline = args.includes("--offline") || process.env.ANDROID_BUILD_OFFLINE === "1";
+const wantOffline =
+  args.includes("--offline") || process.env.ANDROID_BUILD_OFFLINE === "1";
 const wantClean = args.includes("--clean");
+
+/** Load KEY=VALUE lines from a dotenv-style file into process.env (no override). */
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const text = fs.readFileSync(filePath, "utf8");
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
+
+function applyProductionEnv() {
+  // Prefer committed production defaults, then local .env for Firebase keys etc.
+  loadEnvFile(path.join(root, ".env.production"));
+  loadEnvFile(path.join(root, ".env"));
+
+  if (!process.env.EXPO_PUBLIC_API_URL) {
+    process.env.EXPO_PUBLIC_API_URL = PRODUCTION_API;
+  }
+  if (!process.env.EXPO_PUBLIC_SHARE_BASE_URL) {
+    process.env.EXPO_PUBLIC_SHARE_BASE_URL = PRODUCTION_API;
+  }
+  if (!process.env.EXPO_PUBLIC_MEDIA_BASE_URL) {
+    process.env.EXPO_PUBLIC_MEDIA_BASE_URL = PRODUCTION_API;
+  }
+  process.env.NODE_ENV = "production";
+
+  console.log(`✔ API (baked into APK): ${process.env.EXPO_PUBLIC_API_URL}`);
+  if (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID) {
+    console.log("✔ Google Sign-In: WEB_CLIENT_ID present");
+  } else {
+    console.warn(
+      "⚠ Google Sign-In will be blocked — set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in .env.production",
+    );
+  }
+  console.log(`✔ Media base:          ${process.env.EXPO_PUBLIC_MEDIA_BASE_URL}`);
+}
 
 function run(cmd, cmdArgs, opts = {}) {
   console.log(`\n> ${cmd} ${cmdArgs.join(" ")}\n`);
@@ -39,6 +97,10 @@ function run(cmd, cmdArgs, opts = {}) {
     env: {
       ...process.env,
       GRADLE_USER_HOME: gradleHome,
+      NODE_ENV: "production",
+      EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
+      EXPO_PUBLIC_SHARE_BASE_URL: process.env.EXPO_PUBLIC_SHARE_BASE_URL,
+      EXPO_PUBLIC_MEDIA_BASE_URL: process.env.EXPO_PUBLIC_MEDIA_BASE_URL,
       ...(opts.env || {}),
     },
   });
@@ -47,8 +109,108 @@ function run(cmd, cmdArgs, opts = {}) {
   }
 }
 
+function syncSplashAndIcons() {
+  const script = path.join(root, "scripts", "sync-splash-icons.js");
+  if (!fs.existsSync(script)) return;
+  console.log("↻ Syncing splash + launcher icons…");
+  run("node", [script]);
+}
+
+function ensureAndroidColors() {
+  const colorsPath = path.join(
+    androidDir,
+    "app",
+    "src",
+    "main",
+    "res",
+    "values",
+    "colors.xml",
+  );
+  if (!fs.existsSync(path.dirname(colorsPath))) return;
+
+  const splashBg = "#5A2FC7";
+  const iconBg =
+    process.env.EXPO_PUBLIC_ICON_BACKGROUND ||
+    "#5A2FC7";
+
+  const desired = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<resources>
+  <color name="splashscreen_background">${splashBg}</color>
+  <color name="iconBackground">${iconBg}</color>
+</resources>
+`;
+
+  let current = "";
+  if (fs.existsSync(colorsPath)) {
+    current = fs.readFileSync(colorsPath, "utf8");
+  }
+  if (
+    !current.includes('name="iconBackground"') ||
+    !current.includes('name="splashscreen_background"')
+  ) {
+    fs.writeFileSync(colorsPath, desired);
+    console.log("✔ Ensured android colors.xml (splash + iconBackground)");
+  }
+}
+
+/**
+ * Keep AGP namespace + applicationId aligned with app.json android.package
+ * and Kotlin sources (package com.luvstor.app). Drift causes:
+ *   Unresolved reference 'R' / 'BuildConfig'
+ */
+function ensureAndroidPackageAlignment() {
+  const appJsonPath = path.join(root, "app.json");
+  const gradlePath = path.join(androidDir, "app", "build.gradle");
+  if (!fs.existsSync(appJsonPath) || !fs.existsSync(gradlePath)) return;
+
+  let expected = "com.luvstor.app";
+  try {
+    const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
+    expected =
+      appJson?.expo?.android?.package ||
+      appJson?.android?.package ||
+      expected;
+  } catch {
+    /* keep default */
+  }
+
+  let gradle = fs.readFileSync(gradlePath, "utf8");
+  const before = gradle;
+  gradle = gradle.replace(
+    /namespace\s+"[^"]+"/g,
+    `namespace "${expected}"`,
+  );
+  gradle = gradle.replace(
+    /applicationId\s+"[^"]+"/g,
+    `applicationId "${expected}"`,
+  );
+  if (!/buildFeatures\s*\{[\s\S]*?buildConfig\s+true/.test(gradle)) {
+    // Ensure BuildConfig is generated (AGP 8+ defaults it off).
+    if (/buildFeatures\s*\{/.test(gradle)) {
+      gradle = gradle.replace(
+        /buildFeatures\s*\{/,
+        "buildFeatures {\n        buildConfig true",
+      );
+    } else {
+      gradle = gradle.replace(
+        /defaultConfig\s*\{[\s\S]*?\n    \}/,
+        (block) =>
+          `${block}\n    buildFeatures {\n        buildConfig true\n    }`,
+      );
+    }
+  }
+  if (gradle !== before) {
+    fs.writeFileSync(gradlePath, gradle);
+    console.log(
+      `✔ Aligned android namespace/applicationId → ${expected} (+ buildConfig)`,
+    );
+  }
+}
+
 /** Persist network/TLS hardening across expo prebuild regenerations. */
 function patchAndroidGradleConfig() {
+  ensureAndroidColors();
+  ensureAndroidPackageAlignment();
   const propsPath = path.join(androidDir, "gradle.properties");
   if (fs.existsSync(propsPath)) {
     let props = fs.readFileSync(propsPath, "utf8");
@@ -91,8 +253,8 @@ function patchAndroidGradleConfig() {
     ) {
       props = props.replace(
         /org\.gradle\.jvmargs=([^\r\n]*)/,
-        (m, args) =>
-          `org.gradle.jvmargs=${args} -Dhttps.protocols=TLSv1.2,TLSv1.3 -Djdk.tls.client.protocols=TLSv1.2,TLSv1.3`,
+        (m, jvmArgs) =>
+          `org.gradle.jvmargs=${jvmArgs} -Dhttps.protocols=TLSv1.2,TLSv1.3 -Djdk.tls.client.protocols=TLSv1.2,TLSv1.3`,
       );
       changed = true;
     }
@@ -105,7 +267,6 @@ function patchAndroidGradleConfig() {
   const rootGradle = path.join(androidDir, "build.gradle");
   if (fs.existsSync(rootGradle)) {
     let gradle = fs.readFileSync(rootGradle, "utf8");
-    // Upgrade stale 1.1.0 pin (crashes on launch) to 1.4.2
     if (gradle.includes("androidx.collection:collection:1.1.0")) {
       gradle = gradle.replace(
         /force 'androidx\.collection:collection:1\.1\.0'/g,
@@ -148,7 +309,6 @@ function ensureAndroidProject() {
     process.platform === "win32" ? "gradlew.bat" : "gradlew",
   );
 
-  // Keep native google-services.json in sync with the Expo copy (OAuth SHA clients)
   const gsSrc = path.join(root, "google-services.json");
   const gsDest = path.join(androidDir, "app", "google-services.json");
   if (fs.existsSync(gsSrc) && fs.existsSync(path.dirname(gsDest))) {
@@ -180,8 +340,7 @@ function ensureAndroidProject() {
 }
 
 function gradleTask(task) {
-  const gradlew =
-    process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+  const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
   const gArgs = [task, "--no-daemon"];
   if (wantOffline) {
     gArgs.push("--offline");
@@ -224,6 +383,8 @@ function main() {
   console.log(`  GRADLE_USER_HOME=${gradleHome}`);
   console.log("═══════════════════════════════════════");
 
+  applyProductionEnv();
+
   if (mode === "prebuild") {
     run("npx", [
       "expo",
@@ -239,27 +400,40 @@ function main() {
   }
 
   if (mode !== "apk" && mode !== "bundle" && mode !== "aab") {
-    console.error('Usage: build-android-release.js <apk|bundle|prebuild> [--offline] [--clean]');
+    console.error(
+      "Usage: build-android-release.js <apk|bundle|prebuild> [--offline] [--clean]",
+    );
     process.exit(1);
   }
 
   ensureAndroidProject();
+  syncSplashAndIcons();
 
   if (mode === "apk") {
     gradleTask("assembleRelease");
-    const apkDir = path.join(androidDir, "app", "build", "outputs", "apk", "release");
+    const apkDir = path.join(
+      androidDir,
+      "app",
+      "build",
+      "outputs",
+      "apk",
+      "release",
+    );
     const apk =
       findFile(apkDir, (n) => n.endsWith(".apk") && !n.endsWith("-unsigned.apk")) ||
       findFile(apkDir, (n) => n.endsWith(".apk"));
     if (apk) {
       console.log(`\n✔ APK ready: ${apk}`);
       copyOut(apk, "luvstor-release.apk");
+      console.log("\nInstall on device:");
+      console.log(`  adb install -r "${apk}"`);
     } else {
-      console.error("✖ APK not found under android/app/build/outputs/apk/release/");
+      console.error(
+        "✖ APK not found under android/app/build/outputs/apk/release/",
+      );
       process.exit(1);
     }
   } else {
-    // bundle | aab
     gradleTask("bundleRelease");
     const aabDir = path.join(
       androidDir,
@@ -281,7 +455,8 @@ function main() {
     }
   }
 
-  console.log("\nDone.");
+  console.log("\nDone. APK talks to production backend:");
+  console.log(`  ${process.env.EXPO_PUBLIC_API_URL}`);
 }
 
 main();

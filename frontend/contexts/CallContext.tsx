@@ -10,9 +10,10 @@ import React, {
 import {
   AppState,
   AppStateStatus,
+  Alert,
+  Linking,
   Vibration,
 } from 'react-native';
-import { setAudioModeAsync } from 'expo-audio';
 import { useAuth } from './AuthContext';
 import { useSocket } from './SocketContext';
 import { apiRequest } from '../utils/api';
@@ -20,12 +21,45 @@ import { getAuthToken } from '../utils/auth';
 import {
   CallPeer,
   CallMediaType,
+  CallPermissionError,
   NetworkQuality,
   ensureCallPermissions,
   isWebRTCAvailable,
   getWebRTCUnavailableMessage,
 } from '../services/webrtc';
 import { resolveMediaUrl } from '../utils/media';
+import {
+  dismissCallNotifications,
+  presentIncomingCallLocalNotification,
+} from '../utils/push';
+import {
+  clearPendingIncomingCall,
+  getPendingIncomingCall,
+  setPendingIncomingCall,
+  subscribePendingIncomingCall,
+} from '../utils/pendingIncomingCall';
+import {
+  reinforceCallAudio,
+  setCallMicMuted,
+  setCallSpeaker,
+  startCallAudio,
+  startCallRingback,
+  startIncomingRingtone,
+  stopCallAudio,
+  stopCallRingback,
+  stopIncomingRingtone,
+} from '../utils/callAudio';
+
+function generateClientCallId(): string {
+  const rand =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+      : `${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`.slice(
+          0,
+          12,
+        );
+  return `c_${Date.now().toString(36)}_${rand}`;
+}
 
 export type CallPhase =
   | 'idle'
@@ -61,8 +95,12 @@ type CallState = {
   quality: NetworkQuality;
   localStream: any;
   remoteStream: any;
+  /** Front camera → mirror preview (WhatsApp) */
+  localMirrored: boolean;
   error: string | null;
   webrtcReady: boolean;
+  /** True when server reported callee had no live socket at invite time */
+  peerOffline: boolean;
 };
 
 type StartCallOpts = {
@@ -99,16 +137,18 @@ const initialState: CallState = {
   peer: null,
   isExplore: false,
   muted: false,
-  cameraOff: false,
-  speakerOn: true,
+  cameraOff: true,
+  speakerOn: false,
   minimized: false,
   connectedAt: null,
   endReason: null,
   quality: 'unknown',
   localStream: null,
   remoteStream: null,
+  localMirrored: true,
   error: null,
   webrtcReady: isWebRTCAvailable(),
+  peerOffline: false,
 };
 
 function isBlankName(name?: string | null) {
@@ -117,15 +157,13 @@ function isBlankName(name?: string | null) {
 }
 
 function formatExplorePeer(p: any): CallPeerInfo {
-  const photo = resolveMediaUrl(p?.photo) || p?.photo || '';
-  const publicId = (p?.publicId || '').trim();
-  const rawName = (p?.name || '').trim();
+  // Explore is anonymous — never surface real name / photo / publicId in the call UI
   return {
     id: 'explore',
-    name: rawName || publicId || 'User',
-    photo,
+    name: 'Anonymous',
+    photo: '',
     gender: p?.gender || '',
-    publicId,
+    publicId: '',
   };
 }
 
@@ -180,8 +218,19 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const pendingCandidates = useRef<any[]>([]);
   const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const endClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Explore: wait before hanging up on transient WebRTC failed/closed */
+  const exploreRecoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remoteDescSet = useRef(false);
   const acceptCallRef = useRef<() => Promise<void>>(async () => {});
+  const declineCallRef = useRef<() => void>(() => {});
+  /** Cancel tapped before call:ringing arrived */
+  const pendingCancelRef = useRef(false);
+  /** ICE servers from ringing — used when creating offer after accept */
+  const iceServersRef = useRef<any[]>([]);
+  /** Locked for the life of the call — voice and video never morph mid-call */
+  const callTypeRef = useRef<CallMediaType>('voice');
+  /** Auto accept/decline once from notification button */
+  const pendingNotifIntentRef = useRef<'accept' | 'decline' | null>(null);
 
   useEffect(() => {
     stateRef.current = state;
@@ -191,10 +240,25 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({ ...s, ...partial }));
   }, []);
 
+  const isActiveCall = useCallback((callId: string, callType?: CallMediaType) => {
+    const s = stateRef.current;
+    if (!callId || s.callId !== callId) return false;
+    if (s.phase === 'idle' || s.phase === 'ended') return false;
+    if (callType && s.callType !== callType) return false;
+    return true;
+  }, []);
+
   const stopHeartbeat = useCallback(() => {
     if (heartbeatTimer.current) {
       clearInterval(heartbeatTimer.current);
       heartbeatTimer.current = null;
+    }
+  }, []);
+
+  const clearExploreRecover = useCallback(() => {
+    if (exploreRecoverTimer.current) {
+      clearTimeout(exploreRecoverTimer.current);
+      exploreRecoverTimer.current = null;
     }
   }, []);
 
@@ -228,9 +292,19 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const finishCall = useCallback(
     (endReason: string | null) => {
+      const endedId = stateRef.current.callId;
+      pendingCancelRef.current = false;
+      iceServersRef.current = [];
+      callTypeRef.current = 'voice';
+      clearExploreRecover();
       stopHeartbeat();
       disposePeer();
       Vibration.cancel();
+      stopCallRingback();
+      stopIncomingRingtone();
+      void dismissCallNotifications(endedId);
+      clearPendingIncomingCall(endedId);
+      void stopCallAudio();
       patch({
         phase: 'ended',
         endReason,
@@ -240,22 +314,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       });
       resetSoon();
     },
-    [disposePeer, patch, resetSoon, stopHeartbeat]
+    [clearExploreRecover, disposePeer, patch, resetSoon, stopHeartbeat]
   );
-
-  const configureAudio = useCallback(async (speakerOn: boolean) => {
-    try {
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-        shouldPlayInBackground: true,
-        interruptionMode: 'doNotMix',
-        shouldRouteThroughEarpiece: !speakerOn,
-      });
-    } catch (err) {
-      console.warn('[Call] audio mode:', (err as Error).message);
-    }
-  }, []);
 
   const createPeer = useCallback(
     async (opts: {
@@ -264,19 +324,56 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       callType: CallMediaType;
       callId: string;
     }) => {
+      // Never mix modes — peer media must match the locked call type
+      const locked = callTypeRef.current;
+      const callType = locked || opts.callType;
+      if (opts.callType !== callType) {
+        console.warn(
+          `[Call] refusing peer create: wanted ${opts.callType}, locked ${callType}`,
+        );
+      }
+
       disposePeer();
       const peer = new CallPeer({
         iceServers: opts.iceServers,
         isCaller: opts.isCaller,
-        callType: opts.callType,
+        callType,
         onQuality: (quality) => {
+          if (!isActiveCall(opts.callId, callType)) return;
           patch({ quality });
           socket?.emit('call:quality', { callId: opts.callId, quality });
         },
         handlers: {
-          onLocalStream: (stream) => patch({ localStream: stream }),
-          onRemoteStream: (stream) => patch({ remoteStream: stream }),
+          onLocalStream: (stream) => {
+            if (!isActiveCall(opts.callId, callType)) {
+              try {
+                stream?.getTracks?.()?.forEach((t: any) => t.stop());
+              } catch {
+                /* ignore */
+              }
+              return;
+            }
+            // Voice calls: audio only — do not surface a camera stream in UI
+            if (callType === 'voice') {
+              patch({ localStream: null });
+              return;
+            }
+            patch({
+              localStream: stream,
+              localMirrored: peerRef.current?.isFrontCamera?.() !== false,
+            });
+          },
+          onRemoteStream: (stream) => {
+            if (!isActiveCall(opts.callId, callType)) return;
+            // Voice: ignore remote video tracks for UI (audio still plays via WebRTC)
+            if (callType === 'voice') {
+              patch({ remoteStream: null });
+              return;
+            }
+            patch({ remoteStream: stream });
+          },
           onIceCandidate: (candidate) => {
+            if (!isActiveCall(opts.callId, callType)) return;
             const plain = {
               candidate: candidate?.candidate,
               sdpMLineIndex: candidate?.sdpMLineIndex,
@@ -290,39 +387,101 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             });
           },
           onConnectionState: (conn) => {
+            if (!isActiveCall(opts.callId, callType)) return;
             if (conn === 'connected' || conn === 'completed') {
+              clearExploreRecover();
               patch({ phase: 'connected', connectedAt: Date.now() });
               socket?.emit('call:connected', { callId: opts.callId });
+              void reinforceCallAudio(stateRef.current.speakerOn);
             } else if (conn === 'connecting') {
               patch({ phase: 'connecting' });
             } else if (conn === 'disconnected') {
+              // Transient — wait for ICE to recover; do NOT hang up
               patch({ phase: 'reconnecting' });
             } else if (conn === 'failed' || conn === 'closed') {
-              if (stateRef.current.phase !== 'ended' && stateRef.current.phase !== 'idle') {
-                socket?.emit('call:end', { callId: opts.callId });
-                finishCall('disconnect');
+              if (
+                stateRef.current.phase === 'ended' ||
+                stateRef.current.phase === 'idle'
+              ) {
+                return;
               }
+              // Explore: stay in call through brief ICE/WebRTC flaps until
+              // the peer skips / hangs up (or recover window expires).
+              if (stateRef.current.isExplore) {
+                patch({ phase: 'reconnecting' });
+                if (!exploreRecoverTimer.current) {
+                  exploreRecoverTimer.current = setTimeout(() => {
+                    exploreRecoverTimer.current = null;
+                    const s = stateRef.current;
+                    if (
+                      !s.isExplore ||
+                      s.callId !== opts.callId ||
+                      s.phase === 'connected' ||
+                      s.phase === 'ended' ||
+                      s.phase === 'idle'
+                    ) {
+                      return;
+                    }
+                    socket?.emit('call:end', { callId: opts.callId });
+                    finishCall('disconnect');
+                  }, 20_000);
+                }
+                return;
+              }
+              socket?.emit('call:end', { callId: opts.callId });
+              finishCall('disconnect');
             }
           },
           onIceConnectionState: (ice) => {
+            if (!isActiveCall(opts.callId, callType)) return;
             if (ice === 'disconnected') patch({ phase: 'reconnecting' });
             if (ice === 'connected' || ice === 'completed') {
+              clearExploreRecover();
               patch({
                 phase: 'connected',
                 connectedAt: stateRef.current.connectedAt || Date.now(),
               });
+              void reinforceCallAudio(stateRef.current.speakerOn);
+            }
+            // Explore: ice "failed" alone must not kill the call — wait for
+            // connectionState + recover window (peer Skip / End still ends it).
+            if (ice === 'failed' && !stateRef.current.isExplore) {
+              if (
+                stateRef.current.phase !== 'ended' &&
+                stateRef.current.phase !== 'idle'
+              ) {
+                patch({ phase: 'reconnecting' });
+              }
             }
           },
-          onError: (err) => patch({ error: err.message }),
+          onError: (err) => {
+            if (!isActiveCall(opts.callId, callType)) return;
+            patch({ error: err.message });
+          },
         },
       });
       peerRef.current = peer;
       await peer.start();
+      // Race: call cancelled / ended while getUserMedia was pending
+      if (!isActiveCall(opts.callId, callType)) {
+        disposePeer();
+        return null;
+      }
       if (stateRef.current.muted) peer.setMuted(true);
-      if (stateRef.current.cameraOff) peer.setCameraEnabled(false);
+      // Voice: always keep camera off; video: respect cameraOff flag
+      if (callType === 'voice' || stateRef.current.cameraOff) {
+        peer.setCameraEnabled(false);
+      }
       return peer;
     },
-    [disposePeer, finishCall, patch, socket]
+    [
+      clearExploreRecover,
+      disposePeer,
+      finishCall,
+      isActiveCall,
+      patch,
+      socket,
+    ]
   );
 
   const flushCandidates = useCallback(async () => {
@@ -337,66 +496,120 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // ── Outgoing ──────────────────────────────────────────
   const startCall = useCallback(
     async (opts: StartCallOpts) => {
-      if (!socket?.connected) {
-        patch({ error: 'Not connected. Try again.' });
-        return;
-      }
       if (stateRef.current.phase !== 'idle' && stateRef.current.phase !== 'ended') {
         patch({ error: 'Already in a call' });
         return;
       }
 
-      if (endClearTimer.current) clearTimeout(endClearTimer.current);
-
-      const peer = peerFromOpts(opts);
-
-      // Always show the other person's DP/name first (WhatsApp-style), even if setup fails
-      setState({
-        ...initialState,
-        webrtcReady: isWebRTCAvailable(),
-        phase: 'outgoing',
-        callType: opts.callType,
-        direction: 'outgoing',
-        peer,
-        speakerOn: opts.callType === 'video',
-        cameraOff: opts.callType !== 'video',
-        minimized: false,
-      });
-
-      if (!isWebRTCAvailable()) {
-        patch({
-          error: getWebRTCUnavailableMessage(),
-          phase: 'ended',
-          endReason: 'error',
-          peer,
-        });
-        resetSoon();
+      if (!socket?.connected) {
+        Alert.alert('Not connected', 'Check your internet and try again.');
         return;
       }
 
-      // Ask before ringing — otherwise a denied mic leaves the caller on a
-      // ringing screen that can never connect.
+      if (!isWebRTCAvailable()) {
+        Alert.alert('Calls unavailable', getWebRTCUnavailableMessage());
+        return;
+      }
+
+      // 1) Mic (+ speaker/Bluetooth) permission BEFORE calling UI — like WhatsApp
       try {
         await ensureCallPermissions(opts.callType);
       } catch (err) {
-        patch({
-          error: (err as Error).message || 'Microphone permission required.',
-          phase: 'ended',
-          endReason: 'error',
-          peer,
-        });
-        resetSoon();
+        const needsSettings =
+          err instanceof CallPermissionError && err.needsSettings;
+        Alert.alert(
+          'Permission needed',
+          (err as Error).message ||
+            'Allow microphone access to place voice calls.',
+          needsSettings
+            ? [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Open Settings',
+                  onPress: () => {
+                    void Linking.openSettings();
+                  },
+                },
+              ]
+            : [{ text: 'OK' }],
+        );
         return;
       }
 
-      await configureAudio(true);
+      if (endClearTimer.current) clearTimeout(endClearTimer.current);
 
+      // 2) Client callId up front — cancel works even before call:ringing
+      const callId = generateClientCallId();
+      pendingCancelRef.current = false;
+      iceServersRef.current = [];
+
+      const peer = peerFromOpts(opts);
+      const speakerOn = opts.callType === 'video';
+      callTypeRef.current = opts.callType;
+
+      setState({
+        ...initialState,
+        webrtcReady: true,
+        phase: 'outgoing',
+        callId,
+        callType: opts.callType,
+        direction: 'outgoing',
+        peer,
+        speakerOn,
+        // Voice = camera never on; video = camera on
+        cameraOff: opts.callType !== 'video',
+        localStream: null,
+        remoteStream: null,
+        minimized: false,
+        error: null,
+        peerOffline: false,
+      });
+
+      // Prefetch DP so blur + center render without a pop-in
+      const photoUrl = resolveMediaUrl(opts.photo || '') || opts.photo;
+      if (photoUrl) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { Image: ExpoImage } = require('expo-image');
+          void ExpoImage.prefetch?.(photoUrl);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // 3) Video: open camera immediately (don't wait on audio). Audio in parallel.
+      if (opts.callType === 'video' && isWebRTCAvailable()) {
+        void createPeer({
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+          ],
+          isCaller: true,
+          callType: 'video',
+          callId,
+        }).catch((err) => {
+          patch({
+            error: (err as Error)?.message || 'Camera unavailable',
+          });
+        });
+      }
+      void (async () => {
+        try {
+          await startCallAudio({ callType: opts.callType, speakerOn });
+          void startCallRingback(speakerOn);
+        } catch {
+          /* non-fatal for UI open */
+        }
+      })();
+
+      // 4) Ring them (same callId so cancel races are safe)
       socket.emit('call:invite', {
         receiverId: opts.userId,
         callType: opts.callType,
+        callId,
       });
     },
-    [configureAudio, patch, resetSoon, socket]
+    [createPeer, patch, socket]
   );
 
   const acceptCall = useCallback(async () => {
@@ -411,6 +624,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     Vibration.cancel();
+    stopIncomingRingtone();
     try {
       await ensureCallPermissions(s.callType);
     } catch (err) {
@@ -419,10 +633,31 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       finishCall('error');
       return;
     }
-    patch({ phase: 'connecting' });
-    await configureAudio(s.speakerOn);
+    patch({ phase: 'connecting', cameraOff: s.callType !== 'video' });
+    await startCallAudio({
+      callType: s.callType,
+      speakerOn: s.speakerOn,
+    });
+    // Video: open local camera immediately (fullscreen until remote arrives)
+    if (s.callType === 'video' && isWebRTCAvailable() && !peerRef.current) {
+      try {
+        await createPeer({
+          iceServers: iceServersRef.current.length
+            ? iceServersRef.current
+            : [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+              ],
+          isCaller: false,
+          callType: 'video',
+          callId: s.callId,
+        });
+      } catch (err) {
+        patch({ error: (err as Error).message || 'Camera unavailable' });
+      }
+    }
     socket.emit('call:accept', { callId: s.callId });
-  }, [configureAudio, finishCall, patch, socket]);
+  }, [createPeer, finishCall, patch, socket]);
 
   acceptCallRef.current = acceptCall;
 
@@ -434,13 +669,14 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     finishCall('decline');
   }, [finishCall, socket]);
 
+  declineCallRef.current = declineCall;
+
   const cancelCall = useCallback(() => {
     const s = stateRef.current;
-    if (!s.callId) {
-      finishCall('cancel');
-      return;
+    pendingCancelRef.current = true;
+    if (s.callId) {
+      socket?.emit('call:cancel', { callId: s.callId });
     }
-    socket?.emit('call:cancel', { callId: s.callId });
     finishCall('cancel');
   }, [finishCall, socket]);
 
@@ -454,6 +690,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setState((s) => {
       const muted = !s.muted;
       peerRef.current?.setMuted(muted);
+      setCallMicMuted(muted);
       if (s.callId) {
         socket?.emit('call:media-state', { callId: s.callId, muted });
       }
@@ -462,6 +699,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   }, [socket]);
 
   const toggleCamera = useCallback(() => {
+    // Camera controls are video-only — voice calls stay audio-only
+    if (callTypeRef.current !== 'video' || stateRef.current.callType !== 'video') {
+      return;
+    }
     setState((s) => {
       const cameraOff = !s.cameraOff;
       peerRef.current?.setCameraEnabled(!cameraOff);
@@ -474,43 +715,30 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const toggleSpeaker = useCallback(async () => {
     const next = !stateRef.current.speakerOn;
-    await configureAudio(next);
+    await setCallSpeaker(next);
     patch({ speakerOn: next });
     const callId = stateRef.current.callId;
     if (callId) socket?.emit('call:media-state', { callId, speaker: next });
-  }, [configureAudio, patch, socket]);
+    // WebRTC can overwrite route — reinforce after a tick
+    setTimeout(() => {
+      void reinforceCallAudio(next);
+    }, 200);
+  }, [patch, socket]);
 
   const switchCamera = useCallback(async () => {
+    if (callTypeRef.current !== 'video' || stateRef.current.callType !== 'video') {
+      return;
+    }
     await peerRef.current?.switchCamera();
-  }, []);
+    patch({
+      localMirrored: peerRef.current?.isFrontCamera?.() !== false,
+      localStream: peerRef.current?.getLocalStream?.() || stateRef.current.localStream,
+    });
+  }, [patch]);
 
-  const switchToVideo = useCallback(async () => {
-    const s = stateRef.current;
-    if (!s.callId || s.callType === 'video') return;
-    const offer = await peerRef.current?.upgradeToVideo();
-    if (offer) {
-      patch({ callType: 'video', cameraOff: false });
-      socket?.emit('call:renegotiate', {
-        callId: s.callId,
-        sdp: offer,
-        callType: 'video',
-      });
-    }
-  }, [patch, socket]);
-
-  const switchToAudio = useCallback(async () => {
-    const s = stateRef.current;
-    if (!s.callId || s.callType === 'voice') return;
-    const offer = await peerRef.current?.downgradeToAudio();
-    if (offer) {
-      patch({ callType: 'voice', cameraOff: true });
-      socket?.emit('call:renegotiate', {
-        callId: s.callId,
-        sdp: offer,
-        callType: 'voice',
-      });
-    }
-  }, [patch, socket]);
+  /** Voice ↔ video are separate call types — place a new call to switch. */
+  const switchToVideo = useCallback(async () => {}, []);
+  const switchToAudio = useCallback(async () => {}, []);
 
   const setMinimized = useCallback((v: boolean) => {
     patch({ minimized: v });
@@ -523,9 +751,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const onRinging = async (payload: any) => {
       const callId = payload?.callId;
       if (!callId) return;
+
+      // User already hung up while invite was in flight
+      if (
+        pendingCancelRef.current ||
+        (stateRef.current.phase === 'ended' &&
+          stateRef.current.callId === callId)
+      ) {
+        pendingCancelRef.current = false;
+        socket.emit('call:cancel', { callId });
+        return;
+      }
+
       const callType: CallMediaType =
         payload.callType === 'video' ? 'video' : 'voice';
-      const speakerOn = callType === 'video';
+      // Keep the type we placed the call with (invite), don't let payload flip it
+      const locked: CallMediaType =
+        callTypeRef.current === 'video' || callTypeRef.current === 'voice'
+          ? callTypeRef.current
+          : callType;
+      callTypeRef.current = locked;
+      const speakerOn = locked === 'video';
       const mergedPeer = payload.explore
         ? formatExplorePeer(payload.callee)
         : payload.callee
@@ -534,33 +780,47 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
               formatPeer(payload.callee, payload.receiverId),
             )
           : stateRef.current.peer;
+
+      iceServersRef.current = payload.iceServers || [];
+
       patch({
         phase: 'ringing',
         callId,
-        callType,
+        callType: locked,
         peer: mergedPeer,
         isExplore: !!payload.explore,
         direction: 'outgoing',
         speakerOn,
-        cameraOff: callType !== 'video',
+        cameraOff: locked !== 'video',
+        peerOffline: payload.calleeOnline === false,
       });
 
+      // Keep ringback; create WebRTC offer only after callee accepts.
+      // Video camera already opened on tap — do NOT recreate here (that blanks the preview).
+      startCallRingback(speakerOn);
       try {
-        if (!isWebRTCAvailable()) return;
-        await configureAudio(speakerOn);
-        const peer = await createPeer({
-          iceServers: payload.iceServers || [],
-          isCaller: true,
-          callType,
-          callId,
-        });
-        const offer = await peer.createOffer();
-        socket.emit('call:offer', { callId, sdp: offer });
-        startHeartbeat(callId);
+        await startCallAudio({ callType: locked, speakerOn });
+        if (
+          locked === 'video' &&
+          isWebRTCAvailable() &&
+          !peerRef.current
+        ) {
+          await createPeer({
+            iceServers: iceServersRef.current.length
+              ? iceServersRef.current
+              : [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+                ],
+            isCaller: true,
+            callType: 'video',
+            callId,
+          });
+        }
       } catch (err) {
-        patch({ error: (err as Error).message || 'Camera/mic unavailable' });
-        socket.emit('call:cancel', { callId });
-        finishCall('error');
+        if (locked === 'video') {
+          patch({ error: (err as Error).message || 'Camera unavailable' });
+        }
       }
     };
 
@@ -579,8 +839,24 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         ? formatExplorePeer(payload.caller)
         : formatPeer(payload.caller || {}, payload.from);
 
+      clearPendingIncomingCall(payload?.callId);
+      iceServersRef.current = payload.iceServers || [];
+      const incomingType: CallMediaType =
+        payload.callType === 'video' ? 'video' : 'voice';
+      callTypeRef.current = incomingType;
+
       if (!explore) {
         Vibration.vibrate([0, 500, 400, 500], true);
+        void startIncomingRingtone();
+        // App backgrounded / screen off: show a local tray alert (FCM covers fully-killed)
+        if (AppState.currentState !== 'active') {
+          void presentIncomingCallLocalNotification({
+            callId: String(payload.callId),
+            callerName: peer.name || 'Incoming call',
+            callType: incomingType,
+            callerId: String(payload.from || peer.id || ''),
+          });
+        }
       }
 
       setState({
@@ -588,12 +864,14 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         webrtcReady: isWebRTCAvailable(),
         phase: 'incoming',
         callId: payload.callId,
-        callType: payload.callType === 'video' ? 'video' : 'voice',
+        callType: incomingType,
         direction: 'incoming',
         peer,
         isExplore: explore,
-        speakerOn: payload.callType === 'video',
-        cameraOff: payload.callType !== 'video',
+        speakerOn: incomingType === 'video',
+        cameraOff: incomingType !== 'video',
+        localStream: null,
+        remoteStream: null,
         minimized: false,
       });
       (onIncoming as any)._ice = payload.iceServers || [];
@@ -602,6 +880,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setTimeout(() => {
           void acceptCallRef.current();
         }, 500);
+      } else if (pendingNotifIntentRef.current === 'accept') {
+        pendingNotifIntentRef.current = null;
+        setTimeout(() => {
+          void acceptCallRef.current();
+        }, 250);
+      } else if (pendingNotifIntentRef.current === 'decline') {
+        pendingNotifIntentRef.current = null;
+        setTimeout(() => {
+          declineCallRef.current();
+        }, 100);
       }
     };
 
@@ -609,22 +897,29 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       const callId = payload?.callId || stateRef.current.callId;
       if (!callId) return;
       Vibration.cancel();
+      stopCallRingback();
+      stopIncomingRingtone();
       patch({ phase: 'connecting', callId });
 
       const iceServers =
         payload.iceServers ||
+        iceServersRef.current ||
         (onIncoming as any)._ice ||
         [];
 
       try {
         if (payload.isCallee) {
-          // Callee creates peer; waits for offer (may already be queued)
-          await createPeer({
-            iceServers,
-            isCaller: false,
-            callType: stateRef.current.callType,
-            callId,
-          });
+          const mediaType = callTypeRef.current;
+          if (!peerRef.current) {
+            await createPeer({
+              iceServers,
+              isCaller: false,
+              callType: mediaType,
+              callId,
+            });
+          } else if (mediaType === 'video') {
+            peerRef.current.updateIceServers?.(iceServers);
+          }
           startHeartbeat(callId);
           const pendingOffer = (onAccepted as any)._pendingOffer;
           if (pendingOffer) {
@@ -636,7 +931,29 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             await flushCandidates();
           }
         } else {
-          // Caller already has peer + offer sent
+          // Caller: create peer + offer now that callee is ready
+          if (!isWebRTCAvailable()) {
+            patch({ error: getWebRTCUnavailableMessage() });
+            socket.emit('call:end', { callId });
+            finishCall('error');
+            return;
+          }
+          const mediaType = callTypeRef.current;
+          const ice =
+            iceServers.length > 0 ? iceServers : iceServersRef.current;
+          // Reuse video preview peer so camera / PiP never blanks on pickup
+          if (mediaType === 'video' && peerRef.current?.getLocalStream()) {
+            peerRef.current.updateIceServers?.(ice);
+          } else {
+            await createPeer({
+              iceServers: ice,
+              isCaller: true,
+              callType: mediaType,
+              callId,
+            });
+          }
+          const offer = await peerRef.current?.createOffer();
+          if (offer) socket.emit('call:offer', { callId, sdp: offer });
           startHeartbeat(callId);
         }
       } catch (err) {
@@ -698,12 +1015,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         if (answer) {
           socket.emit('call:answer', { callId: payload.callId, sdp: answer });
         }
-        if (payload.callType === 'voice' || payload.callType === 'video') {
-          patch({
-            callType: payload.callType,
-            cameraOff: payload.callType !== 'video',
-          });
-        }
+        // Do not flip voice ↔ video mid-call — types stay locked
       } catch (err) {
         console.error('[Call] renegotiate:', err);
       }
@@ -721,15 +1033,32 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     };
 
     const onError = (payload: any) => {
-      patch({
-        error: payload?.error || 'Call failed',
-        phase: 'ended',
-        // Overlay matches lowercase reasons ('offline', 'busy')
-        endReason: String(payload?.code || 'error').toLowerCase(),
-      });
+      // Expected when cancel raced ahead of invite — don't flash an error
+      if (payload?.code === 'CANCELLED') {
+        if (stateRef.current.phase !== 'idle') finishCall('cancel');
+        return;
+      }
+      pendingCancelRef.current = false;
+      const code = String(payload?.code || 'error').toLowerCase();
+      // WhatsApp-style: stop ringing immediately and show Busy / Offline
+      stopCallRingback();
+      stopIncomingRingtone();
+      Vibration.cancel();
       disposePeer();
       stopHeartbeat();
-      Vibration.cancel();
+      void stopCallAudio();
+      callTypeRef.current = 'voice';
+      patch({
+        error:
+          code === 'busy'
+            ? 'Busy on another call'
+            : payload?.error || 'Call failed',
+        phase: 'ended',
+        endReason: code,
+        localStream: null,
+        remoteStream: null,
+        cameraOff: true,
+      });
       resetSoon();
     };
 
@@ -746,6 +1075,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         phase: 'connected',
         connectedAt: stateRef.current.connectedAt || Date.now(),
       });
+      void reinforceCallAudio(stateRef.current.speakerOn);
     };
 
     socket.on('call:ringing', onRinging);
@@ -783,8 +1113,81 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     socket,
     startHeartbeat,
     stopHeartbeat,
-    configureAudio,
   ]);
+
+  // Push wake / app reopen — re-request ringing incoming from server
+  useEffect(() => {
+    if (!socket?.connected) return;
+
+    const applyPendingIntent = (pending: ReturnType<typeof getPendingIncomingCall>) => {
+      if (!pending) return;
+      if (pending.intent === 'decline') {
+        socket.emit('call:decline', { callId: pending.callId });
+        clearPendingIncomingCall(pending.callId);
+        pendingNotifIntentRef.current = null;
+        if (stateRef.current.callId === pending.callId) {
+          finishCall('decline');
+        }
+        return;
+      }
+      if (pending.intent === 'accept') {
+        pendingNotifIntentRef.current = 'accept';
+      }
+      const phase = stateRef.current.phase;
+      if (phase === 'incoming' && stateRef.current.callId === pending.callId) {
+        if (pending.intent === 'accept') {
+          clearPendingIncomingCall(pending.callId);
+          void acceptCallRef.current();
+        }
+        return;
+      }
+      if (phase === 'idle' || phase === 'ended') {
+        socket.emit('call:sync');
+      }
+    };
+
+    const syncIncoming = () => {
+      const pending = getPendingIncomingCall();
+      if (pending) {
+        applyPendingIntent(pending);
+        return;
+      }
+      const phase = stateRef.current.phase;
+      if (phase !== 'idle' && phase !== 'ended') return;
+      socket.emit('call:sync');
+    };
+
+    syncIncoming();
+
+    const unsub = subscribePendingIncomingCall((pending) => {
+      if (!pending) return;
+      applyPendingIntent(pending);
+    });
+
+    const onChange = (next: AppStateStatus) => {
+      if (next === 'active') syncIncoming();
+      // App backgrounded while ringing → WhatsApp-style tray with Accept / Decline
+      if (
+        (next === 'background' || next === 'inactive') &&
+        stateRef.current.phase === 'incoming' &&
+        stateRef.current.callId &&
+        !stateRef.current.isExplore
+      ) {
+        const peer = stateRef.current.peer;
+        void presentIncomingCallLocalNotification({
+          callId: String(stateRef.current.callId),
+          callerName: peer?.name || 'Incoming call',
+          callType: stateRef.current.callType,
+          callerId: String(peer?.id || ''),
+        });
+      }
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => {
+      unsub();
+      sub.remove();
+    };
+  }, [finishCall, socket, socket?.connected]);
 
   // Restore active call UI hint after reopen (signaling still on socket)
   useEffect(() => {
@@ -823,11 +1226,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     return () => {
       stopHeartbeat();
+      clearExploreRecover();
       disposePeer();
       Vibration.cancel();
       if (endClearTimer.current) clearTimeout(endClearTimer.current);
     };
-  }, [disposePeer, stopHeartbeat]);
+  }, [clearExploreRecover, disposePeer, stopHeartbeat]);
 
   const value = useMemo<CallContextValue>(
     () => ({

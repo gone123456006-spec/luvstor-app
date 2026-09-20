@@ -5,6 +5,7 @@ import {
     ActivityIndicator,
     AppState,
     FlatList,
+    InteractionManager,
     Platform,
     RefreshControl,
     ScrollView,
@@ -71,7 +72,7 @@ import {
     preloadRecentThreads,
     setThreadCacheAccount,
 } from "../../utils/threadCache";
-import { formatChatListTime, useTimeTick } from "../../utils/timeFormat";
+import { formatChatListTime } from "../../utils/timeFormat";
 
 /** Discover-matched theme — deep purple + black */
 const C = {
@@ -99,6 +100,87 @@ function resolvePhotoUrl(photo: string): string {
 
 type ChatCategory = "friend" | "request" | "stranger";
 
+/** Online tab row — never reuse yesterday's chat preview as "Online now". */
+function toOnlineTabRow(
+  seed: ConversationItem,
+  subtitle = "Active now",
+): ConversationItem {
+  return {
+    ...seed,
+    isOnline: true,
+    lastMessage: subtitle,
+    lastMessageAt: Date.now(),
+    unread: 0,
+  };
+}
+
+function mapNearbyToOnlineRows(
+  nearby: any[],
+  removedIds: Set<string>,
+): ConversationItem[] {
+  return nearby
+    .filter(
+      (person: any) =>
+        !!person.isOnline &&
+        !removedIds.has(String(person.id || person._id)),
+    )
+    .map((person: any): ConversationItem => {
+      const category: ChatCategory = person.areFriends
+        ? "friend"
+        : person.theyLiked
+          ? "request"
+          : "stranger";
+      const subtitle =
+        person.distanceKm && person.distanceKm !== "?"
+          ? `Active now · ${person.distanceKm} km away`
+          : "Active now";
+      return {
+        otherId: String(person.id || person._id),
+        name: person.name || "User",
+        photo: resolvePhotoUrl(person.photo || ""),
+        gender: person.gender || "",
+        isOnline: true,
+        lastMessage: subtitle,
+        lastMessageAt: Date.now(),
+        unread: 0,
+        category,
+        relationshipStatus: person.friendshipStatus || "stranger",
+        areFriends: !!person.areFriends,
+        iLiked: !!person.iLiked,
+        theyLiked: !!person.theyLiked,
+        requestType: person.theyLiked ? "incoming_like" : undefined,
+      };
+    });
+}
+
+/** Build Online tab from live isOnline flags only (never disk cache). */
+function buildOnlineFromLiveLists(
+  lists: ConversationItem[][],
+  removedIds: Set<string>,
+): ConversationItem[] {
+  const map = new Map<string, ConversationItem>();
+  for (const list of lists) {
+    for (const row of list) {
+      if (
+        !row?.otherId ||
+        !row.isOnline ||
+        row.privacyHidden ||
+        row.theyBlocked ||
+        row.iBlocked ||
+        removedIds.has(row.otherId)
+      ) {
+        continue;
+      }
+      if (!map.has(row.otherId)) {
+        map.set(row.otherId, toOnlineTabRow(row));
+      }
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => b.lastMessageAt - a.lastMessageAt,
+  );
+}
+
 function archivedApiToItem(c: any, myId: string): ConversationItem | null {
   const fromApi = apiConversationToItem(c, myId);
   if (fromApi) {
@@ -125,12 +207,14 @@ function archivedApiToItem(c: any, myId: string): ConversationItem | null {
     gender: other.gender || "",
     isOnline: !!other.isOnline,
     lastMessage:
-      msg?.text ||
-      (msg?.type === "image"
-        ? "📷 Photo"
-        : msg?.type === "audio"
-          ? "🎵 Voice"
-          : "Archived chat"),
+      msg?.type === "call"
+        ? msg?.text || "📞 Voice call"
+        : msg?.text ||
+          (msg?.type === "image"
+            ? "📷 Photo"
+            : msg?.type === "audio"
+              ? "🎵 Voice"
+              : "Archived chat"),
     lastMessageAt: new Date(
       msg?.createdAt || c.archivedAt || Date.now(),
     ).getTime(),
@@ -174,7 +258,15 @@ function apiConversationToItem(c: any, myId: string): ConversationItem | null {
     photo: privacyHidden ? "" : resolvePhotoUrl(other.photo || ""),
     gender: other.gender || "",
     isOnline: blockedEither ? false : !!other.isOnline,
-    lastMessage: msg.text || (msg.type === "image" ? "📷 Photo" : "🎵 Voice"),
+    lastMessage:
+      msg.type === "call"
+        ? msg.text || "📞 Voice call"
+        : msg.text ||
+          (msg.type === "image"
+            ? "📷 Photo"
+            : msg.type === "audio"
+              ? "🎵 Voice"
+              : "Message"),
     lastMessageAt: Number.isFinite(new Date(msg.createdAt).getTime())
       ? new Date(msg.createdAt).getTime()
       : Date.now(),
@@ -216,7 +308,6 @@ export default function ChatScreen() {
     lastProfileUpdate,
     markChatAsRead,
   } = useSocket();
-  useTimeTick(60000);
 
   const cached = getChatListCache(sessionVersion);
   const [conversations, setConversations] = React.useState<ConversationItem[]>(
@@ -229,7 +320,7 @@ export default function ChatScreen() {
     cached.requestRows,
   );
   const [onlineRows, setOnlineRows] = React.useState<ConversationItem[]>(
-    cached.onlineRows,
+    [], // never seed Online from memory cache — always live
   );
   const [archiveRows, setArchiveRows] = React.useState<ConversationItem[]>(
     cached.archiveRows || [],
@@ -239,6 +330,8 @@ export default function ChatScreen() {
   const [activeFilter, setActiveFilter] = React.useState<FilterKey>(
     cached.activeFilter,
   );
+  const activeFilterRef = React.useRef(activeFilter);
+  activeFilterRef.current = activeFilter;
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchMode, setSearchMode] = React.useState(false);
   const [searchBarY, setSearchBarY] = React.useState(0);
@@ -273,6 +366,8 @@ export default function ChatScreen() {
   /** Chats the user archived — Archive tab is independent of main-list merges. */
   const locallyArchivedIdsRef = React.useRef(new Set<string>());
   const loadGenRef = React.useRef(0);
+  const loadInFlightRef = React.useRef<Promise<void> | null>(null);
+  const lastNearbyAtRef = React.useRef(0);
   const lastFullSyncRef = React.useRef(0);
   const [refreshing, setRefreshing] = React.useState(false);
   const [profileModalVisible, setProfileModalVisible] = React.useState(false);
@@ -357,10 +452,7 @@ export default function ChatScreen() {
             name: local.name || row.name,
             photo: local.photo || row.photo,
             gender: local.gender || row.gender,
-            isOnline:
-              typeof local.isOnline === "boolean"
-                ? local.isOnline
-                : row.isOnline,
+            isOnline: row.isOnline,
           });
         } else if (local) {
           map.set(row.otherId, {
@@ -400,11 +492,20 @@ export default function ChatScreen() {
         setConversations(hydrated.conversations);
         setFriendRows(hydrated.friendRows);
         setRequestRows(hydrated.requestRows);
-        setOnlineRows(hydrated.onlineRows);
+        // Never restore Online tab from disk — it goes stale and shows fake "Online now"
+        setOnlineRows([]);
         setArchiveRows(hydrated.archiveRows || []);
         setActiveFilter(hydrated.activeFilter);
         hasLoadedOnce.current = true;
         setLoading(false);
+        listSnapshotRef.current = {
+          ...listSnapshotRef.current,
+          conversations: hydrated.conversations,
+          friendRows: hydrated.friendRows,
+          requestRows: hydrated.requestRows,
+          onlineRows: [],
+          archiveRows: hydrated.archiveRows || [],
+        };
       }
     })();
     return () => {
@@ -414,11 +515,19 @@ export default function ChatScreen() {
 
   // ── Load real conversations from backend ────────────────────────
   const loadConversations = React.useCallback(
-    async (silent = false) => {
+    async (silent = false, opts?: { includeNearby?: boolean }) => {
+      if (loadInFlightRef.current) return loadInFlightRef.current;
+
+      const run = (async () => {
       const showSkeleton = !silent && !hasLoadedOnce.current;
       if (showSkeleton) setLoading(true);
       const loadId = ++loadGenRef.current;
       const prev = listSnapshotRef.current;
+      const nearbyStale = Date.now() - lastNearbyAtRef.current > 5 * 60_000;
+      const includeNearby =
+        opts?.includeNearby === true ||
+        !hasLoadedOnce.current ||
+        (activeFilterRef.current === "Online" && nearbyStale);
 
     try {
       const token = await getAuthToken();
@@ -428,23 +537,25 @@ export default function ChatScreen() {
         }
 
         // Each source is independent — one failure must not wipe chats/friends.
+        // Nearby/GPS is expensive and not needed for All/Unread silent syncs.
         const [convRes, reqRes, friendsRes, likesRes, nearbyRes, archivedRes] =
           await Promise.allSettled([
             apiRequest("/api/chat/conversations", token),
             getFriendRequests(token),
             getFriendsList(token),
             apiRequest("/api/friends/likes", token),
-            (async () => {
-              try {
-                await uploadMyLocation(token);
-              } catch {
-                /* optional for chat */
-              }
-              return apiRequest(
-                "/api/users/nearby?radius=50000&mode=more&limit=30&activeWithin=5&track=0",
-                token,
-              );
-            })(),
+            includeNearby
+              ? (async () => {
+                  void uploadMyLocation(token, {
+                    preferCached: true,
+                    timeoutMs: 3500,
+                  }).catch(() => {});
+                  return apiRequest(
+                    "/api/users/online-nearby?radius=50&limit=40",
+                    token,
+                  );
+                })()
+              : Promise.resolve(undefined),
             fetchArchivedConversations(token),
           ]);
 
@@ -481,13 +592,13 @@ export default function ChatScreen() {
         const nearbyRaw =
           nearbyRes.status === "fulfilled" ? (nearbyRes.value as any) : null;
         const nearby: any[] | null =
-          nearbyRes.status === "fulfilled"
-            ? Array.isArray(nearbyRaw)
+          nearbyRaw == null
+            ? null
+            : Array.isArray(nearbyRaw)
               ? nearbyRaw
               : Array.isArray(nearbyRaw?.users)
                 ? nearbyRaw.users
-                : []
-            : null;
+                : [];
 
         if (convRes.status === "rejected") {
           console.warn("conversations fetch failed:", convRes.reason);
@@ -712,42 +823,16 @@ export default function ChatScreen() {
         const nextOnline =
           nearby !== null
             ? hideArchived(
-                nearby
-                  .filter(
-                    (person: any) =>
-                      !!person.isOnline &&
-                      !removedIds.has(String(person.id || person._id)),
-                  )
-                  .map((person: any): ConversationItem => {
-                    const category: ChatCategory = person.areFriends
-                      ? "friend"
-                      : person.theyLiked
-                        ? "request"
-                        : "stranger";
-        return {
-                      otherId: String(person.id || person._id),
-                      name: person.name || "User",
-                      photo: resolvePhotoUrl(person.photo || ""),
-                      gender: person.gender || "",
-                      isOnline: true,
-                      lastMessage:
-                        person.distanceKm && person.distanceKm !== "?"
-                          ? `Online · ${person.distanceKm} km away`
-                          : "Online now",
-                      lastMessageAt: Date.now(),
-                      unread: 0,
-                      category,
-                      relationshipStatus: person.friendshipStatus || "stranger",
-                      areFriends: !!person.areFriends,
-                      iLiked: !!person.iLiked,
-                      theyLiked: !!person.theyLiked,
-                      requestType: person.theyLiked
-                        ? "incoming_like"
-                        : undefined,
-                    };
-                  }),
+                mapNearbyToOnlineRows(nearby, removedIds),
               )
-            : hideArchived(live.onlineRows);
+            : hideArchived(
+                buildOnlineFromLiveLists(
+                  [nextConversations, nextFriends, nextRequests],
+                  removedIds,
+                ),
+              );
+
+        if (nearby !== null) lastNearbyAtRef.current = Date.now();
 
         if (loadId !== loadGenRef.current) return;
 
@@ -773,13 +858,14 @@ export default function ChatScreen() {
           loaded: true,
         });
 
-        if (user?.email) {
-          void preloadRecentThreads(
-            user.email,
-            nextConversations.map((c) => c.otherId),
-            token,
-            8,
-          );
+        if (user?.email && !silent) {
+          // Warm a few threads, but only after the list has settled — eight
+          // parallel history fetches during paint starved the UI.
+          const email = user.email;
+          const warmIds = nextConversations.slice(0, 3).map((c) => c.otherId);
+          InteractionManager.runAfterInteractions(() => {
+            void preloadRecentThreads(email, warmIds, token, 3);
+          });
         }
     } catch (e) {
         console.error("Failed to load conversations", e);
@@ -790,6 +876,14 @@ export default function ChatScreen() {
       setLoading(false);
     }
       }
+      })();
+
+      loadInFlightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (loadInFlightRef.current === run) loadInFlightRef.current = null;
+      }
     },
     [sessionVersion, user?.email, mergeKeepLocalRows],
   );
@@ -797,7 +891,7 @@ export default function ChatScreen() {
   const onPullRefresh = React.useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadConversations(true);
+      await loadConversations(true, { includeNearby: true });
       refreshUnread();
     } finally {
       setRefreshing(false);
@@ -852,11 +946,19 @@ export default function ChatScreen() {
       // Pull latest socket patches from cache the moment Chat tab opens
       const cached = getChatListCache(sessionVersion);
       if (cached.loaded) {
+        const liveOnline = buildOnlineFromLiveLists(
+          [
+            cached.conversations,
+            cached.friendRows,
+            cached.requestRows,
+          ],
+          locallyRemovedIdsRef.current,
+        );
         listSnapshotRef.current = {
           conversations: cached.conversations,
           friendRows: cached.friendRows,
           requestRows: cached.requestRows,
-          onlineRows: cached.onlineRows,
+          onlineRows: liveOnline,
           archiveRows: cached.archiveRows || [],
         };
         for (const row of cached.archiveRows || []) {
@@ -865,24 +967,22 @@ export default function ChatScreen() {
         setConversations(cached.conversations);
         setFriendRows(cached.friendRows);
         setRequestRows(cached.requestRows);
-        setOnlineRows(cached.onlineRows);
+        setOnlineRows(liveOnline);
         setArchiveRows(cached.archiveRows || []);
         hasLoadedOnce.current = true;
         setLoading(false);
       }
 
       // WhatsApp-style: show cached list instantly; only refetch if stale
-      const stale = Date.now() - lastLoadTime.current > 30000;
+      const stale = Date.now() - lastLoadTime.current > 60_000;
       if (!hasLoadedOnce.current || stale) {
         loadConversations(hasLoadedOnce.current);
       }
-      refreshUnread();
 
       // Rare safety net only — realtime comes from sockets
       refreshInterval.current = setInterval(() => {
         loadConversations(true);
-        refreshUnread();
-      }, 90000);
+      }, 180_000);
 
       return () => {
         if (refreshInterval.current) {
@@ -890,18 +990,18 @@ export default function ChatScreen() {
           refreshInterval.current = null;
         }
       };
-    }, [loadConversations, refreshUnread, sessionVersion]),
+    }, [loadConversations, sessionVersion]),
   );
 
-  // App returned to foreground while Chat tab may still be focused — force sync
+  // App returned to foreground — silent sync only if list is stale
   React.useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
-      loadConversations(true);
-      refreshUnread();
+      const stale = Date.now() - lastLoadTime.current > 60_000;
+      if (stale) loadConversations(true);
     });
     return () => sub.remove();
-  }, [loadConversations, refreshUnread]);
+  }, [loadConversations]);
 
   React.useEffect(() => {
     setChatListCache({ activeFilter, searchQuery, sessionVersion });
@@ -972,19 +1072,10 @@ export default function ChatScreen() {
 
     // Soft remote withdraw: keep local rows — no refetch race.
     if (action === "soft_withdraw") return;
-
-    // Light delayed reconcile only (list already patched instantly)
-    const t = setTimeout(() => {
-      loadConversations(true);
-      refreshUnread();
-    }, 4000);
-    return () => clearTimeout(t);
   }, [
     friendTick,
     lastFriendUpdate,
     applyLocalFriendPatch,
-    loadConversations,
-    refreshUnread,
   ]);
 
   // Instant preview/unread — hydrate from cache (already patched in SocketContext).
@@ -999,17 +1090,21 @@ export default function ChatScreen() {
     }
     const cached = getChatListCache(sessionVersion);
     if (!cached.loaded) return;
+    const liveOnline = buildOnlineFromLiveLists(
+      [cached.conversations, cached.friendRows, cached.requestRows],
+      locallyRemovedIdsRef.current,
+    );
     listSnapshotRef.current = {
       conversations: cached.conversations,
       friendRows: cached.friendRows,
       requestRows: cached.requestRows,
-      onlineRows: cached.onlineRows,
+      onlineRows: liveOnline,
       archiveRows: cached.archiveRows || [],
     };
     setConversations(cached.conversations);
     setFriendRows(cached.friendRows);
     setRequestRows(cached.requestRows);
-    setOnlineRows(cached.onlineRows);
+    setOnlineRows(liveOnline);
     setArchiveRows(cached.archiveRows || []);
   }, [chatPreviewTick, lastChatListPreview, sessionVersion]);
 
@@ -1020,8 +1115,7 @@ export default function ChatScreen() {
     if (now - lastFullSyncRef.current < 60000) return;
     lastFullSyncRef.current = now;
     loadConversations(true);
-    refreshUnread();
-  }, [chatListTick, loadConversations, refreshUnread]);
+  }, [chatListTick, loadConversations]);
 
   // Instant DP / name updates across All · Unread · Friend · Request · Online · Archive
   React.useEffect(() => {
@@ -1093,7 +1187,18 @@ export default function ChatScreen() {
         : item;
 
     const snap = listSnapshotRef.current;
-    let nextOnline = snap.onlineRows.map(patch);
+    const already = [
+      ...snap.conversations,
+      ...snap.friendRows,
+      ...snap.requestRows,
+      ...(snap.archiveRows || []),
+    ].find((r) => r.otherId === uid);
+    const onOnlineTab = snap.onlineRows.some((r) => r.otherId === uid);
+    if (already && !!already.isOnline === online && onOnlineTab === online) {
+      return;
+    }
+
+    let nextOnline = snap.onlineRows.map(patch).filter((r) => r.isOnline);
     if (!online) {
       nextOnline = nextOnline.filter((r) => r.otherId !== uid);
     } else if (!nextOnline.some((r) => r.otherId === uid)) {
@@ -1103,15 +1208,7 @@ export default function ChatScreen() {
         snap.requestRows.find((c) => c.otherId === uid) ||
         (snap.archiveRows || []).find((c) => c.otherId === uid);
       if (seed && !seed.privacyHidden && !seed.theyBlocked && !seed.iBlocked) {
-        nextOnline = [
-          {
-            ...seed,
-            isOnline: true,
-            lastMessage: seed.lastMessage || "Online now",
-            lastMessageAt: Date.now(),
-          },
-          ...nextOnline,
-        ];
+        nextOnline = [toOnlineTabRow(seed), ...nextOnline];
       }
     }
 
@@ -1286,7 +1383,10 @@ export default function ChatScreen() {
 
   const friendCount = friendRows.length;
   const requestCount = requestRows.length;
-  const unreadRows = conversations.filter((row) => (row.unread || 0) > 0);
+  const unreadRows = React.useMemo(
+    () => conversations.filter((row) => (row.unread || 0) > 0),
+    [conversations],
+  );
   const unreadCount = unreadRows.reduce(
     (sum, row) => sum + (row.unread > 0 ? row.unread : 0),
     0,
@@ -1503,26 +1603,35 @@ export default function ChatScreen() {
     }
   };
 
-  const source =
-    activeFilter === "Friend"
-      ? friendRows
-      : activeFilter === "Request"
-        ? requestRows
-        : activeFilter === "Online"
-          ? onlineRows
-          : activeFilter === "Unread"
-            ? unreadRows
-            : activeFilter === "Archive"
-              ? archiveRows
-              : conversations;
+  const source = React.useMemo(
+    () =>
+      activeFilter === "Friend"
+        ? friendRows
+        : activeFilter === "Request"
+          ? requestRows
+          : activeFilter === "Online"
+            ? onlineRows
+            : activeFilter === "Unread"
+              ? unreadRows
+              : activeFilter === "Archive"
+                ? archiveRows
+                : conversations,
+    [
+      activeFilter,
+      friendRows,
+      requestRows,
+      onlineRows,
+      unreadRows,
+      archiveRows,
+      conversations,
+    ],
+  );
 
-  const filtered = source.filter((c) => {
-    const matchSearch = c.name
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase());
-    if (!matchSearch) return false;
-    return true; // All
-  });
+  const filtered = React.useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    if (!q) return source;
+    return source.filter((c) => c.name.toLowerCase().includes(q));
+  }, [source, searchQuery]);
 
   const emptyCopy = () => {
     if (searchQuery) return { title: "No results", text: "" };
@@ -1768,21 +1877,14 @@ export default function ChatScreen() {
     [renderConversation],
   );
 
-  /** Memoized so the unread sum isn't recomputed over the whole list each render */
+  /** Remount rows only when list identity / unread / preview change — not every presence tick */
   const listExtraData = React.useMemo(
     () =>
-      `${activeFilter}:${filtered.length}:${chatPreviewTick}:${presenceTick}:${friendTick}:${archiveUnread}:${filtered.reduce(
+      `${activeFilter}:${filtered.length}:${chatPreviewTick}:${archiveUnread}:${filtered.reduce(
         (s, r) => s + (r.unread || 0),
         0,
-      )}:${filtered[0]?.otherId || ""}:${filtered[0]?.lastMessageAt || 0}`,
-    [
-      activeFilter,
-      filtered,
-      chatPreviewTick,
-      presenceTick,
-      friendTick,
-      archiveUnread,
-    ],
+      )}:${filtered[0]?.otherId || ""}:${filtered[0]?.lastMessageAt || 0}:${filtered[0]?.isOnline ? 1 : 0}`,
+    [activeFilter, filtered, chatPreviewTick, archiveUnread],
   );
 
   const keyExtractConversation = React.useCallback(
@@ -1921,7 +2023,13 @@ export default function ChatScreen() {
               <TouchableOpacity
                 key={f}
                 style={[styles.filterPill, active && styles.filterPillActive]}
-                onPress={() => setActiveFilter(f)}
+                onPress={() => {
+                  setActiveFilter(f);
+                  if (f === "Online") {
+                    lastNearbyAtRef.current = 0;
+                    void loadConversations(true, { includeNearby: true });
+                  }
+                }}
                 activeOpacity={1}
               >
                 <Text

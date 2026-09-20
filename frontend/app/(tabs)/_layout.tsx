@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
+import { useStableBottomInset } from '../../hooks/useStableBottomInset';
 import { tabScreenOptions, getTabBarBottomInset, getTabBarHeight } from '../../utils/navigation';
 import {
   getAuthToken,
@@ -25,7 +25,8 @@ import { pingAppOpen } from '../../utils/retention';
 
 export default function TabLayout() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  // Latch inset — Modals must not resize / teleport the absolute tab bar
+  const stableBottom = useStableBottomInset();
   const { sessionVersion, user } = useAuth();
   const { unreadCount, refreshUnread } = useSocket();
   const hadUserRef = useRef(false);
@@ -33,9 +34,42 @@ export default function TabLayout() {
     'checking' | 'ok' | 'need-profile'
   >('checking');
 
-  // WhatsApp-style: sit above 3-button / gesture nav on every device
-  const bottomInset = getTabBarBottomInset(insets.bottom);
-  const tabBarHeight = getTabBarHeight(insets.bottom);
+  // WhatsApp-style: sit above 3-button / gesture nav; height stays fixed across popups
+  const bottomInset = getTabBarBottomInset(stableBottom);
+  const tabBarHeight = getTabBarHeight(stableBottom);
+
+  const screenOptions = useMemo(
+    () => ({
+      ...tabScreenOptions,
+      tabBarActiveTintColor: '#370372',
+      tabBarInactiveTintColor: '#999',
+      tabBarStyle: {
+        position: 'absolute' as const,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#E5E5E5',
+        elevation: 8,
+        height: tabBarHeight,
+        paddingTop: 6,
+        paddingBottom: bottomInset,
+        backgroundColor: '#FFFFFF',
+      },
+      tabBarItemStyle: {
+        paddingTop: 2,
+        height: 52,
+      },
+      tabBarLabelStyle: {
+        fontSize: 11,
+        fontWeight: '500' as const,
+        marginBottom: 0,
+        lineHeight: 14,
+        ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+      },
+    }),
+    [bottomInset, tabBarHeight],
+  );
   // Kick to login only after a previously active session is revoked
   useEffect(() => {
     if (user) {
@@ -109,35 +143,7 @@ export default function TabLayout() {
   return (
     <Tabs
       key={`tabs-${sessionVersion}`}
-      screenOptions={{
-        ...tabScreenOptions,
-        tabBarActiveTintColor: '#370372',
-        tabBarInactiveTintColor: '#999',
-        tabBarStyle: {
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          borderTopWidth: StyleSheet.hairlineWidth,
-          borderTopColor: '#E5E5E5',
-          elevation: 8,
-          height: tabBarHeight,
-          paddingTop: 6,
-          paddingBottom: bottomInset,
-          backgroundColor: '#F5F5F7',
-        },
-        tabBarItemStyle: {
-          paddingTop: 2,
-          height: 52,
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '500',
-          marginBottom: 0,
-          lineHeight: 14,
-          ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
-        },
-      }}
+      screenOptions={screenOptions}
     >
       <Tabs.Screen
         name="index"

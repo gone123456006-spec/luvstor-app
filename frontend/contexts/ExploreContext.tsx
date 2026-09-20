@@ -52,6 +52,13 @@ const ExploreContext = createContext<ExploreContextValue | null>(null);
 
 const SKIP_COOLDOWN_SEC = 3;
 
+const ANON_PEER: ExplorePeer = {
+  name: 'Anonymous',
+  publicId: '',
+  photo: '',
+  gender: '',
+};
+
 function inActiveCall(call: {
   phase: string;
   isExplore: boolean;
@@ -65,6 +72,13 @@ function normalizePrefs(raw: Partial<ExplorePrefs> | null | undefined): ExploreP
   return {
     showMe,
     verifiedOnly: !!raw?.verifiedOnly,
+  };
+}
+
+function toAnonPeer(peer?: Partial<ExplorePeer> | null): ExplorePeer {
+  return {
+    ...ANON_PEER,
+    gender: peer?.gender || '',
   };
 }
 
@@ -82,6 +96,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const statusRef = useRef(status);
   const prefsRef = useRef(prefs);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Set synchronously on Skip so call-end effect cannot wipe cooldown */
+  const skipInFlightRef = useRef(false);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -129,7 +145,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setPrefsState(normalized);
     prefsRef.current = normalized;
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-    // Soft persist to server
     void (async () => {
       try {
         const token = await getAuthToken();
@@ -179,6 +194,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     clearCooldownTimer();
     const rejoinMode = modeRef.current;
     setStatus('cooldown');
+    statusRef.current = 'cooldown';
     setCooldownSec(SKIP_COOLDOWN_SEC);
     setMatchedPeer(null);
 
@@ -189,6 +205,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       if (left <= 0) {
         clearCooldownTimer();
         setStatus('searching');
+        statusRef.current = 'searching';
+        skipInFlightRef.current = false;
         socket?.emit('explore:join', {
           callType: rejoinMode,
           prefs: prefsRef.current,
@@ -198,20 +216,26 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   }, [clearCooldownTimer, socket]);
 
   const leaveQueue = useCallback(() => {
+    // Never tear down Explore matchmaking UI while a live Explore call is up
+    if (inActiveCall(call) === 'explore') return;
+
     clearCooldownTimer();
     setCooldownSec(0);
+    skipInFlightRef.current = false;
     const leaveType = modeRef.current;
     if (socket?.connected && statusRef.current === 'searching') {
       socket.emit('explore:leave', { callType: leaveType });
     }
     setStatus('idle');
+    statusRef.current = 'idle';
     setMatchedPeer(null);
-  }, [clearCooldownTimer, socket]);
+  }, [call, clearCooldownTimer, socket]);
 
   const skipWithCooldown = useCallback(() => {
     if (!socket?.connected) return;
     if (statusRef.current === 'cooldown' || cooldownSec > 0) return;
 
+    skipInFlightRef.current = true;
     const busy = inActiveCall(call);
     if (busy === 'explore') {
       call.endCall();
@@ -230,14 +254,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         setMode(payload.callType);
       }
       setStatus('searching');
+      statusRef.current = 'searching';
       setMatchedPeer(null);
     };
 
     const onIdle = () => {
-      if (statusRef.current !== 'cooldown') {
-        setStatus('idle');
-        setMatchedPeer(null);
-      }
+      if (statusRef.current === 'cooldown' || skipInFlightRef.current) return;
+      if (inActiveCall(call) === 'explore') return;
+      setStatus('idle');
+      statusRef.current = 'idle';
+      setMatchedPeer(null);
     };
 
     const onMatched = (payload: {
@@ -248,21 +274,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         setMode(payload.callType);
       }
       setStatus('matched');
-      if (payload?.peer) {
-        setMatchedPeer({
-          name: payload.peer.name || 'User',
-          publicId: payload.peer.publicId || '',
-          photo: payload.peer.photo || '',
-          gender: payload.peer.gender || '',
-        });
-      }
+      statusRef.current = 'matched';
+      setMatchedPeer(toAnonPeer(payload?.peer));
     };
 
     const onError = () => {
-      if (statusRef.current !== 'cooldown') {
-        setStatus('idle');
-        setMatchedPeer(null);
-      }
+      if (statusRef.current === 'cooldown' || skipInFlightRef.current) return;
+      if (inActiveCall(call) === 'explore') return;
+      setStatus('idle');
+      statusRef.current = 'idle';
+      setMatchedPeer(null);
     };
 
     socket.on('explore:searching', onSearching);
@@ -276,17 +297,17 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       socket.off('explore:matched', onMatched);
       socket.off('explore:error', onError);
     };
-  }, [socket]);
+  }, [call, socket]);
 
+  // Peer hung up / call ended — leave matched UI, but never clobber Skip cooldown
   useEffect(() => {
-    if (
-      call.isExplore &&
-      (call.phase === 'idle' || call.phase === 'ended') &&
-      statusRef.current === 'matched'
-    ) {
-      setStatus('idle');
-      setMatchedPeer(null);
-    }
+    if (!call.isExplore) return;
+    if (call.phase !== 'idle' && call.phase !== 'ended') return;
+    if (statusRef.current === 'cooldown' || skipInFlightRef.current) return;
+    if (statusRef.current !== 'matched') return;
+    setStatus('idle');
+    statusRef.current = 'idle';
+    setMatchedPeer(null);
   }, [call.isExplore, call.phase]);
 
   useEffect(() => () => clearCooldownTimer(), [clearCooldownTimer]);

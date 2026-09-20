@@ -220,8 +220,12 @@ function buildEligibilityFilter({ excludeOids, genderFilter, activeWithinMinutes
     filter.gender = new RegExp(`^${genderFilter}$`, 'i');
   }
   if (activeWithinMinutes > 0) {
-    const since = new Date(Date.now() - activeWithinMinutes * 60 * 1000);
-    filter.$or = [{ isOnline: true }, { lastSeen: { $gte: since } }];
+    const { STALE_MS } = require('../utils/onlineStatus');
+    const onlineFresh = new Date(Date.now() - STALE_MS);
+    // Online-only discovery: require live isOnline + fresh lastSeen.
+    // Do not treat "logged in recently" as online.
+    filter.isOnline = true;
+    filter.lastSeen = { $gte: onlineFresh };
   }
   return filter;
 }
@@ -515,6 +519,11 @@ async function buildNearbyBatch({
     selected.map((c) => c.id),
   );
 
+  const { resolveOnlineMap } = require('../utils/onlineStatus');
+  const onlineMap = await resolveOnlineMap(
+    selected.map((c) => c.doc).filter(Boolean),
+  );
+
   const users = selected.map((candidate) => {
     const doc = candidate.doc;
     const friendship = friendships.get(candidate.id) || null;
@@ -558,7 +567,7 @@ async function buildNearbyBatch({
       interests: doc.interests,
       height: doc.height,
       relationshipGoal: doc.relationshipGoal || '',
-      isOnline: !!doc.isOnline,
+      isOnline: onlineMap.get(String(doc._id)) === true,
       distance: distanceM,
       distanceKm,
       friendshipStatus: friendship?.status || 'stranger',

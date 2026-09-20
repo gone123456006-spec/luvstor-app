@@ -1,9 +1,8 @@
 /**
- * Explore random voice/video matchmaking — fully independent modes.
+ * Explore random voice/video matchmaking — fully independent of friends/chat.
  * - Separate queues for video and voice (never cross-match)
- * - Independent from friends/chat calling
- * - Optional gender + verified preferences (dating-style)
- * - Shows real name, ID, and profile photo (WhatsApp-style) but no friend links
+ * - Anonymous peer cards (no real name / photo / publicId on either side)
+ * - No friend links, chat messages, or notification-center rows
  */
 
 const User = require('../models/User');
@@ -130,14 +129,15 @@ async function pickMatch(callType) {
   return null;
 }
 
+/** Anonymous card only — gender kept for avatar tint, nothing identifiable */
 function explorePeerCard(snapshot) {
   return {
     id: 'explore',
-    name: snapshot?.name || 'User',
-    photo: snapshot?.photo || '',
+    name: 'Anonymous',
+    photo: '',
     gender: snapshot?.gender || '',
-    publicId: snapshot?.publicId || '',
-    photoVerified: !!snapshot?.photoVerified,
+    publicId: '',
+    photoVerified: false,
   };
 }
 

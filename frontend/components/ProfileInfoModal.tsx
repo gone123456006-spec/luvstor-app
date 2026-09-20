@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
   },
   sheet: {
     height: SHEET_HEIGHT,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderTopLeftRadius: SHEET_RADIUS,
     borderTopRightRadius: SHEET_RADIUS,
     overflow: "hidden",

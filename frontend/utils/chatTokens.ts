@@ -1,4 +1,4 @@
-import { ApiError, getApiBase } from './api';
+import { ApiError, fetchWithTimeout, getApiBase } from './api';
 
 import { SubscriptionStatus } from './subscriptions';
 
@@ -43,7 +43,7 @@ async function tokenFetch(
 ): Promise<ChatAccessStatus> {
   let res: Response;
   try {
-    res = await fetch(`${getApiBase()}${path}`, {
+    res = await fetchWithTimeout(`${getApiBase()}${path}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -175,7 +175,7 @@ export async function claimDailySpin(authToken: string): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch(`${getApiBase()}/api/tokens/spin`, {
+    const res = await fetchWithTimeout(`${getApiBase()}/api/tokens/spin`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -215,7 +215,7 @@ export async function purchaseTokenPack(
   authToken: string,
   packageName: string,
 ): Promise<{ success: boolean; tokenBalance: number; credited?: number; error?: string }> {
-  const res = await fetch(`${getApiBase()}/api/tokens/purchase`, {
+  const res = await fetchWithTimeout(`${getApiBase()}/api/tokens/purchase`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

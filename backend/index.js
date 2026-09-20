@@ -1,10 +1,9 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const path = require('path');
 
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -116,14 +115,22 @@ app.use((req, res, next) => {
   });
 });
 
+const { ensureUploadsDir } = require('./utils/uploadsPath');
+const UPLOADS_DIR = ensureUploadsDir();
 app.use(
   '/uploads',
-  express.static(path.join(__dirname, 'uploads'), {
+  express.static(UPLOADS_DIR, {
     maxAge: '7d',
     etag: true,
     lastModified: true,
+    // Allow RN / Expo Image to fetch cross-origin without opaque failures
+    setHeaders(res) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
   })
 );
+console.log(`📁 Serving uploads from ${UPLOADS_DIR}`);
 
 // ── Routes ─────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
@@ -280,6 +287,20 @@ mongoose.connection.on('connected', () => {
       console.warn('referralCode index repair failed:', err.message),
     );
   }
+  // Clear stuck "Active now" flags from missed disconnects / crashes
+  const { STALE_MS } = require('./utils/onlineStatus');
+  const User = require('./models/User');
+  const cutoff = new Date(Date.now() - STALE_MS);
+  User.updateMany(
+    { isOnline: true, $or: [{ lastSeen: { $lt: cutoff } }, { lastSeen: null }] },
+    { $set: { isOnline: false } },
+  )
+    .then((r) => {
+      if (r.modifiedCount) {
+        console.log(`🧹 Cleared stale isOnline on ${r.modifiedCount} user(s)`);
+      }
+    })
+    .catch((err) => console.warn('stale isOnline cleanup failed:', err.message));
 });
 mongoose.connection.on('disconnected', () => {
   console.warn('⚠️  MongoDB disconnected — retrying, API stays up');
@@ -411,6 +432,21 @@ async function startHttp() {
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
+      // macOS AirPlay often owns :5000 — auto-retry once on 5001 for local dev
+      if (
+        process.platform === 'darwin' &&
+        String(PORT) === '5000' &&
+        !server.__retriedAltPort
+      ) {
+        const alt = 5001;
+        console.warn(
+          `⚠️  Port 5000 is in use (often AirPlay Receiver). Retrying on ${alt}…`,
+        );
+        console.warn('   Tip: set PORT=5001 in backend/.env to skip this.');
+        server.__retriedAltPort = true;
+        server.listen(alt, '0.0.0.0');
+        return;
+      }
       console.error(`❌ Port ${PORT} is already in use.`);
       if (process.platform === 'darwin' && String(PORT) === '5000') {
         console.error(

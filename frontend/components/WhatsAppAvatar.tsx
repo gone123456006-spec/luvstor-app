@@ -1,10 +1,10 @@
-import { Image } from "expo-image";
 import React, { useEffect, useState } from "react";
 import { StyleSheet, View, ViewStyle } from "react-native";
 import Svg, { Path } from "react-native-svg";
+import { mediaIdentity } from "../utils/media";
 import { useLiveSubscriptionBadge } from "../utils/subscriptions";
-import { resolveMediaUrl } from "../utils/media";
 import { Ionicons } from "@expo/vector-icons";
+import MediaImage from "./MediaImage";
 
 const IG_BLUE = "#0095F6";
 /** Photo verification shield — green (separate from subscription blue tick) */
@@ -252,7 +252,7 @@ type Props = {
  * - Gray default person DP when no photo / photo removed / load failed
  * - Same gray silhouette when privacyHidden (blocked-you case)
  */
-export default function WhatsAppAvatar({
+function WhatsAppAvatarInner({
   photo,
   name,
   publicId,
@@ -265,36 +265,34 @@ export default function WhatsAppAvatar({
   photoVerified: _photoVerified = false,
 }: Props) {
   const [photoFailed, setPhotoFailed] = useState(false);
-  const photoKey = String(photo || "").trim();
-  const resolvedKey = resolveMediaUrl(photoKey) || photoKey;
+  const photoRaw = String(photo || "").trim();
+  // Identity ignores host/query — so a profile refresh that rewrites the same
+  // DP to another absolute URL must NOT reset failure state or remount.
+  const photoId = mediaIdentity(photoRaw) || photoRaw;
 
-  // Retry when the resolved URL changes too — an early failure against a stale
-  // host would otherwise pin the default DP for the whole session.
   useEffect(() => {
     setPhotoFailed(false);
-  }, [photoKey, resolvedKey]);
+  }, [photoId]);
 
   const liveBadge = useLiveSubscriptionBadge(badge, badgeExpiresAt);
   const hasPlanBadge = !privacyHidden && !!liveBadge;
   const showOnline = online && !privacyHidden && !hasPlanBadge;
 
   const hasPhoto =
-    !privacyHidden && !photoFailed && hasProfilePhoto(photoKey);
-  const photoUri = hasPhoto ? resolvedKey : "";
+    !privacyHidden && !photoFailed && hasProfilePhoto(photoRaw);
 
   return (
     <View style={[{ width: size, height: size, overflow: "visible" }, style]}>
       {privacyHidden || !hasPhoto ? (
         <WhatsAppDefaultDp size={size} />
       ) : (
-        <Image
-          source={{ uri: photoUri }}
+        <MediaImage
+          uri={photoRaw}
           style={{ width: size, height: size, borderRadius: size / 2 }}
           contentFit="cover"
           cachePolicy="memory-disk"
           transition={0}
-          recyclingKey={`avatar-${photoUri}`}
-          onError={() => setPhotoFailed(true)}
+          onExhausted={() => setPhotoFailed(true)}
         />
       )}
       {showOnline ? (
@@ -316,6 +314,9 @@ export default function WhatsAppAvatar({
     </View>
   );
 }
+
+const WhatsAppAvatar = React.memo(WhatsAppAvatarInner);
+export default WhatsAppAvatar;
 
 const styles = StyleSheet.create({
   initialsCircle: {

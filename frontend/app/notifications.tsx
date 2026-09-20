@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -15,12 +15,13 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppAlert } from "../components/AppAlert";
 import { ListRowSkeleton } from "../components/ScreenSkeleton";
 import UserProfileModal from "../components/UserProfileModal";
 import WhatsAppAvatar, { getDisplayName } from "../components/WhatsAppAvatar";
 import { useSocket } from "../contexts/SocketContext";
+import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { resolveMediaUrl } from "../utils/media";
 import { getAuthToken } from "../utils/auth";
 import { sendLike } from "../utils/friends";
@@ -32,6 +33,7 @@ import {
     markNotificationsRead,
     markNotificationsUnread,
 } from "../utils/notifications";
+import { getSheetBottomPadding } from "../utils/navigation";
 import { routeForData } from "../utils/push";
 import { fetchSubscriptionStatus } from "../utils/subscriptions";
 
@@ -253,6 +255,8 @@ function displayBody(
 
 export default function NotificationsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const bottomInset = useStableBottomInset();
   const { notifTick, refreshNotifUnread, notifUnreadCount } = useSocket();
   const { showAlert } = useAppAlert();
 
@@ -282,7 +286,11 @@ export default function NotificationsScreen() {
   const cursor = useRef<string | null>(null);
   const hasMore = useRef(true);
   const loadingRef = useRef(false);
+  const lastLoadAtRef = useRef(0);
+  const itemsLenRef = useRef(0);
   const moreBtnRef = useRef<View>(null);
+
+  itemsLenRef.current = items.length;
 
   /** Anchor the overflow menu under the ⋮ button on any screen size. */
   const openMenu = useCallback(() => {
@@ -347,9 +355,11 @@ export default function NotificationsScreen() {
         );
         cursor.current = page.nextCursor;
         hasMore.current = page.hasMore;
+        lastLoadAtRef.current = Date.now();
         await refreshNotifUnread();
 
-        // Double-check subscription in case list payload is stale
+        // Subscription check is expensive — only on a cold/full load
+        if (soft) return;
         try {
           const sub = await fetchSubscriptionStatus(token);
           const unlocked = !!(
@@ -431,18 +441,47 @@ export default function NotificationsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      load(items.length > 0);
+      const soft = itemsLenRef.current > 0;
+      if (soft && Date.now() - lastLoadAtRef.current < 30_000) return;
+      load(soft);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [notifTick, filter]),
+    }, []),
   );
 
-  // Filtering by read state happens server-side; hide personal chats + search
+  // All ↔ Unread ↔ Profile View — always fetch the matching page (never reuse All)
+  const filterRef = useRef(filter);
+  useEffect(() => {
+    if (filterRef.current === filter) return;
+    filterRef.current = filter;
+    cursor.current = null;
+    hasMore.current = true;
+    setItems([]);
+    void load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
+
+  // Socket badge tick — silent refresh; never remount the screen
+  useEffect(() => {
+    if (notifTick === 0) return;
+    if (itemsLenRef.current === 0) return;
+    if (Date.now() - lastLoadAtRef.current < 15_000) return;
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifTick]);
+
+  // Filtering by read state happens server-side; also enforce client-side so
+  // switching All ↔ Unread never shows the wrong set while a fetch is in flight.
   const filtered = useMemo(() => {
     // Profile View is its own tab — never mix into All / Unread
-    const scoped =
+    let scoped =
       filter === "Profile View"
         ? items.filter((n) => n.type === "profile_view")
         : items.filter((n) => n.type !== "chat" && n.type !== "profile_view");
+
+    if (filter === "Unread") {
+      scoped = scoped.filter((n) => !n.read);
+    }
+
     const q = searchQuery.trim().toLowerCase();
     if (!q) return scoped;
     return scoped.filter(
@@ -872,7 +911,15 @@ export default function NotificationsScreen() {
 
   const unlockFooter =
     !profileViewsUnlocked && filter === "Profile View" ? (
-      <View style={styles.unlockBannerWrap}>{unlockBanner}</View>
+      <View
+        style={[
+          styles.unlockBannerWrap,
+          // Clear Android 3-button / gesture nav — SafeAreaView only pads top
+          { marginBottom: Math.max(bottomInset, 12) + 8 },
+        ]}
+      >
+        {unlockBanner}
+      </View>
     ) : null;
 
   return (
@@ -984,7 +1031,25 @@ export default function NotificationsScreen() {
           renderItem={renderRow}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={
-            rows.length ? styles.listContent : styles.emptyWrap
+            rows.length
+              ? [
+                  styles.listContent,
+                  {
+                    paddingBottom:
+                      !profileViewsUnlocked && filter === "Profile View"
+                        ? 12
+                        : 28 + bottomInset,
+                  },
+                ]
+              : [
+                  styles.emptyWrap,
+                  {
+                    paddingBottom:
+                      !profileViewsUnlocked && filter === "Profile View"
+                        ? 0
+                        : bottomInset,
+                  },
+                ]
           }
           refreshControl={
             <RefreshControl
@@ -1092,7 +1157,10 @@ export default function NotificationsScreen() {
         onRequestClose={() => setSelected(null)}
       >
         <Pressable
-          style={styles.sheetBackdrop}
+          style={[
+            styles.sheetBackdrop,
+            { paddingBottom: getSheetBottomPadding(insets.bottom) },
+          ]}
           onPress={() => setSelected(null)}
         >
           <View
@@ -1479,7 +1547,7 @@ const styles = StyleSheet.create({
   unlockBannerWrap: {
     marginHorizontal: 12,
     marginTop: 10,
-    marginBottom: 28,
+    // marginBottom set dynamically from useStableBottomInset
   },
   unlockBanner: {
     flexDirection: "row",
@@ -1590,13 +1658,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.45)",
     justifyContent: "flex-end",
     paddingHorizontal: 10,
-    paddingBottom: 10,
   },
   sheetWrap: {
     gap: 8,
   },
   sheet: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderRadius: 14,
     overflow: "hidden",
   },
@@ -1634,7 +1701,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   sheetCancel: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#E4E6EB",
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
