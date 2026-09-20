@@ -655,9 +655,16 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       const s = socket;
       if (s?.connected) {
         try {
-          // Clear push-suppress BEFORE disconnect so FCM can fire immediately
+          // Clear push-suppress BEFORE disconnect so FCM can fire immediately.
+          // Emit leave then disconnect on next tick so the server processes leave.
           s.emit('chat:leave', {});
-          s.disconnect();
+          setTimeout(() => {
+            try {
+              if (s.connected) s.disconnect();
+            } catch {
+              /* ignore */
+            }
+          }, 80);
         } catch {
           /* ignore */
         }

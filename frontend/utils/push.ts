@@ -82,9 +82,12 @@ export const CHANNELS = {
     name: 'Calls',
     description: 'Incoming voice and video calls',
     importance: IMPORTANCE.MAX,
-    vibrationPattern: [0, 500, 500, 500],
+    vibrationPattern: [0, 500, 500, 500, 500, 500],
     lightColor: '#8E2DE2',
     lockscreenVisibility: 1,
+    /** Heads-up + lock-screen even in quiet hours when OS allows */
+    bypassDnd: false,
+    enableLights: true,
   },
   social: {
     name: 'Matches & Likes',
@@ -246,7 +249,11 @@ export async function ensureChannels() {
           VISIBILITY_PRIVATE,
         enableVibrate: true,
         showBadge: true,
+        enableLights: (cfg as { enableLights?: boolean }).enableLights === true,
       };
+      if ((cfg as { bypassDnd?: boolean }).bypassDnd === true) {
+        options.bypassDnd = true;
+      }
       // Only pass sound for silent (null) or a bundled custom filename.
       // Omitting it uses the Android system default notification sound.
       if ('sound' in cfg) {

@@ -26,6 +26,35 @@ const {
 const { MAX_PROFILE_PHOTOS } = require("../config/profileLimits");
 const { isProfileComplete } = require("../utils/userHelpers");
 const { WELCOME_PROFILE_TOKENS, GALLERY_POST_TOKENS_PER_IMAGE } = require("../services/chatTokens");
+const {
+  toPersistentMediaUrl,
+  sanitizeProfileMediaUpdate,
+  sanitizePhotosArray,
+} = require("../utils/mediaUrl");
+
+/** Normalize owner media for API responses; heal bad Mongo values in the background. */
+function shapeOwnerMediaFields(user) {
+  const photo = toPersistentMediaUrl(user.photo);
+  const coverPhoto = toPersistentMediaUrl(user.coverPhoto);
+  const photos = sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS);
+  const prevPhoto = String(user.photo || "");
+  const prevCover = String(user.coverPhoto || "");
+  const prevPhotos = Array.isArray(user.photos)
+    ? user.photos.map((p) => String(p || "")).filter(Boolean)
+    : [];
+  const photosChanged =
+    photos.length !== prevPhotos.length ||
+    photos.some((p, i) => p !== toPersistentMediaUrl(prevPhotos[i]));
+  if (photo !== prevPhoto || coverPhoto !== prevCover || photosChanged) {
+    User.updateOne(
+      { _id: user._id },
+      { $set: { photo, coverPhoto, photos } },
+    ).catch((err) =>
+      console.warn("media URL heal failed:", err.message),
+    );
+  }
+  return { photo, coverPhoto, photos };
+}
 
 /**
  * Profile Isolation Principles:
@@ -51,6 +80,8 @@ router.get("/me", auth, async (req, res) => {
     // Backfill unique public ID for older accounts
     await ensureUserPublicId(user);
 
+    const media = shapeOwnerMediaFields(user);
+
     // Return COMPLETE profile data (only to owner)
     res.json({
       id: user._id,
@@ -64,9 +95,9 @@ router.get("/me", auth, async (req, res) => {
       showMe: resolveShowMe(user),
       interests: user.interests,
       relationshipGoal: user.relationshipGoal,
-      photo: user.photo,
-      coverPhoto: user.coverPhoto || "",
-      photos: user.photos || [],
+      photo: media.photo,
+      coverPhoto: media.coverPhoto || "",
+      photos: media.photos,
       height: user.height,
       distance: user.distance,
       location: user.location,
@@ -136,19 +167,33 @@ router.put("/me", auth, async (req, res) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
 
-    if (updates.coverPhoto !== undefined) {
-      updates.coverPhoto =
-        typeof updates.coverPhoto === "string" ? updates.coverPhoto.trim() : "";
+    // Never persist file:// / content:// / LAN absolutes — they blank after reinstall
+    if (updates.photo !== undefined) {
+      const next = sanitizeProfileMediaUpdate(updates.photo);
+      if (next === undefined) {
+        delete updates.photo; // invalid device URI — keep existing DB photo
+      } else {
+        updates.photo = next;
+      }
     }
 
-    // Gallery: max 6 images, strings only
+    if (updates.coverPhoto !== undefined) {
+      const next = sanitizeProfileMediaUpdate(
+        typeof updates.coverPhoto === "string" ? updates.coverPhoto : "",
+      );
+      if (next === undefined) {
+        delete updates.coverPhoto;
+      } else {
+        updates.coverPhoto = next;
+      }
+    }
+
+    // Gallery: max 6 images, persistent URLs only
     if (updates.photos !== undefined) {
       if (!Array.isArray(updates.photos)) {
         return res.status(400).json({ error: "photos must be an array" });
       }
-      updates.photos = updates.photos
-        .filter((url) => typeof url === "string" && url.trim())
-        .slice(0, MAX_PROFILE_PHOTOS);
+      updates.photos = sanitizePhotosArray(updates.photos, MAX_PROFILE_PHOTOS);
     }
 
     if (
@@ -652,9 +697,11 @@ router.get("/profile/:userId", auth, async (req, res) => {
       name: safe.name,
       age: safe.age ?? null,
       bio: safe.bio || "",
-      photo: safe.privacyHidden ? "" : safe.photo || "",
-      coverPhoto: safe.privacyHidden ? "" : safe.coverPhoto || "",
-      photos: safe.privacyHidden ? [] : safe.photos || [],
+      photo: safe.privacyHidden ? "" : toPersistentMediaUrl(safe.photo) || "",
+      coverPhoto: safe.privacyHidden ? "" : toPersistentMediaUrl(safe.coverPhoto) || "",
+      photos: safe.privacyHidden
+        ? []
+        : sanitizePhotosArray(safe.photos || [], MAX_PROFILE_PHOTOS),
       gender: safe.gender || "",
       interests: safe.interests || [],
       height: safe.height ?? null,
@@ -764,9 +811,9 @@ router.get("/search-by-id", auth, async (req, res) => {
       name: user.name,
       age: user.age,
       bio: user.bio,
-      photo: user.photo,
-      coverPhoto: user.coverPhoto || "",
-      photos: user.photos || [],
+      photo: toPersistentMediaUrl(user.photo) || "",
+      coverPhoto: toPersistentMediaUrl(user.coverPhoto) || "",
+      photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS),
       gender: user.gender,
       interests: user.interests,
       height: user.height,

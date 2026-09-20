@@ -2,6 +2,9 @@
  * Notify a user on every connected socket (any server instance).
  * Uses Socket.IO room `user:{id}` so Redis adapter fans out correctly.
  */
+const { toPersistentMediaUrl, sanitizePhotosArray } = require('./mediaUrl');
+const { MAX_PROFILE_PHOTOS } = require('../config/profileLimits');
+
 function notifyUser(io, userId, event, payload) {
   if (!io || !userId) return;
   const uid = String(userId);
@@ -52,7 +55,7 @@ async function actorPayload(User, fromUserId) {
   return {
     fromUserId: String(fromUserId),
     fromName: from?.name || 'Someone',
-    fromPhoto: from?.photo || '',
+    fromPhoto: toPersistentMediaUrl(from?.photo) || '',
     fromGender: from?.gender || '',
   };
 }
@@ -113,9 +116,9 @@ async function emitProfileUpdate(io, user) {
     publicId: user.publicId || '',
     name: user.name || '',
     bio: user.bio || '',
-    photo: user.photo || '',
-    coverPhoto: user.coverPhoto || '',
-    photos: user.photos || [],
+    photo: toPersistentMediaUrl(user.photo) || '',
+    coverPhoto: toPersistentMediaUrl(user.coverPhoto) || '',
+    photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS),
     age: user.age ?? null,
     gender: user.gender || '',
     height: user.height ?? null,

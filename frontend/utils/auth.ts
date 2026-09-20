@@ -151,9 +151,43 @@ export function userToLocalProfile(user: Record<string, unknown>): StoredProfile
     bio: (user.bio as string) || '',
     interests: (user.interests as string[]) || [],
     relationshipGoal: (user.relationshipGoal as string) || '',
-    photo: (user.photo as string) || null,
-    coverPhoto: (user.coverPhoto as string) || null,
-    photos: Array.isArray(user.photos) ? (user.photos as string[]) : [],
+    photo: (() => {
+      const p = String((user.photo as string) || '').trim();
+      if (!p || p.startsWith('file://') || p.startsWith('content://')) return null;
+      try {
+        const u = new URL(p);
+        if (u.pathname.startsWith('/uploads/')) return u.pathname;
+      } catch {
+        /* relative */
+      }
+      return p.startsWith('/uploads/') || /^https?:\/\//i.test(p) ? p : null;
+    })(),
+    coverPhoto: (() => {
+      const p = String((user.coverPhoto as string) || '').trim();
+      if (!p || p.startsWith('file://') || p.startsWith('content://')) return null;
+      try {
+        const u = new URL(p);
+        if (u.pathname.startsWith('/uploads/')) return u.pathname;
+      } catch {
+        /* relative */
+      }
+      return p.startsWith('/uploads/') || /^https?:\/\//i.test(p) ? p : null;
+    })(),
+    photos: Array.isArray(user.photos)
+      ? (user.photos as string[])
+          .map((raw) => {
+            const p = String(raw || '').trim();
+            if (!p || p.startsWith('file://') || p.startsWith('content://')) return '';
+            try {
+              const u = new URL(p);
+              if (u.pathname.startsWith('/uploads/')) return u.pathname;
+            } catch {
+              /* relative */
+            }
+            return p.startsWith('/uploads/') || /^https?:\/\//i.test(p) ? p : '';
+          })
+          .filter(Boolean)
+      : [],
     height: user.height != null ? String(user.height) : '',
     userId: String(user.id || user._id || ''),
     // Only keep valid ABCD1234 — never store Mongo ObjectId here
@@ -171,16 +205,24 @@ export async function syncProfileToServer(
   token: string,
   profile: StoredProfile
 ): Promise<Record<string, unknown>> {
-  let photoUrl = profile.photo || '';
+  let photoUrl = String(profile.photo || '').trim();
 
-  // If the photo is a local device file URI, upload it to the server first
-  if (photoUrl && (photoUrl.startsWith('file://') || photoUrl.startsWith('/') || !photoUrl.startsWith('http'))) {
+  const isDeviceUri =
+    photoUrl.startsWith('file://') ||
+    photoUrl.startsWith('content://') ||
+    photoUrl.startsWith('ph://') ||
+    photoUrl.startsWith('assets-library://');
+  const isAlreadyOnServer =
+    photoUrl.startsWith('/uploads/') || /^https?:\/\//i.test(photoUrl);
+
+  // Upload local device photos only — never try to read `/uploads/...` as a file
+  if (isDeviceUri) {
     try {
       const FileSystem = await import('expo-file-system/legacy');
       const base64 = await FileSystem.readAsStringAsync(photoUrl, {
         encoding: FileSystem.EncodingType.Base64,
       });
-      const ext = photoUrl.split('.').pop()?.toLowerCase() || 'jpg';
+      const ext = photoUrl.split('.').pop()?.toLowerCase()?.split('?')[0] || 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
       const dataUri = `data:${mimeType};base64,${base64}`;
       const { getApiBase, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS } = await import(
@@ -196,12 +238,27 @@ export async function syncProfileToServer(
         UPLOAD_FETCH_TIMEOUT_MS,
       );
       const json = await res.json();
-      if (json.url) {
-        // Persist the relative path — an absolute host URL breaks on other devices
+      if (json.url && String(json.url).startsWith('/uploads/')) {
         photoUrl = json.url;
+      } else {
+        throw new Error(json.error || 'Upload returned no persistent URL');
       }
     } catch (e) {
-      console.warn('Could not upload profile photo, using local URI as fallback', e);
+      console.warn('Could not upload profile photo — not saving device URI to server', e);
+      photoUrl = '';
+    }
+  } else if (!isAlreadyOnServer) {
+    // Garbage / relative non-uploads — omit
+    photoUrl = '';
+  } else if (/^https?:\/\//i.test(photoUrl)) {
+    // Prefer relative path when it's our /uploads host
+    try {
+      const parsed = new URL(photoUrl);
+      if (parsed.pathname.startsWith('/uploads/')) {
+        photoUrl = parsed.pathname;
+      }
+    } catch {
+      /* keep */
     }
   }
 
@@ -212,8 +269,11 @@ export async function syncProfileToServer(
     showMe: profile.showMe || '',
     interests: profile.interests || [],
     relationshipGoal: profile.relationshipGoal || '',
-    photo: photoUrl,
   };
+  // Only send photo when we have a durable server URL — never file://, never wipe on failed upload
+  if (photoUrl.startsWith('/uploads/') || /^https?:\/\//i.test(photoUrl)) {
+    body.photo = photoUrl;
+  }
   if (profile.age) body.age = parseInt(String(profile.age), 10);
   if (profile.height) body.height = parseInt(String(profile.height), 10);
   if (profile.distance) body.distance = parseInt(String(profile.distance), 10);

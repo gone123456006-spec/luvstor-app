@@ -1,6 +1,6 @@
 import { Image, type ImageContentFit, type ImageProps } from "expo-image";
 import React, { useEffect, useMemo, useState } from "react";
-import { StyleProp, ViewStyle } from "react-native";
+import { StyleProp, View, ViewStyle } from "react-native";
 import {
   mediaIdentity,
   mediaUrlCandidates,
@@ -19,6 +19,8 @@ type Props = {
   onError?: ImageProps["onError"];
   /** Called when every candidate URL fails to load */
   onExhausted?: () => void;
+  /** Soft gray fill when URI missing or all hosts fail (avoids blank holes) */
+  showPlaceholder?: boolean;
 };
 
 /**
@@ -45,6 +47,7 @@ export default function MediaImage({
   onLoad,
   onError,
   onExhausted,
+  showPlaceholder = true,
 }: Props) {
   const candidates = useMemo(() => mediaUrlCandidates(uri), [uri]);
   const identity = useMemo(
@@ -52,14 +55,21 @@ export default function MediaImage({
     [uri, candidates],
   );
   const [index, setIndex] = useState(0);
+  const [exhausted, setExhausted] = useState(false);
 
   useEffect(() => {
     setIndex(0);
+    setExhausted(false);
   }, [identity]);
 
-  const resolved = candidates[index] || resolveMediaUrl(uri) || "";
+  const resolved = !exhausted
+    ? candidates[index] || resolveMediaUrl(uri) || ""
+    : "";
 
-  if (!resolved) return null;
+  if (!resolved) {
+    if (!showPlaceholder) return null;
+    return <View style={[{ backgroundColor: "#E8E8E8" }, style as any]} />;
+  }
 
   return (
     <Image
@@ -79,6 +89,7 @@ export default function MediaImage({
           setIndex(next);
           return;
         }
+        setExhausted(true);
         onExhausted?.();
       }}
     />

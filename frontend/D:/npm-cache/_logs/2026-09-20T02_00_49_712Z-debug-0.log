@@ -11,3 +11,9 @@
 10 verbose logfile /Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-20T02_00_49_712Z-debug-0.log
 11 silly logfile start cleaning logs, removing 1 files
 12 silly logfile done cleaning log files
+13 verbose cwd /Users/shyamkuamr/Documents/luvstor-app/frontend
+14 verbose os Darwin 25.6.0
+15 verbose node v24.21.0
+16 verbose npm  v11.19.0
+17 verbose exit 0
+18 info ok

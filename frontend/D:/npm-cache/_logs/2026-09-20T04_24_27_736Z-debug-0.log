@@ -7,13 +7,7 @@
 6 silly config load:file:/Users/shyamkuamr/.nvm/versions/node/v24.21.0/etc/npmrc
 7 verbose title npm exec expo start
 8 verbose argv "exec" "--" "expo" "start"
-9 verbose logfile logs-max:10 dir:/Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-19T13_59_29_737Z-
-10 verbose logfile /Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-19T13_59_29_737Z-debug-0.log
-11 silly logfile start cleaning logs, removing 1 files
+9 verbose logfile logs-max:10 dir:/Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-20T04_24_27_736Z-
+10 verbose logfile /Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-20T04_24_27_736Z-debug-0.log
+11 silly logfile start cleaning logs, removing 2 files
 12 silly logfile done cleaning log files
-13 verbose cwd /Users/shyamkuamr/Documents/luvstor-app/frontend
-14 verbose os Darwin 25.6.0
-15 verbose node v24.21.0
-16 verbose npm  v11.19.0
-17 verbose exit 0
-18 info ok

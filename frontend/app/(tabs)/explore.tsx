@@ -27,6 +27,7 @@ import {
   useExplore,
 } from "../../contexts/ExploreContext";
 import { useSocket } from "../../contexts/SocketContext";
+import { ensureSocketConnected } from "../../utils/ensureSocketConnected";
 import { useStableBottomInset } from "../../hooks/useStableBottomInset";
 import { useTabBarOverlayInset } from "../../hooks/useTabBarOverlayInset";
 import {
@@ -102,40 +103,44 @@ export default function ExploreScreen() {
 
   const startExplore = useCallback(
     (nextMode: "video" | "voice") => {
-      if (!socket?.connected) {
-        showAlert({
-          title: "Offline",
-          message: "Connect to the internet and try again.",
-        });
-        return;
-      }
-      if (!isWebRTCAvailable()) {
-        showAlert({
-          title: "Calls unavailable",
-          message: getWebRTCUnavailableMessage(),
-        });
-        return;
-      }
-      if (
-        call.phase !== "idle" &&
-        call.phase !== "ended" &&
-        !call.isExplore
-      ) {
-        showAlert({
-          title: "Busy",
-          message: "Finish your chat call before joining Explore.",
-        });
-        return;
-      }
-      if (call.isExplore && call.phase !== "idle" && call.phase !== "ended") {
-        showAlert({
-          title: "Busy",
-          message: "You are already in an Explore call.",
-        });
-        return;
-      }
-      if (nextMode === "video") joinVideo();
-      else joinVoice();
+      void (async () => {
+        const ready = await ensureSocketConnected(socket);
+        if (!ready) {
+          showAlert({
+            title: "Not connected",
+            message:
+              "Could not reach the server. Check your internet, wait a moment if the app just opened, and try again.",
+          });
+          return;
+        }
+        if (!isWebRTCAvailable()) {
+          showAlert({
+            title: "Calls unavailable",
+            message: getWebRTCUnavailableMessage(),
+          });
+          return;
+        }
+        if (
+          call.phase !== "idle" &&
+          call.phase !== "ended" &&
+          !call.isExplore
+        ) {
+          showAlert({
+            title: "Busy",
+            message: "Finish your chat call before joining Explore.",
+          });
+          return;
+        }
+        if (call.isExplore && call.phase !== "idle" && call.phase !== "ended") {
+          showAlert({
+            title: "Busy",
+            message: "You are already in an Explore call.",
+          });
+          return;
+        }
+        if (nextMode === "video") joinVideo();
+        else joinVoice();
+      })();
     },
     [
       call.isExplore,
@@ -143,7 +148,7 @@ export default function ExploreScreen() {
       joinVideo,
       joinVoice,
       showAlert,
-      socket?.connected,
+      socket,
     ],
   );
 

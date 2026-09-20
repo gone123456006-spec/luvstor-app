@@ -60,11 +60,41 @@ function getIceServers() {
 
   const validTurnUrls = [];
   const invalidTurnUrls = [];
+  const seen = new Set();
   for (const url of turnUrls) {
     // Must be turn: / turns: URIs — not API keys or bare tokens
-    if (/^turns?:/i.test(url)) validTurnUrls.push(url);
-    else invalidTurnUrls.push(url);
+    if (!/^turns?:/i.test(url)) {
+      invalidTurnUrls.push(url);
+      continue;
+    }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    validTurnUrls.push(url);
   }
+
+  // Metered / common relays: ensure UDP+TCP 3478 exist when only 80/443 were pasted
+  // (cellular carriers often block odd ports; 3478 + 443 TCP covers most networks)
+  const expanded = [];
+  for (const url of validTurnUrls) {
+    expanded.push(url);
+    const m = url.match(/^(turns?):([^:/?#]+)/i);
+    if (!m) continue;
+    const scheme = m[1].toLowerCase();
+    const host = m[2];
+    if (!/metered\.ca|twilio\.com|expressturn|coturn/i.test(host)) continue;
+    const extras = [
+      `${scheme}:${host}:3478`,
+      `${scheme}:${host}:3478?transport=tcp`,
+      `turns:${host}:443?transport=tcp`,
+    ];
+    for (const extra of extras) {
+      if (!seen.has(extra)) {
+        seen.add(extra);
+        expanded.push(extra);
+      }
+    }
+  }
+
   if (invalidTurnUrls.length && !turnWarned) {
     turnWarned = true;
     console.error(
@@ -75,20 +105,17 @@ function getIceServers() {
     );
   }
 
-  const turn = validTurnUrls.map((url) => ({
+  const turn = expanded.map((url) => ({
     urls: url,
     username: turnUser || undefined,
     credential: turnPass || undefined,
   }));
 
-  if (
-    !turnWarned &&
-    process.env.NODE_ENV === 'production' &&
-    turn.length === 0
-  ) {
+  if (!turnWarned && turn.length === 0) {
     turnWarned = true;
     console.warn(
-      '[calls] No valid TURN_URLS set — cellular / strict-NAT friend calls may fail. Set TURN_* in production.',
+      '[calls] No valid TURN_URLS set — friend calls only work on the same Wi‑Fi / LAN. ' +
+        'Set TURN_URLS + TURN_USERNAME + TURN_CREDENTIAL (e.g. Metered.ca) for any-network calling.',
     );
   }
 

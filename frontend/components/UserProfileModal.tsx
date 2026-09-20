@@ -1362,7 +1362,7 @@ const styles = StyleSheet.create({
   },
   /** In-page alert sheets — nested Modal does not show */
   confirmOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 30,
     elevation: 30,
     justifyContent: "flex-end",
@@ -1377,7 +1377,7 @@ const styles = StyleSheet.create({
     elevation: 40,
   },
   confirmBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.5)",
   },
   /** WhatsApp-style Block / Report sheet */
@@ -1392,7 +1392,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   waSheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.55)",
   },
   waSheet: {
@@ -1473,7 +1473,7 @@ const styles = StyleSheet.create({
     color: WA.danger,
   },
   outlineCardCenterWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 36,
@@ -1736,12 +1736,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   sheetOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 40,
     justifyContent: "flex-end",
   },
   sheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(11, 20, 26, 0.45)",
   },
   sheetWrap: {

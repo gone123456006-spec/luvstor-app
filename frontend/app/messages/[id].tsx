@@ -1814,7 +1814,9 @@ export default function MessageScreen() {
         setChatMuted(!!status.muted);
       }
     } catch (e) {
-      console.error("Failed to fetch conversation status", e);
+      if (__DEV__) {
+        console.warn("Conversation status unavailable (server unreachable).");
+      }
     }
   };
 
@@ -1857,7 +1859,12 @@ export default function MessageScreen() {
         }
       }
     } catch (e) {
-      console.error("Failed to fetch friendship status", e);
+      // Offline / backend down — keep seed friendship; don't redbox LogBox
+      if (__DEV__) {
+        console.warn(
+          "Friendship status unavailable (server unreachable). Using chat seed.",
+        );
+      }
     }
   };
 
@@ -2450,6 +2457,13 @@ export default function MessageScreen() {
 
     void fetchFriendshipStatus();
   }, [friendTick, peerId, lastFriendUpdate, unlockAsFriends]);
+
+  // Always refresh friendship when opening a chat so call icons unlock
+  useEffect(() => {
+    if (!peerId) return;
+    void fetchFriendshipStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peerId]);
 
   // Chat deleted — leave thread immediately (WhatsApp-style)
   useEffect(() => {
@@ -3826,7 +3840,25 @@ export default function MessageScreen() {
   };
 
   // Upload image as raw bytes (faster than base64 JSON)
+  // Always return relative `/uploads/...` — never LAN absoluteUrl (breaks after reinstall)
   const uploadImage = async (uri: string): Promise<string | null> => {
+    const pickPersistentUrl = (json: {
+      url?: string;
+      absoluteUrl?: string;
+    } | null) => {
+      if (!json) return null;
+      const relative = String(json.url || "").trim();
+      if (relative.startsWith("/uploads/")) return relative;
+      const abs = String(json.absoluteUrl || "").trim();
+      if (!abs) return null;
+      try {
+        const parsed = new URL(abs);
+        if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
+      } catch {
+        /* ignore */
+      }
+      return null;
+    };
     try {
       const token = await getAuthToken();
       if (!token) return null;
@@ -3855,7 +3887,7 @@ export default function MessageScreen() {
         if (result.status >= 200 && result.status < 300 && result.body) {
           try {
             const json = JSON.parse(result.body);
-            return json.url || json.absoluteUrl || null;
+            return pickPersistentUrl(json);
           } catch {
             console.error("Image upload returned non-JSON body");
             return null;
@@ -3881,7 +3913,7 @@ export default function MessageScreen() {
         console.error("Image upload failed", json?.error || res.status);
         return null;
       }
-      return json.url || json.absoluteUrl || null;
+      return pickPersistentUrl(json);
     } catch (e) {
       console.error("Image upload failed", e);
       return null;
@@ -4716,12 +4748,26 @@ export default function MessageScreen() {
             </TouchableOpacity>
             <View style={styles.headerActions}>
               {(() => {
+                // Prefer live friendship; fall back to route seed so icons work
+                // before /status returns (common when opening from chat list).
+                const seededFriends =
+                  areFriendsParam === "true" ||
+                  friendshipStatusParam === "friends" ||
+                  friendshipStatusParam === "mutual_match";
                 const canCall =
-                  isMatched &&
+                  (isMatched || seededFriends) &&
                   !friendshipStatus?.iBlocked &&
                   !friendshipStatus?.theyBlocked;
                 const iconColor = canCall ? "#111B21" : "#B0B0B0";
                 const startCall = (callType: "voice" | "video") => {
+                  if (!id) {
+                    showAlert({
+                      title: "Call failed",
+                      message: "Missing chat user. Go back and open the chat again.",
+                      icon: "alert-circle",
+                    });
+                    return;
+                  }
                   if (!canCall) {
                     showAlert({
                       title: "Friends only",
@@ -4731,7 +4777,6 @@ export default function MessageScreen() {
                     });
                     return;
                   }
-                  // Offline: still place the call — server leaves a missed-call chat line
                   void startMediaCall({
                     userId: String(id),
                     name:
@@ -4742,7 +4787,8 @@ export default function MessageScreen() {
                         : "") ||
                       profileUser?.name ||
                       profileUser?.publicId ||
-                      avatarName,
+                      avatarName ||
+                      "User",
                     photo:
                       resolveMediaUrl(displayPhoto) ||
                       displayPhoto ||
@@ -4752,15 +4798,22 @@ export default function MessageScreen() {
                     gender: displayGender || profileUser?.gender || "",
                     publicId: profileUser?.publicId || "",
                     callType,
+                  }).catch((err) => {
+                    showAlert({
+                      title: "Call failed",
+                      message:
+                        (err as Error)?.message ||
+                        "Could not start the call. Try again.",
+                      icon: "alert-circle",
+                    });
                   });
                 };
                 return (
                   <>
-                    <TouchableOpacity
+                    <Pressable
                       style={styles.actionButton}
                       onPress={() => startCall("voice")}
-                      hitSlop={8}
-                      activeOpacity={canCall ? 0.6 : 1}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
                       accessibilityRole="button"
                       accessibilityLabel="Voice call"
                       accessibilityState={{ disabled: !canCall }}
@@ -4770,12 +4823,11 @@ export default function MessageScreen() {
                         size={22}
                         color={iconColor}
                       />
-                    </TouchableOpacity>
-                    <TouchableOpacity
+                    </Pressable>
+                    <Pressable
                       style={styles.actionButton}
                       onPress={() => startCall("video")}
-                      hitSlop={8}
-                      activeOpacity={canCall ? 0.6 : 1}
+                      hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
                       accessibilityRole="button"
                       accessibilityLabel="Video call"
                       accessibilityState={{ disabled: !canCall }}
@@ -4785,7 +4837,7 @@ export default function MessageScreen() {
                         size={22}
                         color={iconColor}
                       />
-                    </TouchableOpacity>
+                    </Pressable>
                   </>
                 );
               })()}

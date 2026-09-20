@@ -40,20 +40,30 @@ function withWebRTC(config) {
     for (const permission of ANDROID_PERMISSIONS) {
       AndroidConfig.Permissions.ensurePermission(manifest, permission);
     }
-    // Force RECORD_AUDIO even if another plugin (e.g. expo-camera
-    // recordAudioAndroid:false) stripped it earlier in the chain.
+    // Force RECORD_AUDIO / CAMERA even if another plugin stripped them
+    // (e.g. older expo-camera recordAudioAndroid:false). tools:node=replace
+    // wins the Gradle manifest merger so voice calls keep working.
     const app = manifest.manifest;
     if (app) {
       const list = app['uses-permission'] || [];
-      const hasMic = list.some(
-        (p) =>
-          p?.$?.['android:name'] === 'android.permission.RECORD_AUDIO',
-      );
-      if (!hasMic) {
-        list.push({
-          $: { 'android:name': 'android.permission.RECORD_AUDIO' },
-        });
-        app['uses-permission'] = list;
+      const force = (name) => {
+        const idx = list.findIndex((p) => p?.$?.['android:name'] === name);
+        const entry = {
+          $: {
+            'android:name': name,
+            'tools:node': 'replace',
+          },
+        };
+        if (idx >= 0) list[idx] = entry;
+        else list.push(entry);
+      };
+      force('android.permission.RECORD_AUDIO');
+      force('android.permission.CAMERA');
+      force('android.permission.MODIFY_AUDIO_SETTINGS');
+      app['uses-permission'] = list;
+      if (!app.$) app.$ = {};
+      if (!app.$['xmlns:tools']) {
+        app.$['xmlns:tools'] = 'http://schemas.android.com/tools';
       }
     }
     return cfg;
