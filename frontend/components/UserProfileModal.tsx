@@ -120,6 +120,9 @@ function sameMedia(a?: string | null, b?: string | null): boolean {
  * Merge incoming profile updates without swapping media URL strings when the
  * underlying file is unchanged. Returns `prev` unchanged when nothing visible
  * changed — avoids re-render loops that flip the screen.
+ *
+ * Empty `photos: []` is treated as a real clear (delete). Only omit/undefined
+ * photos keeps the previous gallery (e.g. presence-only patches).
  */
 function mergeStableUser(
   prev: UserProfile | null,
@@ -127,17 +130,20 @@ function mergeStableUser(
 ): UserProfile {
   if (!prev || prev.id !== next.id) return next;
 
-  const nextPhotos = Array.isArray(next.photos) ? next.photos : [];
+  const photosProvided = Array.isArray(next.photos);
+  const nextPhotos = photosProvided ? next.photos! : [];
   const prevPhotos = Array.isArray(prev.photos) ? prev.photos : [];
 
-  let photos = nextPhotos;
-  if (nextPhotos.length === 0 && prevPhotos.length > 0) {
-    photos = prevPhotos;
-  } else if (
-    nextPhotos.length === prevPhotos.length &&
-    nextPhotos.every((p, i) => sameMedia(p, prevPhotos[i]))
-  ) {
-    photos = prevPhotos;
+  let photos = prevPhotos;
+  if (photosProvided) {
+    if (
+      nextPhotos.length === prevPhotos.length &&
+      nextPhotos.every((p, i) => sameMedia(p, prevPhotos[i]))
+    ) {
+      photos = prevPhotos;
+    } else {
+      photos = nextPhotos;
+    }
   }
 
   const photo = sameMedia(prev.photo, next.photo) ? prev.photo : next.photo;

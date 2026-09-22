@@ -19,7 +19,12 @@ const MONO = path.join(root, "assets", "images", "android-icon-monochrome.png");
 const PURPLE = "#5A2FC7";
 /** Match adaptive icon background so splash ↔ icon feel continuous. */
 const SPLASH_BG = PURPLE;
-const IMAGE_WIDTH = 220;
+/**
+ * Android 12+ splash icons are masked to a circle ~192dp on a 288dp canvas.
+ * imageWidth must stay well under 192 or left/right of the logo get clipped.
+ * 160dp leaves comfortable padding inside the safe circle.
+ */
+const IMAGE_WIDTH = 160;
 
 const SPLASH_DPI = {
   mdpi: 1,
@@ -41,14 +46,16 @@ async function writeSplash() {
   for (const [dpi, mult] of Object.entries(SPLASH_DPI)) {
     const size = IMAGE_WIDTH * mult;
     const canvasSize = 288 * mult;
+    // Transparent canvas — OS splash background fills the screen; only the
+    // logo sits in the circular icon layer (avoids a hard circular crop look).
     const background = await generateImageBackgroundAsync({
       width: canvasSize,
       height: canvasSize,
-      backgroundColor: SPLASH_BG,
+      backgroundColor: "transparent",
       resizeMode: "cover",
     });
     const { source: foreground } = await generateImageAsync(
-      { projectRoot: root, cacheType: "luvstor-splash" },
+      { projectRoot: root, cacheType: "luvstor-splash-v2" },
       { src: SPLASH, resizeMode: "contain", width: size, height: size },
     );
     const composed = await compositeImagesAsync({
@@ -57,11 +64,12 @@ async function writeSplash() {
       x: (canvasSize - size) / 2,
       y: (canvasSize - size) / 2,
     });
-    const outDir = path.join(resRoot, `drawable-${dpi}`);
-    fs.mkdirSync(outDir, { recursive: true });
-    const out = path.join(outDir, "splashscreen_logo.png");
-    fs.writeFileSync(out, composed);
-    console.log(`✔ splash ${dpi} ${canvasSize}px`);
+    for (const folder of [`drawable-${dpi}`, `drawable-night-${dpi}`]) {
+      const outDir = path.join(resRoot, folder);
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(path.join(outDir, "splashscreen_logo.png"), composed);
+    }
+    console.log(`✔ splash ${dpi} logo ${size}px on ${canvasSize}px canvas`);
   }
 }
 
@@ -125,7 +133,7 @@ async function main() {
     return;
   }
 
-  // Adaptive icons + FCM / expo-notifications reference these colors — AAPT fails if missing
+  // Adaptive icons + AppTheme + FCM / expo-notifications — AAPT fails if any are missing
   const colorsPath = path.join(resRoot, "values", "colors.xml");
   fs.mkdirSync(path.dirname(colorsPath), { recursive: true });
   fs.writeFileSync(
@@ -134,11 +142,14 @@ async function main() {
 <resources>
   <color name="splashscreen_background">${SPLASH_BG}</color>
   <color name="iconBackground">${PURPLE}</color>
+  <color name="colorPrimary">${PURPLE}</color>
+  <color name="colorPrimaryDark">${PURPLE}</color>
+  <color name="colorAccent">${PURPLE}</color>
   <color name="notification_icon_color">${PURPLE}</color>
 </resources>
 `,
   );
-  console.log("✔ colors.xml (splash + iconBackground + notification_icon_color)");
+  console.log("✔ colors.xml (splash + theme + notification colors)");
 
   await writeSplash();
   await writeIcons();

@@ -1205,16 +1205,19 @@ export default function DiscoverScreen() {
             if (ia && ib) return ia === ib;
             return String(a || "") === String(b || "");
           };
-          const nextPhotos = Array.isArray(full.photos) ? full.photos : [];
+          const nextPhotos = Array.isArray(full.photos) ? full.photos : null;
           const prevPhotos = Array.isArray(base.photos) ? base.photos : [];
-          let photos = nextPhotos;
-          if (nextPhotos.length === 0 && prevPhotos.length > 0) {
-            photos = prevPhotos;
-          } else if (
-            nextPhotos.length === prevPhotos.length &&
-            nextPhotos.every((p, i) => same(p, prevPhotos[i]))
-          ) {
-            photos = prevPhotos;
+          let photos = prevPhotos;
+          if (nextPhotos) {
+            if (
+              nextPhotos.length === prevPhotos.length &&
+              nextPhotos.every((p, i) => same(p, prevPhotos[i]))
+            ) {
+              photos = prevPhotos;
+            } else {
+              // Includes [] — deleted posts must clear for viewers
+              photos = nextPhotos;
+            }
           }
           return {
             ...base,

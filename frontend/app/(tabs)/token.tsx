@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
 import React from "react";
@@ -78,31 +77,7 @@ const { width: SCREEN_W } = Dimensions.get("window");
 const WHEEL_SIZE = Math.min(SCREEN_W - 56, 280);
 const TWO_PI = 2 * Math.PI;
 const SCROLL_H_PAD = 20;
-const AD_BANNER_W = SCREEN_W;
-const AD_TILE = AD_BANNER_W / 6;
-const AD_BANNER_H = AD_TILE * 3;
-
-const PREMIUM_AD_PHOTOS = [
-  require("../../assets/images/premium-ad/p1.png"),
-  require("../../assets/images/premium-ad/p2.png"),
-  require("../../assets/images/premium-ad/p3.png"),
-  require("../../assets/images/premium-ad/p4.png"),
-  require("../../assets/images/premium-ad/p5.png"),
-  require("../../assets/images/premium-ad/p6.png"),
-  require("../../assets/images/premium-ad/p7.png"),
-  require("../../assets/images/premium-ad/p8.png"),
-  require("../../assets/images/premium-ad/p9.png"),
-  require("../../assets/images/premium-ad/p10.png"),
-  require("../../assets/images/premium-ad/p11.png"),
-  require("../../assets/images/premium-ad/p12.png"),
-  require("../../assets/images/premium-ad/p13.png"),
-  require("../../assets/images/premium-ad/p14.png"),
-  require("../../assets/images/premium-ad/p15.png"),
-  require("../../assets/images/premium-ad/p16.png"),
-  require("../../assets/images/premium-ad/p17.png"),
-  require("../../assets/images/premium-ad/p18.png"),
-];
-
+const AD_BANNER_H = 168;
 const TOKEN_PACKS = [
   { id: "10", count: 10, price: "₹10", listPriceInr: 10 },
   { id: "100", count: 100, price: "₹80", listPriceInr: 80 },
@@ -645,27 +620,36 @@ function PremiumAdBanner({ onPress }: { onPress: () => void }) {
       activeOpacity={0.92}
       onPress={onPress}
     >
-      <View style={styles.adPhotoWall}>
-        {PREMIUM_AD_PHOTOS.map((src, i) => (
-          <Image
-            key={i}
-            source={src}
-            style={styles.adPhotoTile}
-            contentFit="cover"
-          />
-        ))}
-      </View>
+      <LinearGradient
+        colors={["#1B0B2E", "#3D1A6B", "#5A2FC7", "#2A1050"]}
+        locations={[0, 0.35, 0.72, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
+      {/* Soft light wash — banner depth without photos */}
       <LinearGradient
         colors={[
-          "rgba(0,0,0,0.08)",
-          "rgba(12,4,10,0.45)",
-          "rgba(12,4,10,0.92)",
+          "rgba(255, 209, 102, 0.22)",
+          "rgba(255, 209, 102, 0.04)",
+          "transparent",
         ]}
-        locations={[0, 0.45, 1]}
-        style={StyleSheet.absoluteFillObject}
+        locations={[0, 0.4, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0.85, y: 1 }}
+        style={styles.adSheen}
+        pointerEvents="none"
       />
-      <View style={styles.adCopy}>
-        <Text style={styles.adKicker}>Luvstor Premium</Text>
+      <View style={styles.adOrbLarge} pointerEvents="none" />
+      <View style={styles.adOrbSmall} pointerEvents="none" />
+      <View style={styles.adGoldEdge} pointerEvents="none" />
+
+      <View style={styles.adCopy} pointerEvents="none">
+        <View style={styles.adKickerRow}>
+          <Ionicons name="diamond" size={12} color="#FFD166" />
+          <Text style={styles.adKicker}>Luvstor Premium</Text>
+        </View>
         <Text style={styles.adTitle}>Get Premium</Text>
         <Text style={styles.adSub}>
           Meet more people · Blue tick · Extra spins
@@ -1299,22 +1283,58 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     height: AD_BANNER_H,
     overflow: "hidden",
-    backgroundColor: "#1A0A14",
+    backgroundColor: "#1B0B2E",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 209, 102, 0.35)",
   },
-  adPhotoWall: {
+  adSheen: {
     ...StyleSheet.absoluteFillObject,
-    flexDirection: "row",
-    flexWrap: "wrap",
+    zIndex: 1,
   },
-  adPhotoTile: {
-    width: AD_TILE,
-    height: AD_TILE,
+  adOrbLarge: {
+    position: "absolute",
+    right: -40,
+    top: -50,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: "rgba(255, 209, 102, 0.12)",
+    zIndex: 1,
+  },
+  adOrbSmall: {
+    position: "absolute",
+    right: 48,
+    bottom: -36,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: "rgba(142, 45, 226, 0.35)",
+    zIndex: 1,
+  },
+  adGoldEdge: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: "#FFD166",
+    zIndex: 2,
   },
   adCopy: {
     position: "absolute",
-    left: 16,
+    left: 20,
     right: 16,
     bottom: 14,
+    top: 14,
+    justifyContent: "flex-end",
+    zIndex: 3,
+  },
+  adKickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
   },
   adKicker: {
     color: "#FFD166",
@@ -1322,20 +1342,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    marginBottom: 2,
   },
   adTitle: {
     color: "#fff",
-    fontSize: 26,
+    fontSize: 28,
     fontWeight: "800",
-    letterSpacing: -0.4,
+    letterSpacing: -0.5,
+    textShadowColor: "rgba(0,0,0,0.35)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   adSub: {
-    color: "rgba(255,255,255,0.88)",
+    color: "rgba(255,255,255,0.9)",
     fontSize: 13,
     fontWeight: "500",
-    marginTop: 2,
-    marginBottom: 10,
+    marginTop: 4,
+    marginBottom: 12,
   },
   adCta: {
     alignSelf: "flex-start",
@@ -1343,9 +1365,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     backgroundColor: "#FFD166",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 22,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#FFD166",
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: { elevation: 3 },
+    }),
   },
   adCtaText: {
     color: "#1A1208",

@@ -137,6 +137,10 @@ function ensureAndroidColors() {
 <resources>
   <color name="splashscreen_background">${splashBg}</color>
   <color name="iconBackground">${iconBg}</color>
+  <color name="colorPrimary">${iconBg}</color>
+  <color name="colorPrimaryDark">${iconBg}</color>
+  <color name="colorAccent">${iconBg}</color>
+  <color name="notification_icon_color">${iconBg}</color>
 </resources>
 `;
 
@@ -146,10 +150,12 @@ function ensureAndroidColors() {
   }
   if (
     !current.includes('name="iconBackground"') ||
-    !current.includes('name="splashscreen_background"')
+    !current.includes('name="splashscreen_background"') ||
+    !current.includes('name="colorPrimary"') ||
+    !current.includes('name="notification_icon_color"')
   ) {
     fs.writeFileSync(colorsPath, desired);
-    console.log("✔ Ensured android colors.xml (splash + iconBackground)");
+    console.log("✔ Ensured android colors.xml (splash + theme + notification colors)");
   }
 }
 

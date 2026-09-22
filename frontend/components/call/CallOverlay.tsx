@@ -627,10 +627,23 @@ export default function CallOverlay() {
     }
   })();
 
+  const hasRemoteVideoTrack = (() => {
+    try {
+      const tracks = call.remoteStream?.getVideoTracks?.() || [];
+      return tracks.some(
+        (t: { readyState?: string; enabled?: boolean }) =>
+          !!t && t.readyState !== 'ended' && t.enabled !== false,
+      );
+    } catch {
+      return false;
+    }
+  })();
+
   const hasRemoteVideo =
     isVideo &&
     !!RTCView &&
     !!remoteUrl &&
+    hasRemoteVideoTrack &&
     (call.phase === 'connected' ||
       call.phase === 'connecting' ||
       call.phase === 'reconnecting');

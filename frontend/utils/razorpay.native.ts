@@ -20,4 +20,39 @@ try {
 export { RazorpayCheckout };
 export const isRazorpayAvailable = !!RazorpayCheckout;
 
+/**
+ * Standard Checkout methods + UPI display (GPay / PhonePe / Paytm / QR / collect).
+ * Dashboard must also have UPI enabled for the Razorpay key.
+ */
+export function razorpayCheckoutMethods() {
+  return {
+    method: {
+      upi: true,
+      card: true,
+      netbanking: true,
+      wallet: true,
+    },
+    config: {
+      display: {
+        blocks: {
+          upi_preferred: {
+            name: 'Pay using UPI',
+            instruments: [
+              {
+                method: 'upi',
+                flows: ['intent', 'collect', 'qr'],
+                apps: ['google_pay', 'phonepe', 'paytm', 'bhim'],
+              },
+            ],
+          },
+        },
+        sequence: ['block.upi_preferred', 'upi', 'card', 'wallet', 'netbanking'],
+        preferences: {
+          show_default_blocks: true,
+        },
+      },
+    },
+  };
+}
+
 export default RazorpayCheckout;

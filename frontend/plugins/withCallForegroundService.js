@@ -348,7 +348,9 @@ class CallForegroundModule(private val ctx: ReactApplicationContext) :
   @ReactMethod
   fun enterPictureInPicture(promise: Promise) {
     try {
-      val activity: Activity? = currentActivity
+      // RN no longer exposes currentActivity on ReactContextBaseJavaModule;
+      // resolve it from the application context instead.
+      val activity: Activity? = ctx.currentActivity
       if (activity == null) {
         promise.resolve(false)
         return

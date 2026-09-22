@@ -1,6 +1,10 @@
 import { Alert, Platform } from 'react-native';
 import { apiRequest } from './api';
-import { RazorpayCheckout, isRazorpayAvailable } from './razorpay.native';
+import {
+  RazorpayCheckout,
+  isRazorpayAvailable,
+  razorpayCheckoutMethods,
+} from './razorpay.native';
 
 interface RazorpayOrderResponse {
   success: boolean;
@@ -61,10 +65,9 @@ export async function initiateTokenPurchase(
       return { success: false, error: 'Failed to create payment order' };
     }
 
-    // 2. Prepare Razorpay options
+    // 2. Prepare Razorpay options (UPI / GPay / QR enabled)
     const options = {
       description: `${orderData.tokens} Tokens`,
-      image: 'https://your-app-logo-url.com/logo.png', // Replace with your app logo
       currency: orderData.currency,
       key: orderData.keyId,
       amount: orderData.amount,
@@ -74,7 +77,8 @@ export async function initiateTokenPurchase(
         name: userName || 'User',
         email: userEmail || '',
       },
-      theme: { color: '#8E2DE2' }, // Your app's primary color
+      theme: { color: '#8E2DE2' },
+      ...razorpayCheckoutMethods(),
     };
 
     // 3. Open Razorpay checkout

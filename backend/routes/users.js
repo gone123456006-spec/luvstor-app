@@ -348,7 +348,7 @@ router.put("/me", auth, async (req, res) => {
 
     const before = await User.findById(req.userId)
       .select(
-        "name age bio gender photo photos interests relationshipGoal welcomeTokensGrantedAt tokenBalance photoVerification galleryPostRewardCount galleryPostRewardInitialized",
+        "name age bio gender photo coverPhoto photos interests relationshipGoal welcomeTokensGrantedAt tokenBalance photoVerification galleryPostRewardCount galleryPostRewardInitialized",
       )
       .lean();
     if (!before) return res.status(404).json({ error: "User not found" });
@@ -362,6 +362,40 @@ router.put("/me", auth, async (req, res) => {
 
     if (!user) return res.status(404).json({ error: "User not found" });
     await ensureUserPublicId(user);
+
+    // Hard-delete gallery/DP/cover files removed from the profile (permanent delete)
+    if (
+      updates.photo !== undefined ||
+      updates.coverPhoto !== undefined ||
+      updates.photos !== undefined
+    ) {
+      try {
+        const {
+          orphanedMediaUrls,
+          purgeOrphanedUploads,
+        } = require("../utils/purgeOrphanedUploads");
+        const orphans = orphanedMediaUrls(
+          {
+            photo: before.photo,
+            coverPhoto: before.coverPhoto,
+            photos: before.photos,
+          },
+          {
+            photo: user.photo,
+            coverPhoto: user.coverPhoto,
+            photos: user.photos,
+          },
+        );
+        if (orphans.length) {
+          // Don't block the response on disk cleanup
+          purgeOrphanedUploads(req.userId, orphans).catch((e) =>
+            console.warn("purgeOrphanedUploads failed", e?.message || e),
+          );
+        }
+      } catch (e) {
+        console.warn("orphan media cleanup skipped", e?.message || e);
+      }
+    }
 
     // Re-verify if main profile photo changed a lot after photo verification
     const photoChanged =
@@ -541,6 +575,10 @@ router.put("/me", auth, async (req, res) => {
     res.json({
       message: "Profile updated",
       profile: user,
+      // Convenience for clients syncing gallery after PUT
+      photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS),
+      photo: toPersistentMediaUrl(user.photo) || "",
+      coverPhoto: toPersistentMediaUrl(user.coverPhoto) || "",
       publicId: user.publicId || "",
       welcomeTokensGranted,
       galleryPostTokensGranted,
