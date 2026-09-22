@@ -89,6 +89,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "heartbeat": "node scripts/renderHeartbeat.js",
+    "check:env": "node scripts/checkProductionEnv.js",
     "test": "node --test \"tests/**/*.test.js\"",
     "simulate:discovery": "node scripts/simulateDiscoveryRotation.js"
   },

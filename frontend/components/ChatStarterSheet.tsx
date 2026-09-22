@@ -7,7 +7,7 @@ import {
   Modal,
   ScrollView,
   ActivityIndicator,
-} from 'react';
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../utils/api';
 

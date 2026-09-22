@@ -34,6 +34,10 @@ function callChatLabel({ callType = 'voice', status, endReason, durationSec = 0 
   if (status === 'rejected' || endReason === 'decline') {
     return callType === 'video' ? 'Declined video call' : 'Declined voice call';
   }
+  // Local mic/camera denial — don't leave a confusing "Cancelled" line
+  if (endReason === 'permission' || endReason === 'media') {
+    return null;
+  }
   if (status === 'cancelled' || endReason === 'cancel') {
     return callType === 'video' ? 'Cancelled video call' : 'Cancelled voice call';
   }
@@ -66,6 +70,7 @@ async function postCallChatEvent(io, {
     roomId ||
     [cId, rId].sort().join('_');
   const text = callChatLabel({ callType, status, endReason, durationSec });
+  if (!text) return null;
 
   try {
     // Dedupe: one chat line per callId

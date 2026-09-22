@@ -9,10 +9,11 @@
  * - Session is cleared only on: manual logout, device mismatch, or server revocation
  *
  * **Device-Locked Sessions:**
- * - Each JWT contains a deviceId tied to the installation
+ * - Each JWT contains a deviceId tied to the physical device (Android ID / iOS IDFV)
  * - Only the bound device can use the session
  * - Another device login forces transfer via OTP
- * - Logout on original device clears the lock
+ * - Logout on original device clears the lock (same-device re-login has no transfer prompt)
+ * - Reinstall on the same phone keeps the same deviceId — no false transfer prompt
  */
 
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
@@ -24,6 +25,7 @@ import {
   completeAccountLogin,
   getCurrentAuthUser,
   logout,
+  syncDeviceSessionIfNeeded,
 } from '../utils/auth';
 import { AUTH_TOKEN_KEY, AUTH_USER_KEY, setOnSessionInvalid } from '../utils/api';
 import { clearLegacyGlobalStorage } from '../utils/accountStorage';
@@ -54,6 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSession = useCallback(async () => {
     try {
+      await syncDeviceSessionIfNeeded();
       const current = await getCurrentAuthUser();
       setUser(current);
     } catch (err) {

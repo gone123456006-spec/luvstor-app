@@ -26,7 +26,9 @@ import {
   addPushTokenListener,
   CALL_ACTION_ACCEPT,
   CALL_ACTION_DECLINE,
+  CHAT_ACTION_REPLY,
   configureForegroundHandler,
+  dismissCallNotifications,
   dismissForGroup,
   ensureChannels,
   getFcmToken,
@@ -39,7 +41,14 @@ import {
   unregisterToken,
   setPushTrayReady,
 } from '../utils/push';
+import {
+  CALL_ACTION_END,
+  emitOngoingCallEnd,
+  emitOngoingCallOpen,
+} from '../utils/callOngoing';
 import { setPendingIncomingCall } from '../utils/pendingIncomingCall';
+import { registerBackgroundNotificationTask } from '../utils/pushBackground';
+import { apiRequest } from '../utils/api';
 
 type PushContextValue = {
   /** null while the permission state is still being resolved */
@@ -141,6 +150,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
 
     try {
       await ensureChannels();
+      await registerBackgroundNotificationTask();
 
       const permission = await requestPermission();
       setPermissionGranted(permission.granted);
@@ -168,6 +178,8 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
       setPushTrayReady(ok);
       if (!ok) {
         console.warn('[Push] Token register failed — retry on next resume');
+      } else {
+        console.log('[Push] FCM token registered with backend');
       }
       return ok;
     } catch (err: any) {
@@ -213,6 +225,15 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const sub = addNotificationReceivedListener((notification) => {
       const data = (notification.request.content.data || {}) as Record<string, any>;
+      const action = String(data.action || '').toLowerCase();
+      if (
+        data.type === 'call' &&
+        (action === 'clear' || action === 'ended' || action === 'cancel') &&
+        data.callId
+      ) {
+        void dismissCallNotifications(String(data.callId));
+        return;
+      }
       markHandled(String(data.notificationId || data.messageId || ''));
       refreshNotifUnread();
       refreshUnread();
@@ -220,7 +241,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [markHandled, refreshNotifUnread, refreshUnread]);
 
-  // Tapped — from foreground, background, or a cold start (incl. Accept / Decline)
+  // Tapped — from foreground, background, or a cold start (incl. Accept / Decline / End)
   useEffect(() => {
     const sub = addNotificationResponseReceivedListener((response) => {
       const data = (response.notification.request.content.data || {}) as Record<
@@ -228,11 +249,97 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
         any
       >;
       const actionId = String(response.actionIdentifier || '');
+
+      // Direct reply from message shade
+      if (
+        actionId === CHAT_ACTION_REPLY ||
+        actionId === 'REPLY_MESSAGE' ||
+        actionId.toLowerCase() === 'reply'
+      ) {
+        const text = String(
+          (response as any).userText ||
+            (response as any).notification?.request?.content?.data?.userText ||
+            '',
+        ).trim();
+        const toUserId = String(data.actorId || data.userId || '');
+        if (
+          text &&
+          toUserId &&
+          markHandled(
+            `reply:${data.messageId || response.notification.request.identifier}`,
+          )
+        ) {
+          void (async () => {
+            try {
+              const token = await getAuthToken();
+              if (!token) return;
+              await apiRequest('/api/chat/send', token, {
+                method: 'POST',
+                body: JSON.stringify({
+                  receiverId: toUserId,
+                  text,
+                  type: 'text',
+                }),
+              });
+              const roomId = data.roomId
+                ? String(data.roomId)
+                : userRef.current?.id
+                  ? [String(userRef.current.id), toUserId].sort().join('_')
+                  : '';
+              if (roomId) dismissForGroup(`chat:${roomId}`);
+              dismissForGroup(`chat:${toUserId}`);
+              refreshUnread();
+            } catch (err: any) {
+              console.warn('[Push] reply failed:', err?.message);
+            }
+          })();
+        }
+        return;
+      }
+
+      // Ongoing call notification — End call action
+      if (
+        actionId === CALL_ACTION_END ||
+        actionId === 'END_CALL' ||
+        actionId.toLowerCase() === 'end call' ||
+        actionId.toLowerCase() === 'end'
+      ) {
+        if (
+          !markHandled(
+            `end:${data.callId || response.notification.request.identifier}`,
+          )
+        ) {
+          return;
+        }
+        emitOngoingCallEnd(String(data.callId || ''));
+        return;
+      }
+
+      // Tap ongoing call notification body → restore call UI
+      if (
+        data?.action === 'ongoing' ||
+        data?.categoryId === 'ongoing_call' ||
+        String(response.notification.request.identifier || '').startsWith(
+          'ongoing:',
+        )
+      ) {
+        if (
+          !markHandled(
+            `open-ongoing:${data.callId || response.notification.request.identifier}`,
+          )
+        ) {
+          return;
+        }
+        emitOngoingCallOpen(String(data.callId || ''));
+        return;
+      }
+
       let intent: 'open' | 'accept' | 'decline' = 'open';
       if (
         actionId === CALL_ACTION_ACCEPT ||
         actionId === 'ACCEPT_CALL' ||
-        actionId.toLowerCase() === 'accept'
+        actionId.toLowerCase() === 'accept' ||
+        actionId.toLowerCase() === 'answer'
       ) {
         intent = 'accept';
       } else if (
@@ -252,11 +359,17 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
       }
       navigateTo(data, intent);
       refreshNotifUnread();
+      // Opening a chat from a message tap clears that conversation tray
+      if (data.type === 'chat') {
+        const otherId = String(data.actorId || data.userId || '');
+        if (data.groupKey) dismissForGroup(String(data.groupKey));
+        if (otherId) dismissForGroup(`chat:${otherId}`);
+      }
     });
     return () => sub.remove();
-  }, [markHandled, navigateTo, refreshNotifUnread]);
+  }, [markHandled, navigateTo, refreshNotifUnread, refreshUnread]);
 
-  // Cold start: the app was launched by tapping a notification
+  // Cold start: the app was launched by tapping a notification (incl. Answer/Decline)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -267,10 +380,25 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
           string,
           any
         >;
-        // Same key shape as the response listener so we don't double-navigate
-        const id = `tap:open:${data.notificationId || response.notification.request.identifier}`;
+        const actionId = String(response.actionIdentifier || '');
+        let intent: 'open' | 'accept' | 'decline' = 'open';
+        if (
+          actionId === CALL_ACTION_ACCEPT ||
+          actionId === 'ACCEPT_CALL' ||
+          actionId.toLowerCase() === 'accept' ||
+          actionId.toLowerCase() === 'answer'
+        ) {
+          intent = 'accept';
+        } else if (
+          actionId === CALL_ACTION_DECLINE ||
+          actionId === 'DECLINE_CALL' ||
+          actionId.toLowerCase() === 'decline'
+        ) {
+          intent = 'decline';
+        }
+        const id = `tap:${intent}:${data.notificationId || response.notification.request.identifier}`;
         if (!markHandled(id)) return;
-        navigateTo(data);
+        navigateTo(data, intent);
       } catch {
         /* ignore */
       }
@@ -308,6 +436,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
       ? [String(userRef.current.id), String(otherId)].sort().join('_')
       : null;
     if (roomId) dismissForGroup(`chat:${roomId}`);
+    dismissForGroup(`chat:${otherId}`);
   }, [pathname]);
 
   const clearConversation = useCallback((otherUserId: string) => {

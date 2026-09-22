@@ -96,9 +96,13 @@ try {
 } catch {
   /* optional dependency */
 }
-// Raw photo upload must be parsed before the JSON body parser
+// Raw photo / voice uploads must be parsed before the JSON body parser
 app.use(
   '/api/upload/image-bin',
+  express.raw({ type: '*/*', limit: process.env.JSON_BODY_LIMIT || '12mb' })
+);
+app.use(
+  '/api/upload/audio-bin',
   express.raw({ type: '*/*', limit: process.env.JSON_BODY_LIMIT || '12mb' })
 );
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '10mb' }));

@@ -53,6 +53,9 @@ function isEnabled() {
  * TTL policy (WhatsApp-like):
  * - call invites: short (60s) — stale rings are useless
  * - chat + everything else: long (24h) — must survive offline / Doze
+ *
+ * Incoming calls use Android data-only (high priority) so the client can
+ * present a local tray with Answer / Decline. iOS keeps an APNs alert + category.
  */
 function buildMessage({
   tokens,
@@ -84,76 +87,151 @@ function buildMessage({
         ? 60 * 1000
         : 24 * 60 * 60 * 1000;
 
+  const callAction = String(stringData.action || '').toLowerCase();
   const isCallIncoming =
-    type === 'call' && String(stringData.action || '') === 'incoming';
+    type === 'call' && callAction === 'incoming';
+  const isCallClear =
+    type === 'call' &&
+    (callAction === 'clear' || callAction === 'ended' || callAction === 'cancel');
+  const isCallMissed =
+    type === 'call' &&
+    (callAction === 'missed' ||
+      stringData.missed === 'true' ||
+      stringData.missed === true);
 
   // Relative `/uploads/...` photos never render in the tray — FCM needs https
   const resolvedImage = absoluteMediaUrl(imageUrl) || undefined;
 
   // Incoming calls: wake Doze / show heads-up even when app is killed
-  const androidPriority = isHigh || isCallIncoming ? 'high' : 'normal';
+  const androidPriority =
+    isHigh || isCallIncoming || isCallClear || isCallMissed ? 'high' : 'normal';
 
-  return {
+  // Flatten display fields into data so a background task can rebuild the tray
+  if (isCallIncoming) {
+    stringData.title = title || stringData.title || 'Incoming call';
+    stringData.body = body || stringData.body || '';
+    stringData.channelId = channelId || 'calls';
+    stringData.categoryId = 'incoming_call';
+  }
+
+  const base = {
     tokens,
-    notification: {
-      title,
-      body,
-      ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
-    },
     data: {
       ...stringData,
-      // Always include type for client routing when OS delivers notification+data
       type: stringData.type || type || '',
       ...(isCallIncoming ? { categoryId: 'incoming_call' } : {}),
     },
     android: {
       priority: androidPriority,
-      ...(collapseKey ? { collapseKey } : {}),
+      ...(collapseKey || groupKey
+        ? { collapseKey: String(collapseKey || groupKey).slice(0, 64) }
+        : {}),
       ttl: resolvedTtl,
-      notification: {
-        channelId,
-        sound: sound === 'default' || !sound ? 'default' : sound,
-        priority: isHigh || isCallIncoming ? 'max' : 'default',
-        defaultVibrateTimings: true,
-        // 1 = PUBLIC — show content on lock screen (WhatsApp-style)
-        visibility: 1,
-        ...(typeof badge === 'number' ? { notificationCount: badge } : {}),
-        ...(groupKey ? { tag: groupKey } : {}),
-        ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
-        icon: 'notification_icon',
-        color: '#8E2DE2',
-        // Do NOT set clickAction to a custom string — it can prevent the
-        // default launcher open on some OEMs. Tap routing uses `data` instead.
-      },
     },
     apns: {
       headers: {
-        'apns-priority': isHigh || isCallIncoming ? '10' : '5',
-        'apns-push-type': 'alert',
-        // Keep chat pushes available offline (call stays high-priority short-lived)
+        'apns-priority':
+          isHigh || isCallIncoming || isCallMissed ? '10' : '5',
+        'apns-push-type': isCallClear ? 'background' : 'alert',
         'apns-expiration': String(
           Math.floor(Date.now() / 1000) + Math.floor(resolvedTtl / 1000),
         ),
-        ...(collapseKey ? { 'apns-collapse-id': collapseKey } : {}),
+        ...(collapseKey || groupKey
+          ? {
+              'apns-collapse-id': String(collapseKey || groupKey).slice(0, 64),
+            }
+          : {}),
       },
       payload: {
         aps: {
-          sound: sound === 'default' || !sound ? 'default' : `${sound}.caf`,
-          ...(typeof badge === 'number' ? { badge } : {}),
-          ...(groupKey ? { 'thread-id': groupKey } : {}),
-          'mutable-content': resolvedImage ? 1 : 0,
+          ...(isCallClear
+            ? { 'content-available': 1 }
+            : {
+                sound: sound === 'default' || !sound ? 'default' : `${sound}.caf`,
+                ...(typeof badge === 'number' ? { badge } : {}),
+                ...(groupKey ? { 'thread-id': groupKey } : {}),
+                'mutable-content': resolvedImage ? 1 : 0,
+              }),
           ...(isCallIncoming
             ? {
+                alert: {
+                  title: title || 'Incoming call',
+                  body: body || '',
+                },
                 category: 'incoming_call',
-                // Time-sensitive — surfaces on lock screen when Focus allows
                 'interruption-level': 'time-sensitive',
               }
             : {}),
         },
       },
-      ...(resolvedImage
+      ...(resolvedImage && !isCallClear
         ? { fcmOptions: { image: resolvedImage } }
         : {}),
+    },
+  };
+
+  // Clear / cancel: data-only — client dismisses the ringing tray
+  if (isCallClear) {
+    return {
+      ...base,
+      android: {
+        ...base.android,
+        // No notification block → data-only wake on Android
+      },
+    };
+  }
+
+  // Incoming calls (Android): data-only so the client presents Answer / Decline.
+  // Do NOT set top-level `notification` — FCM would show a tray without actions.
+  // iOS still gets an APNs alert via `apns` above.
+  if (isCallIncoming) {
+    return {
+      ...base,
+      android: {
+        ...base.android,
+      },
+      apns: base.apns,
+    };
+  }
+
+  return {
+    ...base,
+    notification: {
+      title,
+      body,
+      ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
+    },
+    android: {
+      ...base.android,
+      notification: {
+        channelId,
+        sound: sound === 'default' || !sound ? 'default' : sound,
+        priority: isHigh || isCallMissed ? 'max' : 'default',
+        defaultVibrateTimings: true,
+        // 1 = PUBLIC — show content on lock screen (WhatsApp-style)
+        // Firebase Admin expects the string enum, not a numeric constant
+        visibility: 'PUBLIC',
+        ...(typeof badge === 'number' ? { notificationCount: badge } : {}),
+        ...(groupKey ? { tag: groupKey } : {}),
+        ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
+        icon: 'notification_icon',
+        color: '#5A2FC7',
+      },
+    },
+    apns: {
+      ...base.apns,
+      payload: {
+        aps: {
+          alert: {
+            title,
+            body,
+          },
+          sound: sound === 'default' || !sound ? 'default' : `${sound}.caf`,
+          ...(typeof badge === 'number' ? { badge } : {}),
+          ...(groupKey ? { 'thread-id': groupKey } : {}),
+          'mutable-content': resolvedImage ? 1 : 0,
+        },
+      },
     },
   };
 }

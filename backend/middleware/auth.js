@@ -14,7 +14,7 @@ module.exports = async function authMiddleware(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const userId = decoded.userId;
-    const deviceId = decoded.deviceId;
+    const deviceId = decoded.deviceId ? String(decoded.deviceId).trim() : '';
 
     if (!userId) {
       return res.status(401).json({ error: 'Invalid or expired token' });
@@ -26,8 +26,10 @@ module.exports = async function authMiddleware(req, res, next) {
       if (!user) {
         return res.status(401).json({ error: 'Invalid or expired token' });
       }
-      activeDeviceId = user.activeDeviceId ? String(user.activeDeviceId) : null;
+      activeDeviceId = user.activeDeviceId ? String(user.activeDeviceId).trim() : null;
       setCachedActiveDevice(userId, activeDeviceId);
+    } else if (activeDeviceId) {
+      activeDeviceId = String(activeDeviceId).trim();
     }
 
     // Single-device enforcement: JWT device must match the account's active device
@@ -39,7 +41,7 @@ module.exports = async function authMiddleware(req, res, next) {
     }
 
     req.userId = String(userId);
-    req.deviceId = deviceId ? String(deviceId) : deviceId;
+    req.deviceId = deviceId;
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });

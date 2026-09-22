@@ -320,6 +320,29 @@ export async function apiLogout(token: string): Promise<void> {
   }
 }
 
+/**
+ * Upgrade JWT/device binding from a legacy installation UUID to the stable
+ * hardware device id — call while still logged in so reinstall won't look "new".
+ */
+export async function apiSyncDevice(
+  token: string
+): Promise<{ success: boolean; synced?: boolean; token: string; user: any } | null> {
+  const { getOrCreateDeviceId, peekJwtDeviceId } = await import('./device');
+  const deviceId = await getOrCreateDeviceId();
+  const jwtDevice = peekJwtDeviceId(token);
+  if (jwtDevice && jwtDevice === deviceId) {
+    return null; // already bound to stable id
+  }
+  return apiFetch('/api/auth/sync-device', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ deviceId }),
+  }) as Promise<{ success: boolean; synced?: boolean; token: string; user: any }>;
+}
+
 export async function saveAuthSession(token: string, user: object): Promise<void> {
   const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
   await AsyncStorage.multiSet([

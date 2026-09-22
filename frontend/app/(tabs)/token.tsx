@@ -21,6 +21,7 @@ import {
 } from "react-native-safe-area-context";
 import { nativeAlert } from "../../components/AppAlert";
 import BonusCoin from "../../components/BonusCoin";
+import WhatsAppAvatar from "../../components/WhatsAppAvatar";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -32,14 +33,15 @@ import {
     initiateTokenPurchase,
     type TokenPackOffer,
 } from "../../utils/payment";
+import { getCachedProfile } from "../../utils/profileCache";
 import {
     getCachedTokenBalance,
     preloadTokenBalance,
     setCachedTokenBalance,
     updateCachedTokenBalance,
 } from "../../utils/tokenCache";
-
-const FALLBACK_AVATAR = require("../../assets/images/boy-image.png");
+import { apiRequest } from "../../utils/api";
+import { resolveMediaUrl } from "../../utils/media";
 
 // ─────────────────────────────────────────────
 // Wheel config
@@ -730,6 +732,7 @@ export default function TokenScreen() {
   const [profilePhoto, setProfilePhoto] = React.useState<string | null>(null);
   const [userName, setUserName] = React.useState<string>("");
   const [userEmail, setUserEmail] = React.useState<string>("");
+  const [userPublicId, setUserPublicId] = React.useState<string>("");
   const [spinCycle, setSpinCycle] = React.useState<number[]>(FREE_SPIN_CYCLE);
 
   const applyBalanceData = React.useCallback(
@@ -865,10 +868,38 @@ export default function TokenScreen() {
         try {
           const authUser = await getCurrentAuthUser();
           if (!authUser?.email) return;
-          const parsed = await getLocalProfile(authUser.email);
-          setProfilePhoto(parsed?.photo || null);
-          setUserName(parsed?.name || "");
           setUserEmail(authUser.email || "");
+
+          const snap = getCachedProfile();
+          const parsed = await getLocalProfile(authUser.email);
+
+          let photo =
+            snap?.profile?.photo ||
+            (Array.isArray(snap?.profile?.photos) && snap.profile.photos[0]) ||
+            parsed?.photo ||
+            (Array.isArray(parsed?.photos) && parsed.photos[0]) ||
+            "";
+          let name = snap?.profile?.name || parsed?.name || "";
+          let publicId = snap?.profile?.publicId || parsed?.publicId || "";
+
+          try {
+            const token = await getAuthToken();
+            if (token) {
+              const me: any = await apiRequest("/api/users/me", token);
+              if (me?.photo) photo = String(me.photo);
+              else if (Array.isArray(me?.photos) && me.photos[0]) {
+                photo = String(me.photos[0]);
+              }
+              if (me?.name) name = String(me.name);
+              if (me?.publicId) publicId = String(me.publicId);
+            }
+          } catch {
+            /* keep local / cache */
+          }
+
+          setProfilePhoto(resolveMediaUrl(String(photo)) || String(photo) || null);
+          setUserName(String(name || ""));
+          setUserPublicId(String(publicId || ""));
         } catch {
           /* ignore */
         }
@@ -894,19 +925,12 @@ export default function TokenScreen() {
               activeOpacity={0.8}
               onPress={() => router.push("/(tabs)/profile")}
             >
-              {profilePhoto ? (
-                <Image
-                  source={{ uri: profilePhoto }}
-                  style={styles.headerAvatar}
-                  contentFit="cover"
-                />
-              ) : (
-                <Image
-                  source={FALLBACK_AVATAR}
-                  style={styles.headerAvatar}
-                  contentFit="cover"
-                />
-              )}
+              <WhatsAppAvatar
+                photo={profilePhoto}
+                name={userName || "You"}
+                publicId={userPublicId || undefined}
+                size={34}
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -1192,10 +1216,8 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     overflow: "hidden",
-  },
-  headerAvatar: {
-    width: "100%",
-    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   // Balance — full-bleed card

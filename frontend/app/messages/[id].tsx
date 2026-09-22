@@ -2,12 +2,6 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
     AudioModule,
-    createAudioPlayer,
-    getRecordingPermissionsAsync,
-    RecordingPresets,
-    requestRecordingPermissionsAsync,
-    setAudioModeAsync,
-    type AudioPlayer,
     type AudioRecorder,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
@@ -74,6 +68,7 @@ import { useAppAlert } from "../../components/AppAlert";
 import { sharePublicProfile } from "../../components/CopyablePublicId";
 import { ChatThreadSkeleton } from "../../components/ScreenSkeleton";
 import UserProfileModal from "../../components/UserProfileModal";
+import VoiceMessageBubble from "../../components/VoiceMessageBubble";
 import WhatsAppAvatar, {
     getDisplayName,
 } from "../../components/WhatsAppAvatar";
@@ -85,6 +80,12 @@ import {
   prepareChatRecordingAudio,
   restoreChatPlaybackAudio,
 } from "../../utils/callAudio";
+import {
+  ensureVoiceMicPermission,
+  pauseActiveVoicePlayback,
+  uploadVoiceNote,
+  VOICE_NOTE_PRESET,
+} from "../../utils/voiceMessages";
 import {
   apiRequest,
   fetchWithTimeout,
@@ -118,6 +119,7 @@ import {
     unlikeUser,
 } from "../../utils/friends";
 import { fetchUserProfile, NearbyUser } from "../../utils/nearby";
+import { formatLastSeen } from "../../utils/timeFormat";
 import {
     clearThreadCache,
     getThreadFromMemory,
@@ -384,12 +386,9 @@ function MessageBubbleText({
   );
 }
 
-// ── Voice bubble ──────────────────────────────────────────────────
-const VOICE_WAVE_HEIGHTS = [
-  7, 12, 9, 15, 11, 14, 8, 13, 10, 16, 12, 8, 14, 9, 13, 11,
-];
-
+// ── Voice bubble (WhatsApp-like play / seek / one-at-a-time) ───────
 const VoiceMessage = ({
+  messageId,
   uri,
   isMe,
   createdAt,
@@ -399,6 +398,7 @@ const VoiceMessage = ({
   delivered,
   read,
 }: {
+  messageId: string;
   uri: string;
   isMe: boolean;
   createdAt: number;
@@ -407,175 +407,30 @@ const VoiceMessage = ({
   undelivered?: boolean;
   delivered?: boolean;
   read?: boolean;
-}) => {
-  const [sound, setSound] = useState<AudioPlayer | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [durationMs, setDurationMs] = useState(0);
-  const [positionMs, setPositionMs] = useState(0);
-  const playableUri = resolveMediaUrl(uri) || uri;
-
-  const fmtVoice = (ms: number) => {
-    const total = Math.max(0, Math.floor(ms / 1000));
-    return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
-  };
-
-  async function toggle() {
-    try {
-      if (sound) {
-        if (sound.playing) {
-          sound.pause();
-          setPlaying(false);
-        } else {
-          if (
-            sound.duration > 0 &&
-            sound.currentTime >= sound.duration - 0.05
-          ) {
-            await sound.seekTo(0);
-          }
-          sound.play();
-          setPlaying(true);
-        }
-        return;
-      }
-
-      if (!playableUri || (playableUri.startsWith("file://") && !isMe)) {
-        console.warn("Voice URL not playable on this device:", playableUri);
-        return;
-      }
-
-      setLoading(true);
-      await setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-        interruptionMode: "duckOthers",
-        shouldRouteThroughEarpiece: false,
-      });
-      const s = createAudioPlayer(
-        { uri: playableUri },
-        { updateInterval: 100 },
-      );
-      setSound(s);
-      setPlaying(true);
-      s.addListener("playbackStatusUpdate", (st) => {
-        if (typeof st.duration === "number") setDurationMs(st.duration * 1000);
-        if (typeof st.currentTime === "number")
-          setPositionMs(st.currentTime * 1000);
-        setPlaying(!!st.playing);
-        if (st.didJustFinish) {
-          setPlaying(false);
-          setPositionMs(0);
-          void s.seekTo(0);
-        }
-      });
-      s.play();
-    } catch (e) {
-      console.warn("Voice playback failed", e);
-      setPlaying(false);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(
-    () => () => {
-      try {
-        sound?.remove();
-      } catch {
-        /* ignore */
-      }
-    },
-    [sound],
-  );
-
-  const progress = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
-  const displayMs = playing || positionMs > 0 ? positionMs : durationMs;
-  const barActiveColor = isMe ? "#FFFFFF" : "#8E2DE2";
-  const barIdleColor = isMe ? "rgba(255,255,255,0.35)" : "#C4B5D4";
-
-  return (
-    <View
-      style={[
-        styles.voiceBubble,
-        isMe ? styles.myVoiceBubble : styles.otherVoiceBubble,
-      ]}
-    >
-      <TouchableOpacity
-        onPress={toggle}
-        style={[
-          styles.voicePlayBtn,
-          isMe ? styles.myVoicePlayBtn : styles.otherVoicePlayBtn,
-        ]}
-        disabled={loading}
-        activeOpacity={0.75}
-      >
-        {loading ? (
-          <ActivityIndicator size="small" color={isMe ? "#8E2DE2" : "#fff"} />
-        ) : (
-          <Ionicons
-            name={playing ? "pause" : "play"}
-            size={15}
-            color={isMe ? "#8E2DE2" : "#fff"}
-            style={!playing ? { marginLeft: 1 } : undefined}
-          />
-        )}
-      </TouchableOpacity>
-
-      <View style={styles.voiceBody}>
-        <View style={styles.voiceWaveRow}>
-          {VOICE_WAVE_HEIGHTS.map((h, i) => {
-            const filled =
-              (playing || positionMs > 0) &&
-              i / VOICE_WAVE_HEIGHTS.length <= progress;
-            return (
-              <View
-                key={i}
-                style={[
-                  styles.voiceWaveBar,
-                  {
-                    height: h,
-                    backgroundColor: filled ? barActiveColor : barIdleColor,
-                  },
-                ]}
-              />
-            );
-          })}
-        </View>
-        <View style={styles.voiceMetaRow}>
-          <Text
-            style={[
-              styles.voiceDuration,
-              isMe ? styles.myVoiceDuration : styles.otherVoiceDuration,
-            ]}
-          >
-            {fmtVoice(displayMs || 0)}
-          </Text>
-          <View style={styles.voiceTimeRow}>
-            <Text
-              style={[
-                styles.voiceTime,
-                isMe ? styles.myVoiceTime : styles.otherVoiceTime,
-              ]}
-            >
-              {fmtTime(createdAt)}
-            </Text>
-            {isMe && (
-              <DeliveryTicks
-                isMe
-                pending={pending}
-                failed={failed}
-                undelivered={undelivered}
-                delivered={delivered}
-                read={read}
-                light
-              />
-            )}
-          </View>
-        </View>
-      </View>
-    </View>
-  );
-};
+}) => (
+  <VoiceMessageBubble
+    messageId={messageId}
+    uri={uri}
+    isMe={isMe}
+    createdAt={createdAt}
+    pending={pending}
+    failed={failed}
+    undelivered={undelivered}
+    delivered={delivered}
+    read={read}
+    renderTicks={(ticks) => (
+      <DeliveryTicks
+        isMe
+        pending={ticks.pending}
+        failed={ticks.failed}
+        undelivered={ticks.undelivered}
+        delivered={ticks.delivered}
+        read={ticks.read}
+        light
+      />
+    )}
+  />
+);
 
 // ── Message row ───────────────────────────────────────────────────
 function replyPreviewLabel(m?: ChatMsg | null) {
@@ -1351,6 +1206,7 @@ const MessageItem = React.memo(function MessageItem({
             <View>
               <ReplyPreview />
               <VoiceMessage
+                messageId={item._id}
                 uri={voiceUri}
                 isMe={isMe}
                 createdAt={item.createdAt}
@@ -1525,6 +1381,13 @@ export default function MessageScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const recordingRef = useRef<AudioRecorder | null>(null);
+  /** WhatsApp hold-to-record: finger still down / released while start was in flight */
+  const micPressedRef = useRef(false);
+  const micSlideCancelRef = useRef(false);
+  const recordStartedAtRef = useRef(0);
+  const recordingBusyRef = useRef(false);
+  const [slideCancelHint, setSlideCancelHint] = useState(false);
+  const recordingPulse = useRef(new Animated.Value(1)).current;
   const [selectedImage, setSelectedImage] = useState<{
     uri: string;
     width: number;
@@ -1717,9 +1580,29 @@ export default function MessageScreen() {
   // Instant mic ↔ send (no extra state lag)
   const showSendIcon = inputText.trim().length > 0 || !!selectedImage;
 
-  const [otherUserOnline, setOtherUserOnline] = useState(
-    isOnlineParam === "true",
+  const [otherUserOnline, setOtherUserOnline] = useState(false);
+  const [otherUserLastSeen, setOtherUserLastSeen] = useState<string | null>(
+    null,
   );
+  /** Suppress Offline flicker during brief network blips (Wi‑Fi ↔ data). */
+  const offlineDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyPeerOnline = useCallback(() => {
+    if (offlineDebounceRef.current) {
+      clearTimeout(offlineDebounceRef.current);
+      offlineDebounceRef.current = null;
+    }
+    setOtherUserOnline(true);
+  }, []);
+
+  const applyPeerOffline = useCallback((lastSeen?: string | null) => {
+    if (lastSeen) setOtherUserLastSeen(String(lastSeen));
+    if (offlineDebounceRef.current) clearTimeout(offlineDebounceRef.current);
+    offlineDebounceRef.current = setTimeout(() => {
+      offlineDebounceRef.current = null;
+      setOtherUserOnline(false);
+    }, 1_500);
+  }, []);
   const socketRef = useRef<Socket | null>(null);
   /** Reused by the HTTP-fallback send path to reconcile the same way as the live socket event */
   const handleIncomingMessageRef = useRef<((msg: any) => void) | null>(null);
@@ -1848,6 +1731,13 @@ export default function MessageScreen() {
           const { user } = await fetchUserProfile(token, peerId);
           if (user) {
             setOtherUserOnline(!!user.isOnline);
+            if (user.lastSeen) {
+              setOtherUserLastSeen(
+                user.lastSeen instanceof Date
+                  ? user.lastSeen.toISOString()
+                  : String(user.lastSeen),
+              );
+            }
             if (user.photo) {
               setDisplayPhoto(resolveMediaUrl(user.photo) || user.photo || "");
             }
@@ -2630,6 +2520,14 @@ export default function MessageScreen() {
         if (isUsablePhoto(peer.photo)) setDisplayPhoto(peer.photo!);
         if (peer.gender) setDisplayGender(peer.gender);
         setDisplayBio(user.bio || "");
+        setOtherUserOnline(!!user.isOnline);
+        if (user.lastSeen) {
+          setOtherUserLastSeen(
+            user.lastSeen instanceof Date
+              ? user.lastSeen.toISOString()
+              : String(user.lastSeen),
+          );
+        }
         setProfileUser((prev) => ({
           ...(prev || {
             id: String(id),
@@ -2640,12 +2538,12 @@ export default function MessageScreen() {
             photos: user.photos || [],
             gender: user.gender,
             interests: user.interests || [],
-            isOnline: otherUserOnline,
+            isOnline: !!user.isOnline,
           }),
           ...user,
           name: peer.name || user.name,
           photo: peer.photo || user.photo,
-          isOnline: otherUserOnline,
+          isOnline: !!user.isOnline,
         }));
       } catch {
         /* keep route params */
@@ -3733,16 +3631,21 @@ export default function MessageScreen() {
           setOtherUserOnline(false);
           return;
         }
-        setOtherUserOnline(true);
+        applyPeerOnline();
       });
-      bind("user:offline", ({ userId }: any) => {
-        if (String(userId) === String(id)) setOtherUserOnline(false);
+      bind("user:offline", ({ userId, lastSeen }: any) => {
+        if (String(userId) !== String(id)) return;
+        applyPeerOffline(lastSeen ? String(lastSeen) : null);
       });
     };
 
     init();
     return () => {
       cancelled = true;
+      if (offlineDebounceRef.current) {
+        clearTimeout(offlineDebounceRef.current);
+        offlineDebounceRef.current = null;
+      }
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       const sock = socketRef.current || globalSocket;
       try {
@@ -3763,12 +3666,27 @@ export default function MessageScreen() {
       // Keep global SocketContext connection alive (WhatsApp single-socket)
       if (socketRef.current === sock) socketRef.current = null;
     };
-  }, [id, sessionVersion, globalSocket, markChatAsRead]);
+  }, [id, sessionVersion, globalSocket, markChatAsRead, applyPeerOnline, applyPeerOffline]);
 
   // WhatsApp: leave viewing when app backgrounds so FCM still fires; re-join on resume
   useEffect(() => {
     const onChange = (state: string) => {
       const sock = socketRef.current;
+      if (state === "background" || state === "inactive") {
+        // Cancel in-progress voice note + pause playback (release mic)
+        if (recordingRef.current || micPressedRef.current) {
+          void cancelRecording();
+        }
+        pauseActiveVoicePlayback();
+        if (sock?.connected && id) {
+          try {
+            sock.emit("chat:leave", { otherUserId: id });
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
       if (!sock?.connected || !id) return;
       if (state === "active") {
         try {
@@ -3778,17 +3696,55 @@ export default function MessageScreen() {
         } catch {
           /* ignore */
         }
-      } else if (state === "background" || state === "inactive") {
-        try {
-          sock.emit("chat:leave", { otherUserId: id });
-        } catch {
-          /* ignore */
-        }
       }
     };
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();
   }, [id, markChatAsRead]);
+
+  // Recording pulse + hard cleanup when leaving the chat screen
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | null = null;
+    if (isRecording) {
+      loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(recordingPulse, {
+            toValue: 1.35,
+            duration: 450,
+            useNativeDriver: true,
+          }),
+          Animated.timing(recordingPulse, {
+            toValue: 1,
+            duration: 450,
+            useNativeDriver: true,
+          }),
+        ]),
+      );
+      loop.start();
+    } else {
+      recordingPulse.setValue(1);
+    }
+    return () => {
+      loop?.stop();
+    };
+  }, [isRecording, recordingPulse]);
+
+  useEffect(
+    () => () => {
+      micPressedRef.current = false;
+      const rec = recordingRef.current;
+      if (rec) {
+        if ((rec as any).__durationTick) {
+          clearInterval((rec as any).__durationTick);
+        }
+        void rec.stop().catch(() => undefined);
+        recordingRef.current = null;
+      }
+      pauseActiveVoicePlayback();
+      void restoreChatPlaybackAudio();
+    },
+    [],
+  );
 
   // Also reflect global presence from SocketContext (instant, even before chat:join)
   useEffect(() => {
@@ -3801,8 +3757,14 @@ export default function MessageScreen() {
       setOtherUserOnline(false);
       return;
     }
-    setOtherUserOnline(!!lastPresence.isOnline);
-  }, [presenceTick, lastPresence, id, privacyHidden]);
+    if (lastPresence.isOnline) {
+      applyPeerOnline();
+    } else {
+      applyPeerOffline(
+        lastPresence.lastSeen ? String(lastPresence.lastSeen) : null,
+      );
+    }
+  }, [presenceTick, lastPresence, id, privacyHidden, applyPeerOnline, applyPeerOffline]);
 
   const dismissChatKeyboard = useCallback(() => {
     Keyboard.dismiss();
@@ -4252,100 +4214,80 @@ export default function MessageScreen() {
     return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
   };
 
-  // Upload voice note to server; returns relative /uploads/... path
-  const uploadAudio = async (uri: string): Promise<string | null> => {
-    try {
-      const token = await getAuthToken();
-      if (!token) return null;
-      const encoding =
-        (FileSystem as any).EncodingType?.Base64 ||
-        (FileSystem as any).EncodingType?.base64 ||
-        "base64";
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding,
-      } as any);
-      if (!base64) {
-        console.error("Audio upload failed: empty base64");
-        return null;
-      }
-      const ext = uri.split(".").pop()?.toLowerCase()?.split("?")[0] || "m4a";
-      const mimeType =
-        ext === "mp3"
-          ? "audio/mpeg"
-          : ext === "wav"
-            ? "audio/wav"
-            : ext === "3gp"
-              ? "audio/3gpp"
-              : ext === "caf"
-                ? "audio/x-caf"
-                : ext === "ogg"
-                  ? "audio/ogg"
-                  : ext === "webm"
-                    ? "audio/webm"
-                    : "audio/mp4";
-      const dataUri = `data:${mimeType};base64,${base64}`;
-
-      const res = await fetchWithTimeout(
-        `${getApiBase()}/api/upload/audio`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ base64: dataUri }),
-        },
-        UPLOAD_FETCH_TIMEOUT_MS,
-      );
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        console.error("Audio upload failed", json?.error || res.status);
-        return null;
-      }
-      return json.url || null;
-    } catch (e) {
-      console.error("Audio upload failed", e);
-      return null;
-    }
-  };
+  /** System mic dialog via expo-audio (+ Android RECORD_AUDIO). */
+  async function ensureVoiceMicReady(): Promise<boolean> {
+    return ensureVoiceMicPermission();
+  }
 
   async function startRecording() {
-    if (recordingRef.current || isRecording) return;
-    if (!requireMediaUnlocked()) return;
+    if (recordingRef.current || recordingBusyRef.current) return false;
+    if (!requireMediaUnlocked()) return false;
+    recordingBusyRef.current = true;
+    pauseActiveVoicePlayback();
 
     try {
-      const perm = await getRecordingPermissionsAsync();
-      if (perm.status !== "granted") {
-        const np = await requestRecordingPermissionsAsync();
-        if (np.status !== "granted") {
-          showAlert({
-            title: "Microphone",
-            message: "Allow microphone access to send voice messages.",
-            icon: "mic",
-          });
-          return;
-        }
+      const micOk = await ensureVoiceMicReady();
+      if (!micOk) {
+        showAlert({
+          title: "Voice message",
+          message: "Allow microphone access to record voice messages.",
+          icon: "mic",
+        });
+        return false;
       }
 
-      // Reclaim session after voice/video calls (InCallManager / WebRTC)
+      // Released while the OS permission dialog was open — try again by holding mic
+      if (!micPressedRef.current) {
+        return false;
+      }
+
       await prepareChatRecordingAudio();
 
-      const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      // Check again after async audio prep
+      if (!micPressedRef.current) {
+        await restoreChatPlaybackAudio();
+        return false;
+      }
+
+      const rec = new AudioModule.AudioRecorder(VOICE_NOTE_PRESET);
       await rec.prepareToRecordAsync();
+      if (!micPressedRef.current) {
+        try {
+          await rec.stop();
+        } catch {
+          /* ignore */
+        }
+        await restoreChatPlaybackAudio();
+        return false;
+      }
       rec.record();
       recordingRef.current = rec;
+      recordStartedAtRef.current = Date.now();
       setRecording(rec);
       setIsRecording(true);
       setRecordingDuration(0);
+      setSlideCancelHint(false);
+      try {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } catch {
+        /* ignore */
+      }
       const tick = setInterval(() => {
         try {
           const st = rec.getStatus();
-          if (st?.isRecording) setRecordingDuration(st.durationMillis || 0);
+          if (st?.isRecording) {
+            setRecordingDuration(
+              typeof st.durationMillis === "number"
+                ? st.durationMillis
+                : Date.now() - recordStartedAtRef.current,
+            );
+          }
         } catch {
           /* ignore */
         }
       }, 200);
       (rec as any).__durationTick = tick;
+      return true;
     } catch (e) {
       console.error("startRecording failed", e);
       recordingRef.current = null;
@@ -4353,21 +4295,25 @@ export default function MessageScreen() {
       setRecording(null);
       showAlert({
         title: "Voice message",
-        message:
-          "Could not start recording. Close any call screen and try again.",
+        message: "Could not start recording. Try again in a moment.",
         icon: "mic",
       });
       void restoreChatPlaybackAudio();
+      return false;
+    } finally {
+      recordingBusyRef.current = false;
     }
   }
 
-  async function stopRecording() {
+  async function stopRecording(opts?: { discardIfShort?: boolean }) {
     const rec = recordingRef.current;
     if (!rec) return;
     setIsRecording(false);
+    setSlideCancelHint(false);
     if ((rec as any).__durationTick) {
       clearInterval((rec as any).__durationTick);
     }
+    const elapsed = Date.now() - (recordStartedAtRef.current || Date.now());
     try {
       await rec.stop();
     } catch (e) {
@@ -4378,10 +4324,16 @@ export default function MessageScreen() {
     recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
+
+    // WhatsApp: very short hold is ignored
+    if (opts?.discardIfShort !== false && elapsed < 500) {
+      return;
+    }
+
     if (!uri) {
       showAlert({
         title: "Voice message",
-        message: "Recording was empty. Hold a moment longer, then tap stop.",
+        message: "Hold the mic a moment longer to record.",
         icon: "mic",
       });
       return;
@@ -4416,7 +4368,7 @@ export default function MessageScreen() {
       },
     ]);
 
-    const uploadedUrl = await uploadAudio(uri);
+    const uploadedUrl = await uploadVoiceNote(uri);
     if (uploadedUrl && socketRef.current) {
       const resolved = resolveMediaUrl(uploadedUrl) || uploadedUrl;
       setMessages((prev) =>
@@ -4434,6 +4386,13 @@ export default function MessageScreen() {
         replyTo: replyTargetId(reply),
         clientMsgId: optId,
       });
+      try {
+        await Haptics.notificationAsync(
+          Haptics.NotificationFeedbackType.Success,
+        );
+      } catch {
+        /* ignore */
+      }
     } else {
       setMessages((prev) =>
         prev.map((m) =>
@@ -4459,8 +4418,15 @@ export default function MessageScreen() {
 
   async function cancelRecording() {
     const rec = recordingRef.current;
-    if (!rec) return;
+    if (!rec) {
+      micPressedRef.current = false;
+      setIsRecording(false);
+      setSlideCancelHint(false);
+      return;
+    }
+    micPressedRef.current = false;
     setIsRecording(false);
+    setSlideCancelHint(false);
     if ((rec as any).__durationTick) {
       clearInterval((rec as any).__durationTick);
     }
@@ -4473,6 +4439,48 @@ export default function MessageScreen() {
     recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function onMicPressIn() {
+    if (showSendIcon) return;
+    if (friendshipStatus?.theyBlocked) return;
+    if (!conversationStatus.canSend && !friendshipStatus?.theyBlocked) return;
+    if (!isMediaUnlocked) {
+      requireMediaUnlocked();
+      return;
+    }
+    micPressedRef.current = true;
+    micSlideCancelRef.current = false;
+    setSlideCancelHint(false);
+    if (isRecording || recordingRef.current) return;
+    await startRecording();
+  }
+
+  async function onMicPressOut() {
+    if (showSendIcon) return;
+    const wasPressed = micPressedRef.current;
+    const slidCancel = micSlideCancelRef.current;
+    micPressedRef.current = false;
+    micSlideCancelRef.current = false;
+    if (!wasPressed && !recordingRef.current) return;
+    // Wait briefly if start is still racing
+    let waits = 0;
+    while (recordingBusyRef.current && waits < 20) {
+      await new Promise((r) => setTimeout(r, 40));
+      waits += 1;
+    }
+    if (slidCancel) {
+      await cancelRecording();
+      return;
+    }
+    if (recordingRef.current) {
+      await stopRecording({ discardIfShort: true });
+    }
   }
 
   const deleteSelected = () => {
@@ -4742,7 +4750,7 @@ export default function MessageScreen() {
                       ? "Typing..."
                       : otherUserOnline
                         ? "Online"
-                        : "Offline"}
+                        : formatLastSeen(otherUserLastSeen)}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -5163,13 +5171,26 @@ export default function MessageScreen() {
                     >
                       <View style={styles.recordingWrapper}>
                         <View style={styles.recordingIndicatorContainer}>
-                          <View style={styles.recordingDot} />
+                          <Animated.View
+                            style={[
+                              styles.recordingDot,
+                              { transform: [{ scale: recordingPulse }] },
+                            ]}
+                          />
                           <Text style={styles.recordingTime}>
                             {fmtDuration(recordingDuration)}
                           </Text>
                         </View>
-                        <Text style={styles.recordingText} numberOfLines={1}>
-                          Recording...
+                        <Text
+                          style={[
+                            styles.recordingText,
+                            slideCancelHint && styles.recordingTextCancel,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {slideCancelHint
+                            ? "Release to cancel"
+                            : "Slide left to cancel"}
                         </Text>
                         <TouchableOpacity
                           onPress={cancelRecording}
@@ -5214,14 +5235,10 @@ export default function MessageScreen() {
                   </TouchableOpacity>
                 ) : null}
 
-                <TouchableOpacity
+                <Pressable
                   onPress={() => {
                     if (showSendIcon) {
                       void sendMessage();
-                      return;
-                    }
-                    if (isRecording) {
-                      void stopRecording();
                       return;
                     }
                     if (friendshipStatus?.theyBlocked) {
@@ -5246,9 +5263,33 @@ export default function MessageScreen() {
                       });
                       return;
                     }
-                    void startRecording();
+                    // Locked recording (finger already up): tap mic again to send
+                    if (
+                      (isRecording || recordingRef.current) &&
+                      !micPressedRef.current
+                    ) {
+                      void stopRecording({ discardIfShort: false });
+                    }
                   }}
-                  style={[
+                  onPressIn={() => {
+                    if (showSendIcon) return;
+                    void onMicPressIn();
+                  }}
+                  onPressOut={() => {
+                    if (showSendIcon) return;
+                    void onMicPressOut();
+                  }}
+                  onTouchMove={(e) => {
+                    if (!isRecording && !recordingRef.current) return;
+                    const { locationX } = e.nativeEvent;
+                    // Slide left away from mic → cancel (WhatsApp-style)
+                    const cancel = locationX < -48;
+                    if (micSlideCancelRef.current !== cancel) {
+                      micSlideCancelRef.current = cancel;
+                      setSlideCancelHint(cancel);
+                    }
+                  }}
+                  style={({ pressed }) => [
                     styles.sendButton,
                     !showSendIcon &&
                       !isRecording &&
@@ -5256,9 +5297,9 @@ export default function MessageScreen() {
                         (!conversationStatus.canSend &&
                           !friendshipStatus?.theyBlocked)) &&
                       styles.sendButtonDisabled,
+                    isRecording && styles.sendButtonRecording,
+                    pressed && { opacity: 0.75 },
                   ]}
-                  activeOpacity={0.6}
-                  delayPressIn={0}
                 >
                   <LinearGradient
                     colors={[...LUVSTOR_GRADIENT]}
@@ -5270,17 +5311,15 @@ export default function MessageScreen() {
                       name={
                         showSendIcon
                           ? "send"
-                          : isRecording
-                            ? "stop"
-                            : friendshipStatus?.theyBlocked
-                              ? "send"
-                              : "mic"
+                          : friendshipStatus?.theyBlocked
+                            ? "send"
+                            : "mic"
                       }
                       size={INPUT_ICON - 3}
                       color="#fff"
                     />
                   </LinearGradient>
-                </TouchableOpacity>
+                </Pressable>
               </View>
             </View>
           )}
@@ -6643,7 +6682,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   imageBufferOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
     backgroundColor: "rgba(0,0,0,0.32)",
     alignItems: "center",
     justifyContent: "center",
@@ -6735,7 +6778,11 @@ const styles = StyleSheet.create({
     opacity: 0,
   },
   recordingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
     justifyContent: "center",
   },
   input: {
@@ -6758,6 +6805,9 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     opacity: 0.4,
+  },
+  sendButtonRecording: {
+    transform: [{ scale: 1.12 }],
   },
   sendButtonGradient: {
     flex: 1,
@@ -6794,6 +6844,10 @@ const styles = StyleSheet.create({
     color: "#666",
     flex: 1,
     marginLeft: 8,
+  },
+  recordingTextCancel: {
+    color: "#ff4444",
+    fontWeight: "600",
   },
   deleteRecordingButton: { padding: 4 },
   imagePreviewContainer: {
@@ -6838,7 +6892,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#000",
   },
   fullScreenBuffer: {
-    ...StyleSheet.absoluteFillObject,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.2)",

@@ -127,10 +127,37 @@ router.post('/image-bin', auth, async (req, res) => {
     }
 });
 
-// POST /api/upload/audio  — voice notes for chat
+// POST /api/upload/audio  — voice notes for chat (base64 JSON — legacy)
 router.post('/audio', auth, (req, res) =>
   saveUpload(req, res, { prefix: 'aud', defaultMime: 'audio/m4a', defaultExt: 'm4a' })
 );
+
+// POST /api/upload/audio-bin  — raw AAC/M4A (faster than base64; preferred for voice notes)
+router.post('/audio-bin', auth, async (req, res) => {
+  try {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || []);
+    if (!buffer.length) {
+      return res.status(400).json({ error: 'Empty file' });
+    }
+    const mime = String(req.headers['content-type'] || 'audio/mp4').split(';')[0].trim();
+    if (!mime.startsWith('audio/') && mime !== 'application/octet-stream') {
+      return res.status(400).json({ error: 'Only audio is allowed' });
+    }
+    const originalName = String(req.headers['x-original-name'] || '').slice(0, 180);
+    const json = await persistUploadBuffer(req, {
+      buffer,
+      mime: mime.startsWith('audio/') ? mime : 'audio/mp4',
+      originalName,
+      prefix: 'aud',
+      defaultMime: 'audio/m4a',
+      defaultExt: 'm4a',
+    });
+    res.json(json);
+  } catch (err) {
+    console.error('binary audio upload error:', err);
+    res.status(500).json({ error: 'Failed to upload file' });
+  }
+});
 
 // GET /api/upload/verify/:uploadId
 router.get('/verify/:uploadId', auth, async (req, res) => {

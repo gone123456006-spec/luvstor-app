@@ -171,6 +171,9 @@ function ensureAndroidCallPermissions() {
     "android.permission.RECORD_AUDIO",
     "android.permission.CAMERA",
     "android.permission.MODIFY_AUDIO_SETTINGS",
+    "android.permission.READ_MEDIA_IMAGES",
+    "android.permission.READ_MEDIA_VIDEO",
+    "android.permission.READ_MEDIA_AUDIO",
   ];
   let changed = false;
   if (!xml.includes('xmlns:tools=')) {
@@ -190,7 +193,7 @@ function ensureAndroidCallPermissions() {
   }
   if (changed) {
     fs.writeFileSync(manifestPath, xml);
-    console.log("✔ Ensured Android RECORD_AUDIO / CAMERA in AndroidManifest.xml");
+    console.log("✔ Ensured Android mic / camera / media permissions in AndroidManifest.xml");
   }
 }
 

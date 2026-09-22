@@ -338,6 +338,21 @@ async function destroySession(callId, { status, endReason, endedBy, notify = tru
     notifyUser(ioRef, session.calleeId, 'call:ended', payload);
   }
 
+  // Clear ringing FCM tray on the callee (cancel / decline / accept / timeout)
+  // so a killed phone does not keep a stale "Incoming call".
+  if (
+    ['cancelled', 'rejected', 'ended', 'missed', 'busy'].includes(finalStatus)
+  ) {
+    try {
+      const { pushClearIncomingCall } = require('../utils/callPush');
+      void pushClearIncomingCall(session.calleeId, callId);
+      // Also clear on caller's other devices if any
+      void pushClearIncomingCall(session.callerId, callId);
+    } catch (err) {
+      console.warn('[calls] clear incoming push:', err.message);
+    }
+  }
+
   // WhatsApp-style auto message in the chat thread
   if (!session.explore) {
     try {
@@ -518,6 +533,14 @@ async function acceptCall(callId, userId) {
   session.status = 'connecting';
   session.answeredAt = new Date();
   initPartyHeartbeats(callId);
+
+  // Drop ringing trays on all of the callee's devices
+  try {
+    const { pushClearIncomingCall } = require('../utils/callPush');
+    void pushClearIncomingCall(session.calleeId, callId);
+  } catch {
+    /* ignore */
+  }
 
   try {
     await Call.findOneAndUpdate(

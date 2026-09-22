@@ -1,5 +1,7 @@
 // Must stay first: registers LogBox filters before expo-notifications loads
 import '../utils/logbox';
+// Background FCM → local Answer/Decline trays (must register before React)
+import '../utils/pushBackground';
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';

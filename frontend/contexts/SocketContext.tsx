@@ -34,7 +34,33 @@ import {
 } from '../utils/chatListPreviewPatch';
 import WhatsAppAvatar from '../components/WhatsAppAvatar';
 import { isPushTrayReady, presentChatMessageNotification } from '../utils/push';
-import { isCallSessionActive } from '../utils/callSession';
+
+type NetworkModule = typeof import('expo-network');
+
+/**
+ * expo-network needs a native rebuild. Old APKs / Expo Go throw on import —
+ * load only when ExpoNetwork is in the binary.
+ */
+function loadNetwork(): NetworkModule | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const expo = require('expo') as {
+      requireOptionalNativeModule?: (name: string) => unknown;
+    };
+    const optional =
+      typeof expo.requireOptionalNativeModule === 'function'
+        ? expo.requireOptionalNativeModule
+        : // eslint-disable-next-line @typescript-eslint/no-require-imports
+          (require('expo-modules-core') as {
+            requireOptionalNativeModule: (name: string) => unknown;
+          }).requireOptionalNativeModule;
+    if (!optional('ExpoNetwork')) return null;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-network') as NetworkModule;
+  } catch {
+    return null;
+  }
+}
 
 type ToastKind = 'message' | 'like' | 'unlike' | 'friends';
 
@@ -85,6 +111,7 @@ export type FriendUpdatePayload = {
 type PresenceUpdatePayload = {
   userId: string;
   isOnline: boolean;
+  lastSeen?: string | null;
 };
 
 export type ConversationDeletedPayload = {
@@ -312,11 +339,15 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
    * updates, which delayed messages and duplicated listeners.
    */
   const authUserId = user?.id ? String(user.id) : null;
+  const authUserIdRef = useRef<string | null>(authUserId);
+  authUserIdRef.current = authUserId;
 
   // Keep global authenticated socket alive
   useEffect(() => {
     let cancelled = false;
     let active: Socket | null = null;
+    /** This effect's user — used on cleanup to detect logout / account switch */
+    const effectUserId = authUserId;
 
     (async () => {
       if (!authUserId) {
@@ -335,9 +366,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 800,
-        // Don't stay "online" after the OS backgrounds the app — we disconnect
-        // explicitly on AppState change below.
-        autoConnect: AppState.currentState === 'active',
+        reconnectionDelayMax: 5_000,
+        reconnectionAttempts: Infinity,
+        // Single shared socket. Presence = server connection + heartbeat TTL,
+        // not AppState. Short network blips reconnect without marking Offline.
+        autoConnect: true,
       });
 
       active.on('connect', () => {
@@ -542,24 +575,33 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         });
       });
 
-      const applyPresence = (userId: any, isOnline: boolean) => {
+      const applyPresence = (
+        userId: any,
+        isOnline: boolean,
+        lastSeen?: string | null,
+      ) => {
         const id = String(userId || '');
         if (!id) return;
         const online = !!isOnline;
-        if (presenceMapRef.current.get(id) === online) return;
+        const prev = presenceMapRef.current.get(id);
+        if (prev === online && lastSeen == null) return;
         presenceMapRef.current.set(id, online);
-        const next = { userId: id, isOnline: online };
+        const next = {
+          userId: id,
+          isOnline: online,
+          ...(lastSeen != null ? { lastSeen: String(lastSeen) } : {}),
+        };
         lastPresenceRef.current = next;
         setLastPresence(next);
         setPresenceTick((n) => n + 1);
       };
 
       active.on('user:online', (payload: any) => {
-        applyPresence(payload?.userId, true);
+        applyPresence(payload?.userId, true, payload?.lastSeen);
       });
 
       active.on('user:offline', (payload: any) => {
-        applyPresence(payload?.userId, false);
+        applyPresence(payload?.userId, false, payload?.lastSeen);
       });
 
       if (!cancelled) setSocket(active);
@@ -570,6 +612,16 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
       if (toastTimer.current) clearTimeout(toastTimer.current);
+      // Logout / account switch → immediate Offline. Same-user recreate
+      // (sessionVersion) → disconnect only; server grace + reconnect avoids flicker.
+      const stillSameUser = authUserIdRef.current === effectUserId;
+      if (effectUserId && !stillSameUser && active?.connected) {
+        try {
+          active.emit('presence:away');
+        } catch {
+          /* ignore */
+        }
+      }
       active?.disconnect();
       setSocket(null);
     };
@@ -585,8 +637,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     showToast,
   ]);
 
-  // Badge safety net. Sockets drive updates in real time, so this only needs
-  // to cover missed events — polling every second would drain the battery.
+  // Presence = server connection + heartbeat. Not AppState.
+  // Network blips: do NOT emit away / disconnect — socket.io reconnects; server
+  // grace TTL prevents Offline flicker. Logout uses presence:away (socket cleanup).
   useEffect(() => {
     if (!user) return;
 
@@ -595,6 +648,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     let iv: ReturnType<typeof setInterval> | null = null;
     let presenceIv: ReturnType<typeof setInterval> | null = null;
+    let networkSub: { remove: () => void } | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
     const start = () => {
       if (iv) return;
@@ -619,6 +675,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           /* ignore */
         }
       }
+      // Keep pinging in background while JS is alive — server TTL covers kill.
       presenceIv = setInterval(() => {
         const s = socket;
         if (s?.connected) {
@@ -636,45 +693,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       presenceIv = null;
     };
 
-    /** Online = app open in foreground only — except during an active call */
-    const goOffline = () => {
-      // WhatsApp: keep socket + call heartbeats while on a voice/video call
-      if (isCallSessionActive()) {
-        const s = socket;
-        if (s?.connected) {
-          try {
-            s.emit('chat:leave', {});
-          } catch {
-            /* ignore */
-          }
-        }
-        return;
-      }
-      stop();
-      stopPresence();
-      const s = socket;
-      if (s?.connected) {
-        try {
-          // Clear push-suppress BEFORE disconnect so FCM can fire immediately.
-          // Emit leave then disconnect on next tick so the server processes leave.
-          s.emit('chat:leave', {});
-          setTimeout(() => {
-            try {
-              if (s.connected) s.disconnect();
-            } catch {
-              /* ignore */
-            }
-          }, 80);
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-
-    const goOnline = () => {
+    /** Network / app resume — reconnect + heartbeat (never marks Offline). */
+    const ensureConnected = () => {
+      if (cancelled) return;
       refreshUnread();
       refreshNotifUnread();
-      // Don't bump chatListTick every resume — Chat uses its own 60s TTL sync
       start();
       const s = socket;
       if (s && !s.connected) {
@@ -687,25 +710,95 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       startPresence();
     };
 
-    if (AppState.currentState === 'active') {
-      goOnline();
-    } else if (AppState.currentState === 'background') {
-      goOffline();
+    const scheduleEnsureConnected = () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      // Debounce Wi‑Fi ↔ cellular flaps so we don't thrash connect()
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        ensureConnected();
+      }, 400);
+    };
+
+    const applyNetworkState = (state: { isConnected?: boolean | null }) => {
+      if (state.isConnected === false) {
+        // Do not stop heartbeats or emit away — brief Wi‑Fi↔cellular flaps
+        // must not flicker Offline. Server TTL / disconnect grace decide Offline.
+        return;
+      }
+      scheduleEnsureConnected();
+    };
+
+    void (async () => {
+      try {
+        const Network = loadNetwork();
+        if (!Network) {
+          if (!cancelled) ensureConnected();
+          return;
+        }
+        const state = await Network.getNetworkStateAsync();
+        if (cancelled) return;
+        applyNetworkState(state);
+      } catch {
+        if (!cancelled) ensureConnected();
+      }
+    })();
+
+    try {
+      const Network = loadNetwork();
+      if (Network) {
+        networkSub = Network.addNetworkStateListener((state) => {
+          applyNetworkState(state);
+        });
+      } else {
+        ensureConnected();
+      }
+    } catch {
+      ensureConnected();
     }
 
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        goOnline();
-      } else if (state === 'background') {
-        // Home / switch apps — mark offline. Ignore brief "inactive" (control center).
-        goOffline();
+    // Foreground resume: restore Online ASAP when internet is back
+    const appSub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void (async () => {
+          try {
+            const Network = loadNetwork();
+            if (!Network) {
+              ensureConnected();
+              return;
+            }
+            const state = await Network.getNetworkStateAsync();
+            applyNetworkState(state);
+          } catch {
+            ensureConnected();
+          }
+        })();
+        return;
       }
+      // background / inactive: keep socket + pings if the OS allows; no offline
+      if (socket?.connected) startPresence();
     });
 
+    const onDisconnect = (reason: string) => {
+      if (reason === 'io client disconnect') return;
+      stopPresence();
+      // Transport drop (kill, server down, network): server grace TTL → Offline.
+    };
+    const onConnect = () => {
+      startPresence();
+    };
+    socket?.on('disconnect', onDisconnect);
+    socket?.on('connect', onConnect);
+    if (socket?.connected) startPresence();
+
     return () => {
+      cancelled = true;
       stop();
       stopPresence();
-      sub.remove();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      networkSub?.remove();
+      appSub.remove();
+      socket?.off('disconnect', onDisconnect);
+      socket?.off('connect', onConnect);
     };
   }, [user, sessionVersion, socket, refreshUnread, refreshNotifUnread]);
 

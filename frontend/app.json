@@ -113,7 +113,10 @@
         "android.permission.USE_FULL_SCREEN_INTENT",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-        "android.permission.FOREGROUND_SERVICE_CAMERA"
+        "android.permission.FOREGROUND_SERVICE_CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
       ]
     },
     "web": {
@@ -124,6 +127,8 @@
       "expo-router",
       "expo-asset",
       "expo-dev-client",
+      "expo-secure-store",
+      "./plugins/withFcmAndroid",
       [
         "expo-build-properties",
         {
@@ -161,6 +166,7 @@
         }
       ],
       "./plugins/withWebRTC",
+      "./plugins/withCallForegroundService",
       [
         "expo-notifications",
         {
@@ -170,6 +176,7 @@
           "enableBackgroundRemoteNotifications": true
         }
       ],
+      "expo-task-manager",
       [
         "expo-splash-screen",
         {

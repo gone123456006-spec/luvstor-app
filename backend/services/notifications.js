@@ -147,9 +147,10 @@ function applyActorCopy(type, title, body, actorName) {
     case 'chat':
       return { title: actorName, body };
     case 'call':
+      // Keep server copy (Incoming / Missed …). Do not rewrite missed as "is calling".
       return {
-        title: `${actorName} is calling`,
-        body: body || 'Tap to answer',
+        title: actorName || title,
+        body: body || 'Incoming call',
       };
     default:
       return { title, body };

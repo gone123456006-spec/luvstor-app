@@ -130,6 +130,14 @@ export default function SettingsScreen() {
 
         <View style={[styles.listGroup, styles.listGroupSpaced]}>
           <SettingsRow
+            icon="key"
+            color="#6750A4"
+            label="Permissions"
+            sub="Microphone, camera, photos, music & calls"
+            onPress={() => router.push("/settings/permissions" as any)}
+            showDivider
+          />
+          <SettingsRow
             icon="notifications"
             color="#25D366"
             label="Notifications"
