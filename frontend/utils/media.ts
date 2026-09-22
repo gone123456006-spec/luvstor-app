@@ -4,12 +4,8 @@ import { getApiBase } from './api';
 export const PRODUCTION_MEDIA_BASE = 'https://luvstor-api.onrender.com';
 
 /**
- * Optional CDN / production origin for `/uploads/...` when the API host
- * differs from where files actually live (common in local-dev + Atlas).
- *
- * Default: same host as the API (so a photo you just uploaded locally
- * actually loads). `mediaUrlCandidates` still tries production as failover
- * when Mongo still points at Render-hosted files.
+ * Optional CDN / production origin for app media when the API host
+ * differs from where files actually live.
  */
 function getMediaBase(): string {
   const fromEnv = process.env.EXPO_PUBLIC_MEDIA_BASE_URL?.trim().replace(/\/$/, '');
@@ -17,26 +13,11 @@ function getMediaBase(): string {
   return getApiBase();
 }
 
-function isLocalOrEmulatorHost(hostname: string): boolean {
-  const h = String(hostname || '').toLowerCase();
-  if (!h) return false;
-  if (h === 'localhost' || h === '127.0.0.1' || h === '10.0.2.2' || h === '0.0.0.0') {
-    return true;
-  }
-  // Private LAN ranges used by Expo / Metro
-  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
-  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
-  return false;
-}
+const MEDIA_API_RE = /^\/api\/media\/[a-fA-F0-9]{24}/i;
 
 /**
  * Stable identity for a media item, independent of which host/query string
- * it currently resolves through. Use this (not the resolved URL) as a React
- * `key` / expo-image `recyclingKey` — otherwise a profile refresh that
- * re-resolves the *same* photo through a slightly different absolute URL
- * (different host, added query, etc.) forces a hard remount and the image
- * flashes blank for a frame — the "blink" WhatsApp/Instagram never show.
+ * it currently resolves through.
  */
 export function mediaIdentity(url?: string | null): string {
   const trimmed = String(url || '').trim();
@@ -48,24 +29,43 @@ export function mediaIdentity(url?: string | null): string {
   ) {
     return trimmed;
   }
-  const path = uploadsPathFromUrl(trimmed);
+  const path = durableMediaPathFromUrl(trimmed);
   if (path) return path;
   return trimmed.split('?')[0];
 }
 
-/** Extract `/uploads/...` path from relative or absolute URL. */
-export function uploadsPathFromUrl(url?: string | null): string | null {
+/**
+ * Extract durable relative media path:
+ * - `/api/media/{ObjectId}` (MongoDB binary — preferred)
+ * - `/uploads/...` (legacy disk)
+ */
+export function durableMediaPathFromUrl(url?: string | null): string | null {
   if (!url) return null;
-  const trimmed = String(url).trim().split('?')[0];
+  const trimmed = String(url).trim().split('?')[0].split('#')[0];
   if (!trimmed) return null;
+
+  if (MEDIA_API_RE.test(trimmed)) {
+    const m = trimmed.match(/^(\/api\/media\/[a-fA-F0-9]{24})/i);
+    return m ? m[1] : trimmed;
+  }
   if (trimmed.startsWith('/uploads/')) return trimmed;
+
   try {
     const parsed = new URL(trimmed);
+    if (MEDIA_API_RE.test(parsed.pathname)) {
+      const m = parsed.pathname.match(/^(\/api\/media\/[a-fA-F0-9]{24})/i);
+      return m ? m[1] : parsed.pathname;
+    }
     if (parsed.pathname.startsWith('/uploads/')) return parsed.pathname;
   } catch {
     /* ignore */
   }
   return null;
+}
+
+/** @deprecated use durableMediaPathFromUrl — kept for call sites */
+export function uploadsPathFromUrl(url?: string | null): string | null {
+  return durableMediaPathFromUrl(url);
 }
 
 /**
@@ -91,10 +91,17 @@ export function upgradeRemotePhotoUrl(url: string): string {
   return url;
 }
 
+function isAppMediaPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/uploads/') ||
+    MEDIA_API_RE.test(pathname) ||
+    pathname.startsWith('/api/media/')
+  );
+}
+
 /**
- * Turn relative `/uploads/...` or stale LAN absolute URLs into a loadable URL.
- * Never rewrite production / CDN hosts onto the local API (that blanked DPs,
- * covers, and post images when local `uploads/` was empty).
+ * Turn relative `/api/media/...` or `/uploads/...` (or stale absolutes)
+ * into a loadable URL on the current API/media host.
  */
 export function resolveMediaUrl(url?: string | null): string | null {
   if (!url) return null;
@@ -110,6 +117,10 @@ export function resolveMediaUrl(url?: string | null): string | null {
   }
 
   const mediaBase = getMediaBase();
+  const durable = durableMediaPathFromUrl(trimmed);
+  if (durable) {
+    return `${mediaBase}${durable}`;
+  }
 
   if (trimmed.startsWith('/')) {
     return `${mediaBase}${trimmed}`;
@@ -117,12 +128,7 @@ export function resolveMediaUrl(url?: string | null): string | null {
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.pathname.startsWith('/uploads/')) {
-      // Keep Render / CDN / other remote absolute URLs intact
-      if (!isLocalOrEmulatorHost(parsed.hostname)) {
-        return trimmed;
-      }
-      // Stale localhost / emulator / old LAN host → current media origin
+    if (isAppMediaPath(parsed.pathname)) {
       return `${mediaBase}${parsed.pathname}${parsed.search || ''}`;
     }
   } catch {
@@ -133,8 +139,7 @@ export function resolveMediaUrl(url?: string | null): string | null {
 }
 
 /**
- * Ordered list of URLs to try for Instagram/WhatsApp-style reliability.
- * Primary resolve first, then production + local API for `/uploads` paths.
+ * Ordered list of URLs to try for reliability across hosts.
  */
 export function mediaUrlCandidates(url?: string | null): string[] {
   if (!url) return [];
@@ -158,7 +163,7 @@ export function mediaUrlCandidates(url?: string | null): string[] {
 
   push(resolveMediaUrl(trimmed));
 
-  const path = uploadsPathFromUrl(trimmed);
+  const path = durableMediaPathFromUrl(trimmed);
   if (path) {
     push(`${PRODUCTION_MEDIA_BASE}${path}`);
     try {

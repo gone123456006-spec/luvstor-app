@@ -117,6 +117,17 @@ async function loadImageBuffer(url, apiBase) {
   const raw = String(url || '').trim();
   if (!raw) return null;
 
+  if (raw.startsWith('/api/media/')) {
+    try {
+      const { loadMediaById, mediaIdFromUrl } = require('./mediaStore');
+      const id = mediaIdFromUrl(raw);
+      const doc = id ? await loadMediaById(id) : null;
+      if (doc?.data?.length >= 2048) return doc.data;
+    } catch {
+      /* fall through to HTTP */
+    }
+  }
+
   if (raw.startsWith('/uploads/')) {
     const abs = resolveLocalUploadPath(raw);
     if (abs && fs.existsSync(abs)) {

@@ -1,12 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const fs = require('fs');
-const path = require('path');
 const auth = require('../middleware/auth');
 const Upload = require('../models/Upload');
-const { ensureUploadsDir } = require('../utils/uploadsPath');
-
-const UPLOADS_DIR = ensureUploadsDir();
+const { persistMediaBuffer } = require('../services/mediaStore');
+const { publicApiBase } = require('../utils/absoluteUrl');
 
 function parseDataUri(base64) {
   const matches = String(base64 || '').match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
@@ -32,43 +29,39 @@ function extensionForMime(mime, fallback = 'bin') {
   return fallback;
 }
 
+/**
+ * Store file bytes in MongoDB and return durable `/api/media/{id}` URL.
+ * Same Atlas DB as production → images survive redeploy / reinstall / device transfer.
+ */
 async function persistUploadBuffer(req, { buffer, mime, originalName, prefix, defaultMime, defaultExt }) {
   const resolvedMime = mime || defaultMime;
-  const ext = extensionForMime(resolvedMime, defaultExt);
-  const userId = String(req.userId);
-  const userDir = path.join(UPLOADS_DIR, userId);
-  if (!fs.existsSync(userDir)) {
-    fs.mkdirSync(userDir, { recursive: true });
-  }
+  const result = await persistMediaBuffer({
+    userId: req.userId,
+    buffer,
+    mime: resolvedMime,
+    originalName,
+    prefix,
+    defaultMime,
+  });
 
-  const fileName = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-  const filePath = path.join(userDir, fileName);
-  fs.writeFileSync(filePath, buffer);
-
-  const relativePath = `/uploads/${userId}/${fileName}`;
-  // Prefer public API host for absoluteUrl (FCM / clients that need https)
-  const { publicApiBase } = require('../utils/absoluteUrl');
   const publicBase = publicApiBase();
   const hostBase =
     publicBase && !/localhost|127\.0\.0\.1/i.test(publicBase)
       ? publicBase
       : `${req.protocol}://${req.get('host')}`;
-  const absoluteUrl = `${hostBase}${relativePath}`;
+  const absoluteUrl = `${hostBase}${result.url}`;
 
-  const upload = await Upload.create({
-    userId: req.userId,
-    fileName,
-    originalName: originalName || fileName,
-    mimeType: resolvedMime,
-    size: buffer.length,
-    path: filePath,
-    url: relativePath,
-  });
+  // Optional ext hint for clients that append types (not required for serve)
+  const ext = extensionForMime(resolvedMime, defaultExt);
 
   return {
-    url: relativePath,
+    url: result.url,
     absoluteUrl,
-    uploadId: upload._id,
+    uploadId: result.id,
+    mediaId: result.id,
+    mimeType: result.mimeType,
+    size: result.size,
+    ext,
   };
 }
 
@@ -91,6 +84,10 @@ async function saveUpload(req, res, { prefix, defaultMime, defaultExt }) {
     res.json(json);
   } catch (err) {
     console.error('upload error:', err);
+    const msg = err?.message || 'Failed to upload file';
+    if (/too large/i.test(msg)) {
+      return res.status(413).json({ error: msg });
+    }
     res.status(500).json({ error: 'Failed to upload file' });
   }
 }
@@ -164,7 +161,25 @@ router.get('/verify/:uploadId', auth, async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.uploadId);
     if (!upload) {
-      return res.status(404).json({ error: 'File not found' });
+      // Also accept MediaAsset id
+      const MediaAsset = require('../models/MediaAsset');
+      const media = await MediaAsset.findById(req.params.uploadId);
+      if (!media) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      if (String(media.userId) !== String(req.userId)) {
+        return res.status(403).json({
+          error: 'Access denied. This file is not yours.',
+          code: 'OWNERSHIP_MISMATCH',
+        });
+      }
+      return res.json({
+        id: media._id,
+        fileName: media.fileName,
+        url: `/api/media/${media._id}`,
+        uploadedAt: media.createdAt,
+        isOwnedByUser: true,
+      });
     }
     if (upload.userId.toString() !== req.userId.toString()) {
       return res.status(403).json({

@@ -517,6 +517,13 @@ export async function presentIncomingCallLocalNotification(opts: {
   callerId: string;
   callerPhoto?: string;
 }): Promise<void> {
+  // Clear any FCM lock-screen stub for this call before Answer/Decline tray
+  try {
+    await dismissCallNotifications(opts.callId);
+  } catch {
+    /* ignore */
+  }
+
   // Prefer Notifee on Android (circular avatar + CALL category)
   if (Platform.OS === 'android') {
     try {

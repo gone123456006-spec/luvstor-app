@@ -133,7 +133,7 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true,
+            "usesCleartextTraffic": false,
             "extraMavenRepos": [
               "../../node_modules/@notifee/react-native/android/libs"
             ]

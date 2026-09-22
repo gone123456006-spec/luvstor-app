@@ -54,8 +54,9 @@ function isEnabled() {
  * - call invites: short (60s) — stale rings are useless
  * - chat + everything else: long (24h) — must survive offline / Doze
  *
- * Incoming calls use Android data-only (high priority) so the client can
- * present a local tray with Answer / Decline. iOS keeps an APNs alert + category.
+ * Incoming calls use Android high-priority FCM with a notification block so
+ * lock-screen / killed phones always show a tray; `data` lets the client
+ * upgrade to Answer / Decline via Notifee. iOS keeps an APNs alert + category.
  */
 function buildMessage({
   tokens,
@@ -84,7 +85,7 @@ function buildMessage({
     typeof ttlMs === 'number'
       ? ttlMs
       : type === 'call'
-        ? 60 * 1000
+        ? 90 * 1000
         : 24 * 60 * 60 * 1000;
 
   const callAction = String(stringData.action || '').toLowerCase();
@@ -181,14 +182,38 @@ function buildMessage({
     };
   }
 
-  // Incoming calls (Android): data-only so the client presents Answer / Decline.
-  // Do NOT set top-level `notification` — FCM would show a tray without actions.
-  // iOS still gets an APNs alert via `apns` above.
+  // Incoming calls:
+  // - Always include Android `notification` so lock-screen / killed / Doze
+  //   phones show a tray even when JS can't wake (data-only alone is silent
+  //   on many OEMs without a live background task).
+  // - Keep full `data` so Notifee / TaskManager can upgrade to Answer/Decline
+  //   and cancel this generic tray by the same `tag` / callId.
+  // - iOS uses APNs alert + category above.
   if (isCallIncoming) {
+    const callTitle = title || stringData.title || 'Incoming call';
+    const callBody = body || stringData.body || '';
     return {
       ...base,
+      notification: {
+        title: callTitle,
+        body: callBody,
+        ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
+      },
       android: {
         ...base.android,
+        notification: {
+          channelId: channelId || 'calls',
+          sound: sound === 'default' || !sound ? 'default' : sound,
+          priority: 'max',
+          defaultVibrateTimings: true,
+          visibility: 'PUBLIC',
+          ...(groupKey || collapseKey
+            ? { tag: String(groupKey || collapseKey).slice(0, 64) }
+            : {}),
+          ...(resolvedImage ? { imageUrl: resolvedImage } : {}),
+          icon: 'notification_icon',
+          color: '#5A2FC7',
+        },
       },
       apns: base.apns,
     };

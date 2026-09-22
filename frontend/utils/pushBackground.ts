@@ -137,6 +137,10 @@ async function presentCallFromPushData(data: Record<string, any>): Promise<void>
   const photo = String(data.actorPhoto || data.callerPhoto || '').trim();
   const callerId = String(data.userId || data.actorId || '');
 
+  // Drop the generic FCM lock-screen tray before upgrading to Answer/Decline
+  // (same callId / groupKey tag) so the shade isn't doubled.
+  await dismissCallTray(callId);
+
   // Prefer Notifee on Android (circular avatar + CALL category)
   if (Platform.OS === 'android') {
     try {

@@ -9,9 +9,20 @@ import {
   clearLegacyGlobalStorage,
   migrateAllGlobalsForAccount,
 } from './accountStorage';
+import { durableMediaPathFromUrl } from './media';
 import { normalizeEmail } from './normalizeEmail';
 
 export { normalizeEmail };
+
+/** Keep only durable server media refs (Mongo `/api/media/...`, legacy `/uploads/...`, or https). */
+function coerceDurableMedia(raw?: string | null): string | null {
+  const p = String(raw || '').trim();
+  if (!p || p.startsWith('file://') || p.startsWith('content://')) return null;
+  const durable = durableMediaPathFromUrl(p);
+  if (durable) return durable;
+  if (/^https?:\/\//i.test(p)) return p;
+  return null;
+}
 
 export type StoredProfile = {
   photo?: string | null;
@@ -158,7 +169,17 @@ export async function saveLocalProfile(
   profile: StoredProfile
 ): Promise<void> {
   const key = profileStorageKey(email);
-  await AsyncStorage.setItem(key, JSON.stringify(profile));
+  // Never persist device URIs or host-bound absolutes — they break after
+  // logout / uninstall / device transfer.
+  const safe: StoredProfile = {
+    ...profile,
+    photo: coerceDurableMedia(profile.photo),
+    coverPhoto: coerceDurableMedia(profile.coverPhoto),
+    photos: Array.isArray(profile.photos)
+      ? profile.photos.map((p) => coerceDurableMedia(p) || '').filter(Boolean)
+      : [],
+  };
+  await AsyncStorage.setItem(key, JSON.stringify(safe));
   await AsyncStorage.removeItem(LEGACY_PROFILE_KEY);
 }
 
@@ -172,41 +193,11 @@ export function userToLocalProfile(user: Record<string, unknown>): StoredProfile
     bio: (user.bio as string) || '',
     interests: (user.interests as string[]) || [],
     relationshipGoal: (user.relationshipGoal as string) || '',
-    photo: (() => {
-      const p = String((user.photo as string) || '').trim();
-      if (!p || p.startsWith('file://') || p.startsWith('content://')) return null;
-      try {
-        const u = new URL(p);
-        if (u.pathname.startsWith('/uploads/')) return u.pathname;
-      } catch {
-        /* relative */
-      }
-      return p.startsWith('/uploads/') || /^https?:\/\//i.test(p) ? p : null;
-    })(),
-    coverPhoto: (() => {
-      const p = String((user.coverPhoto as string) || '').trim();
-      if (!p || p.startsWith('file://') || p.startsWith('content://')) return null;
-      try {
-        const u = new URL(p);
-        if (u.pathname.startsWith('/uploads/')) return u.pathname;
-      } catch {
-        /* relative */
-      }
-      return p.startsWith('/uploads/') || /^https?:\/\//i.test(p) ? p : null;
-    })(),
+    photo: coerceDurableMedia(user.photo as string),
+    coverPhoto: coerceDurableMedia(user.coverPhoto as string),
     photos: Array.isArray(user.photos)
       ? (user.photos as string[])
-          .map((raw) => {
-            const p = String(raw || '').trim();
-            if (!p || p.startsWith('file://') || p.startsWith('content://')) return '';
-            try {
-              const u = new URL(p);
-              if (u.pathname.startsWith('/uploads/')) return u.pathname;
-            } catch {
-              /* relative */
-            }
-            return p.startsWith('/uploads/') || /^https?:\/\//i.test(p) ? p : '';
-          })
+          .map((p) => coerceDurableMedia(p) || '')
           .filter(Boolean)
       : [],
     height: user.height != null ? String(user.height) : '',
@@ -234,36 +225,14 @@ export async function syncProfileToServer(
     photoUrl.startsWith('ph://') ||
     photoUrl.startsWith('assets-library://');
   const isAlreadyOnServer =
-    photoUrl.startsWith('/uploads/') || /^https?:\/\//i.test(photoUrl);
+    !!durableMediaPathFromUrl(photoUrl) || /^https?:\/\//i.test(photoUrl);
 
   // Upload local device photos only — never try to read `/uploads/...` as a file
   if (isDeviceUri) {
     try {
-      const FileSystem = await import('expo-file-system/legacy');
-      const base64 = await FileSystem.readAsStringAsync(photoUrl, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const ext = photoUrl.split('.').pop()?.toLowerCase()?.split('?')[0] || 'jpg';
-      const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
-      const dataUri = `data:${mimeType};base64,${base64}`;
-      const { getApiBase, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS } = await import(
-        './api'
-      );
-      const res = await fetchWithTimeout(
-        `${getApiBase()}/api/upload/image`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ base64: dataUri }),
-        },
-        UPLOAD_FETCH_TIMEOUT_MS,
-      );
-      const json = await res.json();
-      if (json.url && String(json.url).startsWith('/uploads/')) {
-        photoUrl = json.url;
-      } else {
-        throw new Error(json.error || 'Upload returned no persistent URL');
-      }
+      const { uploadImageDurable } = await import('./uploadMedia');
+      const durable = await uploadImageDurable(photoUrl, token);
+      photoUrl = durable || '';
     } catch (e) {
       console.warn('Could not upload profile photo — not saving device URI to server', e);
       photoUrl = '';
@@ -272,15 +241,9 @@ export async function syncProfileToServer(
     // Garbage / relative non-uploads — omit
     photoUrl = '';
   } else if (/^https?:\/\//i.test(photoUrl)) {
-    // Prefer relative path when it's our /uploads host
-    try {
-      const parsed = new URL(photoUrl);
-      if (parsed.pathname.startsWith('/uploads/')) {
-        photoUrl = parsed.pathname;
-      }
-    } catch {
-      /* keep */
-    }
+    // Prefer relative path when it's our media host
+    const durable = durableMediaPathFromUrl(photoUrl);
+    if (durable) photoUrl = durable;
   }
 
   const body: Record<string, unknown> = {
@@ -292,8 +255,8 @@ export async function syncProfileToServer(
     relationshipGoal: profile.relationshipGoal || '',
   };
   // Only send photo when we have a durable server URL — never file://, never wipe on failed upload
-  if (photoUrl.startsWith('/uploads/') || /^https?:\/\//i.test(photoUrl)) {
-    body.photo = photoUrl;
+  if (durableMediaPathFromUrl(photoUrl) || /^https?:\/\//i.test(photoUrl)) {
+    body.photo = durableMediaPathFromUrl(photoUrl) || photoUrl;
   }
   if (profile.age) body.age = parseInt(String(profile.age), 10);
   if (profile.height) body.height = parseInt(String(profile.height), 10);
@@ -419,6 +382,13 @@ export async function logout(): Promise<void> {
   try {
     const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
     if (token) {
+      // Unregister FCM while the JWT is still valid (server logout also clears device tokens)
+      try {
+        const { unregisterToken } = await import('./push');
+        await unregisterToken(token);
+      } catch {
+        /* best-effort */
+      }
       try {
         await apiLogout(token);
       } catch (err) {
@@ -431,8 +401,16 @@ export async function logout(): Promise<void> {
       clearChatListCache();
       const { clearPeerProfileMemory } = await import('./peerProfile');
       clearPeerProfileMemory();
+      const { clearProfileCache } = await import('./profileCache');
+      clearProfileCache();
     } catch {
       /* ignore */
+    }
+    try {
+      const { signOutGoogle } = await import('../hooks/useGoogleAuth');
+      await signOutGoogle();
+    } catch {
+      /* Google module may be absent in this binary */
     }
     await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, AUTH_USER_KEY, ACTIVE_ACCOUNT_EMAIL_KEY]);
     await clearLegacyGlobalStorage();

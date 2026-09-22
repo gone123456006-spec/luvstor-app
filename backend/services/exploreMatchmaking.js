@@ -129,15 +129,15 @@ async function pickMatch(callType) {
   return null;
 }
 
-/** Anonymous card only — gender kept for avatar tint, nothing identifiable */
+/** Explore card — DP + public ID only (never real name). */
 function explorePeerCard(snapshot) {
   return {
-    id: 'explore',
-    name: 'Anonymous',
-    photo: '',
+    id: String(snapshot?.id || 'explore'),
+    name: '',
+    photo: snapshot?.photo || '',
     gender: snapshot?.gender || '',
-    publicId: '',
-    photoVerified: false,
+    publicId: snapshot?.publicId || '',
+    photoVerified: !!snapshot?.photoVerified,
   };
 }
 

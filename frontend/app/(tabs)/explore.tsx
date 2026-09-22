@@ -201,9 +201,11 @@ export default function ExploreScreen() {
             prefsLabel={prefsSummary(prefs)}
           />
           <LiveCallState
-            name="Anonymous"
-            publicId=""
-            photo=""
+            name=""
+            publicId={
+              matchedPeer?.publicId || call.peer?.publicId || ''
+            }
+            photo={matchedPeer?.photo || call.peer?.photo || ''}
             gender={matchedPeer?.gender || call.peer?.gender}
           />
           <ExplorePrefsSheet
@@ -862,7 +864,8 @@ function MatchedState({
   };
   mode: "video" | "voice";
 }) {
-  const name = "Anonymous";
+  const id = String(peer.publicId || '').trim().toUpperCase();
+  const photo = peer.photo || '';
   const pop = useRef(new Animated.Value(0.82)).current;
   const glow = useRef(new Animated.Value(0.4)).current;
 
@@ -922,17 +925,19 @@ function MatchedState({
           >
             <View style={styles.matchAvatarInner}>
               <WhatsAppAvatar
-                name={name}
-                publicId=""
-                photo=""
+                name={id || 'Anonymous'}
+                publicId={id}
+                photo={photo}
                 gender={peer.gender}
                 size={118}
               />
             </View>
           </LinearGradient>
         </Animated.View>
-        <Text style={styles.matchName}>{name}</Text>
-        <Text style={styles.matchAnonHint}>Identity hidden</Text>
+        <Text style={styles.matchName}>{id || 'Anonymous'}</Text>
+        <Text style={styles.matchAnonHint}>
+          {id ? 'Name hidden · ID only' : 'Identity hidden'}
+        </Text>
         <View style={styles.connectingRow}>
           <ActivityIndicator size="small" color={T.primary} />
           <Text style={styles.connectingText}>
@@ -956,7 +961,9 @@ function LiveCallState({
   gender?: string;
 }) {
   const uri = resolveMediaUrl(photo) || photo || "";
-  const display = getDisplayName(name, publicId) || "Anonymous";
+  const id = String(publicId || "").trim().toUpperCase();
+  // Explore anonymity: DP + public ID only (ignore real name)
+  const display = id || getDisplayName(name, publicId) || "Anonymous";
 
   return (
     <TabPadded style={styles.stateScreen}>
@@ -973,7 +980,7 @@ function LiveCallState({
             <View style={styles.matchAvatarInner}>
               <WhatsAppAvatar
                 name={display}
-                publicId={publicId}
+                publicId={id}
                 photo={uri}
                 gender={gender}
                 size={118}
@@ -982,7 +989,9 @@ function LiveCallState({
           </LinearGradient>
         </View>
         <Text style={styles.matchName}>{display}</Text>
-        <Text style={styles.stateSub}>Controls are on the call screen</Text>
+        <Text style={styles.stateSub}>
+          {id ? "Name hidden · ID only" : "Controls are on the call screen"}
+        </Text>
       </View>
     </TabPadded>
   );

@@ -78,7 +78,8 @@ async function ensureCallChannel(
     id: NOTIFEE_CALL_CHANNEL,
     name: 'Incoming calls',
     description: 'Incoming voice and video calls',
-    importance: AndroidImportance.HIGH,
+    // MAX heads-up on lock screen / Doze (falls back if enum missing)
+    importance: (AndroidImportance as any).MAX ?? AndroidImportance.HIGH,
     visibility: AndroidVisibility.PUBLIC,
     vibration: true,
     sound: 'default',

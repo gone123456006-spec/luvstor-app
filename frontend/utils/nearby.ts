@@ -2,7 +2,6 @@ import * as Location from 'expo-location';
 import { apiRequest } from './api';
 import { resolveShowMe } from './showMe';
 import { isLiveSubscriptionBadge } from './subscriptions';
-import { resolveMediaUrl } from './media';
 
 /**
  * Profiles per discovery batch. The backend runs its 7-day fresh rotation over
@@ -47,11 +46,6 @@ export interface NearbyUser {
   photoVerified?: boolean;
   matchScore?: number;
   matchReasons?: string[];
-}
-
-function resolvePhotoUrl(photo: string): string {
-  if (!photo) return '';
-  return resolveMediaUrl(photo) || photo;
 }
 
 /** Nearby list shows 1–100 km only (in-radius profiles). */
@@ -120,10 +114,10 @@ export function mapNearbyUser(u: any): NearbyUser {
     name: u.name || 'Unknown',
     age: u.age || 0,
     bio: u.bio || '',
-    photo: resolvePhotoUrl(u.photo || ''),
-    coverPhoto: resolvePhotoUrl(u.coverPhoto || ''),
+    photo: u.photo || '',
+    coverPhoto: u.coverPhoto || '',
     photos: Array.isArray(u.photos)
-      ? u.photos.map((p: string) => resolvePhotoUrl(p)).filter(Boolean)
+      ? u.photos.map((p: string) => String(p || '').trim()).filter(Boolean)
       : [],
     gender: u.gender || '',
     interests: u.interests || [],

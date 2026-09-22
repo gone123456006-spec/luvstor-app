@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -44,7 +43,7 @@ import {
     getLocalProfile,
     saveLocalProfile,
 } from "../../utils/auth";
-import { resolveMediaUrl } from "../../utils/media";
+import { durableMediaPathFromUrl, resolveMediaUrl } from "../../utils/media";
 import {
     getCachedProfile,
     preloadProfile,
@@ -240,7 +239,7 @@ export default function ProfileScreen() {
     return resolveMediaUrl(url) || url;
   };
 
-  /** Server stores relative paths (/uploads/...) so they survive IP changes. */
+  /** Server stores relative `/api/media/{id}` (or legacy `/uploads/...`). */
   const toRelative = (url?: string | null) => {
     if (!url) return "";
     const clean = String(url).trim().split("?")[0];
@@ -251,36 +250,18 @@ export default function ProfileScreen() {
     ) {
       return "";
     }
-    if (clean.startsWith("/uploads/")) return clean;
-    try {
-      const parsed = new URL(clean);
-      if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
-    } catch {
-      /* relative path */
-    }
-    const base = getApiBase();
-    if (clean.startsWith(base)) {
-      const sliced = clean.slice(base.length);
-      return sliced.startsWith("/uploads/") ? sliced : sliced;
-    }
-    return clean.startsWith("/uploads/") ? clean : "";
+    return durableMediaPathFromUrl(clean) || "";
   };
 
-  /** Upload a local image, returns the server-relative url. */
+  /** Upload a local image, returns the server-relative `/api/media/{id}` url. */
   const uploadImage = async (uri: string): Promise<string | null> => {
     const token = await getAuthToken();
     if (!token) {
       Alert.alert("Error", "Please log in to upload photo");
       return null;
     }
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    const result = await apiRequest("/api/upload/image", token, {
-      method: "POST",
-      body: JSON.stringify({ base64: `data:image/jpeg;base64,${base64}` }),
-    });
-    return (result as any)?.url || null;
+    const { uploadImageDurable } = await import("../../utils/uploadMedia");
+    return uploadImageDurable(uri, token);
   };
 
   // ── Photo Upload Functions ──
@@ -751,7 +732,7 @@ export default function ProfileScreen() {
     if (!token) throw new Error("Not logged in");
     const relative = next
       .map(toRelative)
-      .filter((u) => u.startsWith("/uploads/"));
+      .filter(Boolean);
 
     // Don't wipe server photos if we only have local previews still uploading
     if (!relative.length && next.some((u) => String(u).startsWith("file:"))) {
@@ -767,11 +748,11 @@ export default function ProfileScreen() {
     const savedRelative = Array.isArray(res?.photos)
       ? (res.photos as string[])
           .map(toRelative)
-          .filter((u) => u.startsWith("/uploads/"))
+          .filter(Boolean)
       : Array.isArray(res?.profile?.photos)
         ? (res.profile.photos as string[])
             .map(toRelative)
-            .filter((u) => u.startsWith("/uploads/"))
+            .filter(Boolean)
         : relative;
 
     const savedDisplay = savedRelative.map((u) => toAbsolute(u) || u);
@@ -896,7 +877,7 @@ export default function ProfileScreen() {
             gallery: next,
             profile: {
               ...(prevSnap?.profile || {}),
-              photos: next.map(toRelative).filter((u) => u.startsWith("/uploads/")),
+              photos: next.map(toRelative).filter(Boolean),
             } as any,
           });
           try {
@@ -909,7 +890,7 @@ export default function ProfileScreen() {
                 ...(getCachedProfile()?.profile || {}),
                 photos: previous
                   .map(toRelative)
-                  .filter((u) => u.startsWith("/uploads/")),
+                  .filter(Boolean),
               } as any,
             });
             Alert.alert("Error", "Could not remove photo");

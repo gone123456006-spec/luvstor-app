@@ -178,13 +178,15 @@ function isBlankName(name?: string | null) {
 }
 
 function formatExplorePeer(p: any): CallPeerInfo {
-  // Explore is anonymous — never surface real name / photo / publicId in the call UI
+  // Explore: show DP + public ID only — never the real display name
+  const photo = resolveMediaUrl(p?.photo) || p?.photo || '';
+  const publicId = String(p?.publicId || '').trim();
   return {
-    id: 'explore',
-    name: 'Anonymous',
-    photo: '',
+    id: String(p?.id || 'explore'),
+    name: '',
+    photo,
     gender: p?.gender || '',
-    publicId: '',
+    publicId,
   };
 }
 
@@ -1043,9 +1045,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       if (!explore) {
         Vibration.vibrate([0, 500, 400, 500], true);
         void startIncomingRingtone();
-        // Background / locked: shade with Answer / Decline
-        // (FCM skipped when a socket is live — see backend call:invite).
-        // Foreground uses CallOverlay instead of a duplicate tray.
+        // Background / locked: shade with Answer / Decline.
+        // FCM also fires (even with a live socket) so Doze / zombie sockets
+        // still wake the device — client dedupes by callId.
         if (AppState.currentState !== 'active') {
           void presentIncomingCallLocalNotification({
             callId: String(payload.callId),

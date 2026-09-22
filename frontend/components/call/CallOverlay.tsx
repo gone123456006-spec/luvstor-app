@@ -33,8 +33,6 @@ import WhatsAppAvatar, {
 
 const PIP_W = 112;
 const PIP_H = 168;
-/** Matches control pill rounding so PiP sits cleanly in the UI */
-const PIP_RADIUS = 18;
 const CONTROL_PANEL_H = 76;
 
 type PipBounds = {
@@ -161,7 +159,6 @@ function DraggablePip({
           animStyle,
         ]}
       >
-        {/* Nested clip: RTCView ignores parent radius when zOrder/SurfaceView is used */}
         <View style={styles.pipClip} collapsable={false} pointerEvents="none">
           {children}
         </View>
@@ -556,12 +553,11 @@ export default function CallOverlay() {
 
   if (!visible) return null;
 
+  const exploreId = String(call.peer?.publicId || '').trim().toUpperCase();
   const name = isExplore
-    ? 'Anonymous'
+    ? exploreId || 'Anonymous'
     : getDisplayName(call.peer?.name, call.peer?.publicId);
-  const photoRaw = isExplore
-    ? ''
-    : resolveMediaUrl(call.peer?.photo) || call.peer?.photo || '';
+  const photoRaw = resolveMediaUrl(call.peer?.photo) || call.peer?.photo || '';
   const photo = hasProfilePhoto(photoRaw) ? photoRaw : '';
   const duration =
     call.phase === 'connected' && call.connectedAt
@@ -710,14 +706,18 @@ export default function CallOverlay() {
           >
             <WhatsAppAvatar
               name={name}
-              publicId={isExplore ? '' : call.peer?.publicId}
+              publicId={call.peer?.publicId}
               photo={photo}
               gender={call.peer?.gender}
               size={36}
             />
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={styles.miniName} numberOfLines={1}>
-                {isExplore ? 'Explore · Anonymous' : name}
+                {isExplore
+                  ? exploreId
+                    ? `Explore · ${exploreId}`
+                    : 'Explore · Anonymous'
+                  : name}
               </Text>
               <Text style={styles.miniSub}>
                 {call.phase === 'connected' ? duration || 'On call' : subtitle}
@@ -1021,7 +1021,7 @@ export default function CallOverlay() {
   const peerAvatar = (
     <CenterPeerAvatar
       name={name}
-      publicId={isExplore ? '' : call.peer?.publicId}
+      publicId={call.peer?.publicId}
       photo={photo}
       gender={call.peer?.gender}
       pulse={pulse}
@@ -1092,7 +1092,7 @@ export default function CallOverlay() {
             style={styles.pipVideo}
             objectFit="cover"
             mirror={call.localMirrored !== false}
-            // No zOrder — SurfaceView ignores parent borderRadius/overflow on Android
+            // No zOrder — TextureView-friendly; square PiP (no rounded clip)
           />
         </DraggablePip>
       ) : localPipCamOff ? (
@@ -1187,10 +1187,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     top: 0,
-    borderRadius: PIP_RADIUS,
     overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.35)',
+    borderWidth: 0,
+    borderRadius: 0,
     zIndex: 40,
     elevation: 40,
     backgroundColor: '#111',
@@ -1208,14 +1207,14 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     height: '100%',
-    borderRadius: PIP_RADIUS,
+    borderRadius: 0,
     overflow: 'hidden',
     backgroundColor: '#111',
   },
   pipVideo: {
     width: '100%',
     height: '100%',
-    borderRadius: PIP_RADIUS,
+    borderRadius: 0,
     overflow: 'hidden',
     backgroundColor: '#111',
   },
@@ -1223,7 +1222,7 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     height: '100%',
-    borderRadius: PIP_RADIUS,
+    borderRadius: 0,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',

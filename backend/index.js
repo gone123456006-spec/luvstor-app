@@ -120,6 +120,9 @@ app.use((req, res, next) => {
 });
 
 const { ensureUploadsDir } = require('./utils/uploadsPath');
+const {
+  isUploadsAuthoritative,
+} = require('./utils/uploadExists');
 const UPLOADS_DIR = ensureUploadsDir();
 app.use(
   '/uploads',
@@ -135,12 +138,29 @@ app.use(
   })
 );
 console.log(`📁 Serving uploads from ${UPLOADS_DIR}`);
+if (process.env.RENDER && !isUploadsAuthoritative()) {
+  console.error(
+    '❌ RENDER without authoritative uploads disk — DPs/covers/posts will vanish on redeploy. Set UPLOADS_DIR=/var/data/uploads and attach a persistent disk.',
+  );
+} else if (process.env.RENDER && !String(process.env.UPLOADS_DIR || '').startsWith('/var/data')) {
+  console.warn(
+    '⚠️  RENDER UPLOADS_DIR is not /var/data/uploads — confirm the persistent disk mount matches UPLOADS_DIR.',
+  );
+} else if (
+  !process.env.RENDER &&
+  /mongodb\.net|mongodb\+srv/i.test(String(process.env.MONGODB_URI || ''))
+) {
+  console.log(
+    '📦 Local API + Atlas: new uploads go into MongoDB (/api/media/…) and are visible on production too.',
+  );
+}
 
 // ── Routes ─────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/media', require('./routes/media'));
 app.use('/api/tokens', tokenRoutes);
 app.use('/api/friends', friendsRoutes);
 app.use('/api/payment', paymentRoutes);
