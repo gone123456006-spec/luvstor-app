@@ -1,9 +1,9 @@
 /**
  * Effective online status for API responses.
  *
- * Online means the person has the app open in the foreground (presence ping /
- * Redis alive). Mongo `User.isOnline` alone is never enough — it sticks after
- * crashes and after login without an active session.
+ * Online means the client recently heartbeated successfully (Redis alive /
+ * network path to server). Mongo `User.isOnline` alone is never enough — it
+ * sticks after crashes and after login without an active session.
  */
 const presence = require('./presence');
 

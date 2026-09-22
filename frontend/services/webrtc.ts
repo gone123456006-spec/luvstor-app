@@ -6,8 +6,6 @@
 
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import {
-  Alert,
-  Linking,
   NativeModules,
   PermissionsAndroid,
   Platform,
@@ -136,29 +134,17 @@ export function getWebRTCUnavailableMessage(): string {
 
 export class CallPermissionError extends Error {
   kind: 'microphone' | 'camera';
-  /** True when the OS won't show the system dialog again — open Settings. */
   needsSettings: boolean;
   constructor(kind: 'microphone' | 'camera', needsSettings = false) {
     super(
       kind === 'microphone'
-        ? 'Microphone permission is required for calls. Enable it in Settings to continue.'
-        : 'Camera permission is required for video calls. Enable it in Settings to continue.',
+        ? 'Microphone unavailable'
+        : 'Camera unavailable',
     );
     this.name = 'CallPermissionError';
     this.kind = kind;
     this.needsSettings = needsSettings;
   }
-}
-
-function androidGranted(result: string | undefined | null): boolean {
-  return result === PermissionsAndroid.RESULTS.GRANTED;
-}
-
-function androidBlocked(result: string | undefined | null): boolean {
-  return (
-    result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
-    result === 'never_ask_again'
-  );
 }
 
 function expoPermGranted(result: any): boolean {
@@ -170,115 +156,66 @@ function expoPermGranted(result: any): boolean {
 }
 
 /**
- * WhatsApp-style: request mic (and camera for video) only when a call starts
- * or is accepted. Skip if already granted. Never call this on login / app open.
+ * Best-effort mic/camera unlock before WebRTC. Never throws and never shows
+ * a custom Settings alert — the OS / getUserMedia owns the real prompt.
  */
 export async function ensureCallPermissions(
   callType: CallMediaType,
 ): Promise<void> {
   if (Platform.OS === 'web') return;
 
-  const getMic =
-    expoAudioPerms?.getRecordingPermissionsAsync ||
-    expoAudioPerms?.AudioModule?.getRecordingPermissionsAsync;
-  const reqMic =
-    expoAudioPerms?.requestRecordingPermissionsAsync ||
-    expoAudioPerms?.AudioModule?.requestRecordingPermissionsAsync;
+  try {
+    if (Platform.OS === 'ios') {
+      const getMic =
+        expoAudioPerms?.getRecordingPermissionsAsync ||
+        expoAudioPerms?.AudioModule?.getRecordingPermissionsAsync;
+      const reqMic =
+        expoAudioPerms?.requestRecordingPermissionsAsync ||
+        expoAudioPerms?.AudioModule?.requestRecordingPermissionsAsync;
+      let micOk = false;
+      if (typeof getMic === 'function') {
+        try {
+          micOk = expoPermGranted(await getMic());
+        } catch {
+          micOk = false;
+        }
+      }
+      if (!micOk && typeof reqMic === 'function') {
+        try {
+          await reqMic();
+        } catch {
+          /* getUserMedia will surface failure */
+        }
+      }
+      return;
+    }
 
-  // Prefer expo-audio on both platforms when available (matches voice-note path)
-  if (typeof getMic === 'function' || typeof reqMic === 'function') {
-    let micOk = false;
-    if (typeof getMic === 'function') {
+    const mic = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
+    const cam = PermissionsAndroid.PERMISSIONS.CAMERA;
+    try {
+      if (!(await PermissionsAndroid.check(mic))) {
+        await PermissionsAndroid.request(mic);
+      }
+    } catch {
+      /* ignore */
+    }
+    if (callType === 'video') {
       try {
-        micOk = expoPermGranted(await getMic());
+        if (!(await PermissionsAndroid.check(cam))) {
+          await PermissionsAndroid.request(cam);
+        }
       } catch {
-        micOk = false;
+        /* ignore */
       }
     }
-    if (!micOk && typeof reqMic === 'function') {
-      try {
-        const result = await reqMic();
-        micOk = expoPermGranted(result);
-        if (!micOk) {
-          throw new CallPermissionError(
-            'microphone',
-            result?.canAskAgain === false,
-          );
-        }
-      } catch (err) {
-        if (err instanceof CallPermissionError) throw err;
-        // Fall through to PermissionsAndroid on Android
-        if (Platform.OS !== 'android') {
-          throw new CallPermissionError('microphone', true);
-        }
-      }
-    } else if (!micOk && Platform.OS === 'ios') {
-      // No expo permission helpers — getUserMedia will prompt / fail clearly
-    }
-  }
-
-  if (Platform.OS === 'ios') {
-    // Camera is prompted by getUserMedia when starting a video call
-    return;
-  }
-
-  // ── Android native dialogs (authoritative for WebRTC getUserMedia) ──
-  const mic = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
-  const cam = PermissionsAndroid.PERMISSIONS.CAMERA;
-
-  const micAlready = await PermissionsAndroid.check(mic);
-  if (!micAlready) {
-    const micResult = await PermissionsAndroid.request(mic, {
-      title: 'Microphone',
-      message:
-        callType === 'video'
-          ? 'Allow microphone access for video calls.'
-          : 'Allow microphone access for voice calls.',
-      buttonPositive: 'Allow',
-      buttonNegative: 'Deny',
-    });
-    if (!androidGranted(micResult)) {
-      throw new CallPermissionError('microphone', androidBlocked(micResult));
-    }
-  }
-
-  if (callType === 'video') {
-    const camAlready = await PermissionsAndroid.check(cam);
-    if (!camAlready) {
-      const camResult = await PermissionsAndroid.request(cam, {
-        title: 'Camera',
-        message: 'Allow camera access for video calls.',
-        buttonPositive: 'Allow',
-        buttonNegative: 'Deny',
-      });
-      if (!androidGranted(camResult)) {
-        throw new CallPermissionError('camera', androidBlocked(camResult));
-      }
-    }
+  } catch {
+    /* never block the call UI on permission helpers */
   }
 }
 
-/** Alert when the user denied mic/camera — always offers a path to Settings. */
-export function alertCallPermissionDenied(err: unknown): void {
-  const permErr = err instanceof CallPermissionError ? err : null;
-  const kind = permErr?.kind === 'camera' ? 'camera' : 'microphone';
-  const title =
-    kind === 'camera' ? 'Camera access needed' : 'Microphone access needed';
-  const message =
-    permErr?.message ||
-    (kind === 'camera'
-      ? 'Camera permission is required for video calls. Enable it in Settings to continue.'
-      : 'Microphone permission is required for calls. Enable it in Settings to continue.');
-
-  Alert.alert(title, message, [
-    { text: 'Cancel', style: 'cancel' },
-    {
-      text: 'Open Settings',
-      onPress: () => {
-        void Linking.openSettings();
-      },
-    },
-  ]);
+/** @deprecated Custom mic Settings alerts removed — OS handles prompting. */
+export function alertCallPermissionDenied(_err?: unknown): void {
+  /* no-op */
 }
 
 function getRTC() {
@@ -430,34 +367,51 @@ export class CallPeer {
       /* optional */
     }
 
-    const openMedia = async () => mediaDevices.getUserMedia(constraints);
+    const openMedia = async (videoEnabled: boolean) =>
+      mediaDevices.getUserMedia({
+        ...constraints,
+        video: videoEnabled ? constraints.video : false,
+      });
+
+    let wantVideo = this.callType === 'video';
     try {
-      this.localStream = await openMedia();
+      this.localStream = await openMedia(wantVideo);
     } catch (err: any) {
       const msg = String(err?.message || err?.name || '');
+      const denied =
+        /NotAllowed|Permission|denied|SecurityError/i.test(msg) ||
+        err?.name === 'NotAllowedError';
       const busy =
         /NotReadable|AbortError|Device in use|Could not start/i.test(msg) ||
         err?.name === 'NotReadableError' ||
         err?.name === 'AbortError';
-      if (busy) {
-        // One retry after a short release — common after voice notes / prior call
+
+      // Video call + camera denied → continue as audio-only (WhatsApp-like)
+      if (wantVideo && denied) {
+        try {
+          this.localStream = await openMedia(false);
+          wantVideo = false;
+          this.callType = 'voice';
+          console.warn('[WebRTC] camera denied — continuing audio-only');
+        } catch (audioErr: any) {
+          err = audioErr;
+        }
+      } else if (busy) {
         await new Promise((r) => setTimeout(r, 200));
         try {
-          this.localStream = await openMedia();
+          this.localStream = await openMedia(wantVideo);
         } catch (retryErr: any) {
           err = retryErr;
         }
       }
+
       if (!this.localStream) {
-        const denied =
+        const stillDenied =
           /NotAllowed|Permission|denied|SecurityError/i.test(
             String(err?.message || err?.name || ''),
           ) || err?.name === 'NotAllowedError';
-        if (denied) {
-          throw new CallPermissionError(
-            this.callType === 'video' ? 'camera' : 'microphone',
-            true,
-          );
+        if (stillDenied) {
+          throw new CallPermissionError('microphone', false);
         }
         throw err;
       }
@@ -483,9 +437,27 @@ export class CallPeer {
     };
 
     this.pc.ontrack = (ev: any) => {
-      if (ev.streams && ev.streams[0]) {
-        this.remoteStream = ev.streams[0];
-        this.handlers.onRemoteStream?.(this.remoteStream);
+      if (this.disposed) return;
+      try {
+        if (ev.streams && ev.streams[0]) {
+          this.remoteStream = ev.streams[0];
+        } else if (ev.track) {
+          const { MediaStream } = getRTC();
+          if (!this.remoteStream && MediaStream) {
+            this.remoteStream = new MediaStream();
+          }
+          if (this.remoteStream && typeof this.remoteStream.addTrack === 'function') {
+            const already = this.remoteStream
+              .getTracks?.()
+              ?.some((t: any) => t.id === ev.track.id);
+            if (!already) this.remoteStream.addTrack(ev.track);
+          }
+        }
+        if (this.remoteStream) {
+          this.handlers.onRemoteStream?.(this.remoteStream);
+        }
+      } catch (err) {
+        console.warn('[WebRTC] ontrack:', (err as Error).message);
       }
     };
 

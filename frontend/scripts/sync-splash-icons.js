@@ -125,7 +125,7 @@ async function main() {
     return;
   }
 
-  // Adaptive icons reference @color/iconBackground — must exist or AAPT fails
+  // Adaptive icons + FCM / expo-notifications reference these colors — AAPT fails if missing
   const colorsPath = path.join(resRoot, "values", "colors.xml");
   fs.mkdirSync(path.dirname(colorsPath), { recursive: true });
   fs.writeFileSync(
@@ -134,10 +134,11 @@ async function main() {
 <resources>
   <color name="splashscreen_background">${SPLASH_BG}</color>
   <color name="iconBackground">${PURPLE}</color>
+  <color name="notification_icon_color">${PURPLE}</color>
 </resources>
 `,
   );
-  console.log("✔ colors.xml (splash + iconBackground)");
+  console.log("✔ colors.xml (splash + iconBackground + notification_icon_color)");
 
   await writeSplash();
   await writeIcons();

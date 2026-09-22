@@ -79,7 +79,7 @@ export const CHANNELS = {
     lockscreenVisibility: 1,
   },
   calls: {
-    name: 'Calls',
+    name: 'Incoming calls',
     description: 'Incoming voice and video calls',
     importance: IMPORTANCE.MAX,
     vibrationPattern: [0, 500, 500, 500, 500, 500],
@@ -88,6 +88,16 @@ export const CHANNELS = {
     /** Heads-up + lock-screen even in quiet hours when OS allows */
     bypassDnd: false,
     enableLights: true,
+  },
+  ongoing_calls: {
+    name: 'Ongoing calls',
+    description: 'Active and outgoing voice and video calls',
+    importance: IMPORTANCE.DEFAULT,
+    vibrationPattern: [0],
+    lightColor: '#8E2DE2',
+    lockscreenVisibility: 1,
+    bypassDnd: false,
+    enableVibrate: false,
   },
   social: {
     name: 'Matches & Likes',
@@ -133,14 +143,19 @@ export const CHANNELS = {
 
 export type ChannelId = keyof typeof CHANNELS;
 
-/** WhatsApp-style Accept / Decline on the incoming-call notification */
+/** WhatsApp-style Answer / Decline on the incoming-call notification */
 export const INCOMING_CALL_CATEGORY = 'incoming_call';
 export const CALL_ACTION_ACCEPT = 'ACCEPT_CALL';
 export const CALL_ACTION_DECLINE = 'DECLINE_CALL';
 
-let callCategoryReady = false;
+/** Direct reply from the message shade (Android RemoteInput) */
+export const CHAT_REPLY_CATEGORY = 'chat_reply';
+export const CHAT_ACTION_REPLY = 'REPLY_MESSAGE';
 
-/** Register Accept / Decline actions (iOS + Android). Safe to call repeatedly. */
+let callCategoryReady = false;
+let chatReplyCategoryReady = false;
+
+/** Register Answer / Decline actions (iOS + Android). Safe to call repeatedly. */
 export async function ensureCallNotificationCategory(): Promise<void> {
   const Notifications = loadNotifications();
   if (!Notifications || callCategoryReady) return;
@@ -148,7 +163,7 @@ export async function ensureCallNotificationCategory(): Promise<void> {
     await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY, [
       {
         identifier: CALL_ACTION_ACCEPT,
-        buttonTitle: 'Accept',
+        buttonTitle: 'Answer',
         options: {
           opensAppToForeground: true,
           isAuthenticationRequired: false,
@@ -167,6 +182,31 @@ export async function ensureCallNotificationCategory(): Promise<void> {
     callCategoryReady = true;
   } catch (err: any) {
     console.warn('[Push] call category failed:', err?.message);
+  }
+}
+
+/** Register Reply action for message notifications. */
+export async function ensureChatReplyCategory(): Promise<void> {
+  const Notifications = loadNotifications();
+  if (!Notifications || chatReplyCategoryReady) return;
+  try {
+    await Notifications.setNotificationCategoryAsync(CHAT_REPLY_CATEGORY, [
+      {
+        identifier: CHAT_ACTION_REPLY,
+        buttonTitle: 'Reply',
+        textInput: {
+          submitButtonTitle: 'Send',
+          placeholder: 'Reply…',
+        },
+        options: {
+          opensAppToForeground: false,
+          isAuthenticationRequired: false,
+        },
+      },
+    ]);
+    chatReplyCategoryReady = true;
+  } catch (err: any) {
+    console.warn('[Push] chat reply category failed:', err?.message);
   }
 }
 
@@ -232,6 +272,7 @@ export function configureForegroundHandler(
 export async function ensureChannels() {
   if (Platform.OS !== 'android') {
     await ensureCallNotificationCategory();
+    await ensureChatReplyCategory();
     return;
   }
   const Notifications = loadNotifications();
@@ -265,6 +306,7 @@ export async function ensureChannels() {
     }),
   );
   await ensureCallNotificationCategory();
+  await ensureChatReplyCategory();
 }
 
 export type PermissionResult = {
@@ -466,21 +508,23 @@ export async function getLastNotificationResponseAsync() {
   }
 }
 
-/** Present a local tray notification for an incoming call (Accept / Decline). */
+/** Present a local tray notification for an incoming call (Answer / Decline). */
 export async function presentIncomingCallLocalNotification(opts: {
   callId: string;
   callerName: string;
   callType: 'voice' | 'video';
   callerId: string;
+  callerPhoto?: string;
 }): Promise<void> {
   const Notifications = loadNotifications();
   if (!Notifications) return;
   try {
     await ensureCallNotificationCategory();
     const kind = opts.callType === 'video' ? 'video call' : 'voice call';
+    const title = (opts.callerName || 'Incoming call').trim() || 'Incoming call';
     await Notifications.scheduleNotificationAsync({
       content: {
-        title: opts.callerName || 'Incoming call',
+        title,
         body: `Incoming ${kind}`,
         sound: true,
         categoryIdentifier: INCOMING_CALL_CATEGORY,
@@ -489,8 +533,15 @@ export async function presentIncomingCallLocalNotification(opts: {
           action: 'incoming',
           callId: opts.callId,
           userId: opts.callerId,
+          actorId: opts.callerId,
+          actorName: title,
+          actorPhoto: opts.callerPhoto || '',
           callType: opts.callType,
           categoryId: INCOMING_CALL_CATEGORY,
+          groupKey: `call:${opts.callId}`,
+          notificationId: `call:incoming:${opts.callId}`,
+          screen: 'call',
+          deepLink: `/messages/${opts.callerId}`,
         },
         ...(Platform.OS === 'android'
           ? {
@@ -501,7 +552,8 @@ export async function presentIncomingCallLocalNotification(opts: {
           : {}),
       },
       trigger: null,
-      identifier: `incoming-call:${opts.callId}`,
+      // Match FCM android.tag (`call:{callId}`) so tray collapses to one entry
+      identifier: `call:${opts.callId}`,
     });
   } catch (err: any) {
     console.warn('[Push] local incoming call notify failed:', err?.message);
@@ -536,11 +588,13 @@ export async function presentChatMessageNotification(opts: {
   const body = (opts.body || 'New message').trim() || 'New message';
 
   try {
+    await ensureChatReplyCategory();
     await Notifications.scheduleNotificationAsync({
       content: {
         title,
         body,
         sound: true,
+        categoryIdentifier: CHAT_REPLY_CATEGORY,
         data: {
           type: 'chat',
           notificationId: opts.messageId
@@ -582,11 +636,21 @@ export async function dismissCallNotifications(callId?: string | null): Promise<
   if (!callId) return;
   const Notifications = loadNotifications();
   if (!Notifications) return;
+  const id = String(callId);
   try {
+    await Notifications.dismissNotificationAsync(`call:${id}`).catch(() => undefined);
     const presented = await Notifications.getPresentedNotificationsAsync();
     await Promise.all(
       presented
-        .filter((n) => String((n.request.content.data as any)?.callId || '') === String(callId))
+        .filter((n) => {
+          const data = (n.request.content.data || {}) as Record<string, any>;
+          const key = String(data.callId || data.groupKey || n.request.identifier || '');
+          return (
+            key === id ||
+            key === `call:${id}` ||
+            String(data.groupKey || '') === `call:${id}`
+          );
+        })
         .map((n) => Notifications.dismissNotificationAsync(n.request.identifier)),
     );
   } catch {

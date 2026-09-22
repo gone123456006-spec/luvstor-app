@@ -98,3 +98,41 @@ export function parseLegacyChatTime(timeStr?: string): number {
   if (hourMatch) return Date.now() - parseInt(hourMatch[1], 10) * 3600000;
   return Date.now();
 }
+
+/**
+ * WhatsApp-style last-seen subtitle for chat headers.
+ * e.g. "last seen today at 3:45 PM", "last seen yesterday at 9:02 AM"
+ */
+export function formatLastSeen(timestamp?: string | number | Date | null): string {
+  if (timestamp == null || timestamp === '') return 'Offline';
+  const date = new Date(timestamp);
+  const t = date.getTime();
+  if (!Number.isFinite(t)) return 'Offline';
+
+  const now = new Date();
+  const time = date.toLocaleTimeString([], clockOptions);
+
+  if (date.toDateString() === now.toDateString()) {
+    return `last seen today at ${time}`;
+  }
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `last seen yesterday at ${time}`;
+  }
+
+  const daysAgo = Math.floor((now.getTime() - t) / (24 * 60 * 60 * 1000));
+  if (daysAgo < 7) {
+    const weekday = date.toLocaleDateString([], { weekday: 'long' });
+    return `last seen ${weekday} at ${time}`;
+  }
+
+  const day = date.toLocaleDateString([], {
+    day: 'numeric',
+    month: 'short',
+    year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  });
+  return `last seen ${day} at ${time}`;
+}
+

@@ -9,24 +9,61 @@ import {
   Dimensions,
   Easing,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Reanimated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCall } from '../../contexts/CallContext';
 import { useExplore } from '../../contexts/ExploreContext';
 import { getRTCView } from '../../services/webrtc';
 import { resolveMediaUrl } from '../../utils/media';
-import WhatsAppAvatar, { getDisplayName } from '../WhatsAppAvatar';
+import WhatsAppAvatar, {
+  getDisplayName,
+  hasProfilePhoto,
+} from '../WhatsAppAvatar';
 
 const PIP_W = 112;
 const PIP_H = 168;
+/** Matches control pill rounding so PiP sits cleanly in the UI */
+const PIP_RADIUS = 18;
+const CONTROL_PANEL_H = 76;
 
-/** WhatsApp-style free-drag PiP that snaps to the nearest corner on release */
+type PipBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
+function computePipBounds(
+  winW: number,
+  winH: number,
+  insetsTop: number,
+  insetsBottom: number,
+): PipBounds {
+  const margin = 12;
+  // Keep PiP fully above the capsule control bar (no corner clash)
+  const panelBottom = Math.max(insetsBottom, 16) + 28;
+  const bottomReserve = panelBottom + CONTROL_PANEL_H + 14;
+  const minX = margin;
+  const maxX = Math.max(minX, winW - PIP_W - margin);
+  const minY = insetsTop + 56;
+  const maxY = Math.max(minY, winH - PIP_H - bottomReserve);
+  return { minX, maxX, minY, maxY };
+}
+
+const PIP_SPRING = { damping: 22, stiffness: 260, mass: 0.7, overshootClamping: false };
+
+/** WhatsApp-style free-drag PiP — Reanimated for 60fps, snaps to nearest corner */
 function DraggablePip({
   children,
   insetsTop,
@@ -36,70 +73,100 @@ function DraggablePip({
   insetsTop: number;
   insetsBottom: number;
 }) {
-  const { width: winW, height: winH } = Dimensions.get('window');
-  const margin = 12;
-  const bottomReserve = Math.max(insetsBottom, 12) + 100;
-  const minX = margin;
-  const maxX = Math.max(minX, winW - PIP_W - margin);
-  const minY = insetsTop + 56;
-  const maxY = Math.max(minY, winH - PIP_H - bottomReserve);
+  const win = Dimensions.get('window');
+  const initial = computePipBounds(win.width, win.height, insetsTop, insetsBottom);
+  const startX = Math.max(initial.minX, initial.maxX); // default top-right
+  const startY = initial.minY;
 
-  const pan = useRef(
-    new Animated.ValueXY({ x: maxX, y: minY + 8 }),
-  ).current;
-  const startXY = useRef({ x: maxX, y: minY + 8 });
+  const translateX = useSharedValue(startX);
+  const translateY = useSharedValue(startY);
+  const dragOriginX = useSharedValue(startX);
+  const dragOriginY = useSharedValue(startY);
+  const boundsSV = useSharedValue(initial);
 
-  const responder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) =>
-        Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
-      onPanResponderGrant: () => {
-        pan.stopAnimation((v: { x: number; y: number }) => {
-          startXY.current = { x: v.x, y: v.y };
-        });
-      },
-      onPanResponderMove: (_, g) => {
-        const nx = Math.min(
-          maxX,
-          Math.max(minX, startXY.current.x + g.dx),
-        );
-        const ny = Math.min(
-          maxY,
-          Math.max(minY, startXY.current.y + g.dy),
-        );
-        pan.setValue({ x: nx, y: ny });
-      },
-      onPanResponderRelease: (_, g) => {
-        const curX = startXY.current.x + g.dx;
-        const curY = startXY.current.y + g.dy;
-        const snapX = curX + PIP_W / 2 < winW / 2 ? minX : maxX;
-        const snapY = Math.min(maxY, Math.max(minY, curY));
-        startXY.current = { x: snapX, y: snapY };
-        Animated.spring(pan, {
-          toValue: { x: snapX, y: snapY },
-          useNativeDriver: false,
-          friction: 8,
-          tension: 80,
-        }).start();
-      },
-    }),
-  ).current;
+  useEffect(() => {
+    const apply = ({ window: w }: { window: { width: number; height: number } }) => {
+      const next = computePipBounds(w.width, w.height, insetsTop, insetsBottom);
+      boundsSV.value = next;
+      const nx = Math.min(next.maxX, Math.max(next.minX, translateX.value));
+      const ny = Math.min(next.maxY, Math.max(next.minY, translateY.value));
+      translateX.value = nx;
+      translateY.value = ny;
+    };
+    apply({ window: Dimensions.get('window') });
+    const sub = Dimensions.addEventListener('change', apply);
+    return () => sub?.remove?.();
+  }, [insetsTop, insetsBottom, boundsSV, translateX, translateY]);
+
+  const gesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .minDistance(1)
+        .onBegin(() => {
+          'worklet';
+          dragOriginX.value = translateX.value;
+          dragOriginY.value = translateY.value;
+        })
+        .onUpdate((e) => {
+          'worklet';
+          const b = boundsSV.value;
+          translateX.value = Math.min(
+            b.maxX,
+            Math.max(b.minX, dragOriginX.value + e.translationX),
+          );
+          translateY.value = Math.min(
+            b.maxY,
+            Math.max(b.minY, dragOriginY.value + e.translationY),
+          );
+        })
+        .onEnd(() => {
+          'worklet';
+          const b = boundsSV.value;
+          const curX = translateX.value;
+          const curY = translateY.value;
+          const corners = [
+            { x: b.minX, y: b.minY },
+            { x: b.maxX, y: b.minY },
+            { x: b.minX, y: b.maxY },
+            { x: b.maxX, y: b.maxY },
+          ];
+          let best = corners[0];
+          let bestD = Number.POSITIVE_INFINITY;
+          for (const c of corners) {
+            const d = (c.x - curX) ** 2 + (c.y - curY) ** 2;
+            if (d < bestD) {
+              bestD = d;
+              best = c;
+            }
+          }
+          translateX.value = withSpring(best.x, PIP_SPRING);
+          translateY.value = withSpring(best.y, PIP_SPRING);
+        }),
+    [boundsSV, dragOriginX, dragOriginY, translateX, translateY],
+  );
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+    ],
+  }));
 
   return (
-    <Animated.View
-      {...responder.panHandlers}
-      style={[
-        styles.pip,
-        {
-          width: PIP_W,
-          height: PIP_H,
-          transform: pan.getTranslateTransform(),
-        },
-      ]}
-    >
-      {children}
-    </Animated.View>
+    <GestureDetector gesture={gesture}>
+      <Reanimated.View
+        style={[
+          styles.pip,
+          { width: PIP_W, height: PIP_H },
+          animStyle,
+        ]}
+      >
+        {/* Nested clip: RTCView ignores parent radius when zOrder/SurfaceView is used */}
+        <View style={styles.pipClip} collapsable={false} pointerEvents="none">
+          {children}
+        </View>
+      </Reanimated.View>
+    </GestureDetector>
   );
 }
 
@@ -132,7 +199,8 @@ const T = {
   controlOn: '#FFFFFF',
   controlOnInk: '#370372',
   end: '#E53935',
-  accept: '#FF4B6E',
+  /** WhatsApp-style accept — green (must not match end/decline red) */
+  accept: '#25D366',
   live: '#C4B5FD',
   avatarRing: 'rgba(255,255,255,0.28)',
 };
@@ -171,10 +239,16 @@ function statusLabel(
     case 'connected':
       return '';
     case 'ended':
-      if (opts?.error) return opts.error;
+      // Prefer short status — long error text is shown once via Alert / subtitle below
+      if (endReason === 'permission') return 'Permission needed';
+      if (
+        opts?.error &&
+        /permission is required|Enable it in Settings/i.test(opts.error)
+      ) {
+        return 'Permission needed';
+      }
       if (endReason === 'decline' || endReason === 'rejected') return 'Declined';
       if (endReason === 'cancel' || endReason === 'superseded') return 'Cancelled';
-      if (endReason === 'permission') return 'Permission needed';
       if (endReason === 'timeout' || endReason === 'missed') {
         return 'No answer';
       }
@@ -182,7 +256,10 @@ function statusLabel(
         return opts?.error || (endReason === 'busy' ? 'Busy on another call' : 'Call failed');
       }
       if (endReason === 'offline') return 'Missed call — they’re offline';
-      if (endReason === 'error' || endReason === 'media') return 'Call failed';
+      if (endReason === 'error' || endReason === 'media') {
+        return opts?.error || 'Call failed';
+      }
+      if (opts?.error) return opts.error;
       return 'Call ended';
     default:
       return '';
@@ -330,36 +407,28 @@ function CenterPeerAvatar({
   gender?: string | null;
   pulse: Animated.Value;
 }) {
+  // Always WhatsAppAvatar — real DP when set, gray default person when not / load fails
   return (
     <Animated.View
       style={[styles.avatarRing, { transform: [{ scale: pulse }] }]}
     >
-      {photo ? (
-        <Image
-          source={{ uri: photo }}
-          style={styles.avatarImg}
-          contentFit="cover"
-          transition={150}
-        />
-      ) : (
-        <WhatsAppAvatar
-          name={name}
-          publicId={publicId}
-          photo={null}
-          gender={gender}
-          size={AVATAR_SIZE}
-        />
-      )}
+      <WhatsAppAvatar
+        name={name}
+        publicId={publicId}
+        photo={hasProfilePhoto(photo) ? photo : null}
+        gender={gender}
+        size={AVATAR_SIZE}
+      />
     </Animated.View>
   );
 }
 
 function CallBackdrop({ photo }: { photo?: string | null }) {
-  if (photo) {
+  if (hasProfilePhoto(photo)) {
     return (
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <Image
-          source={{ uri: photo }}
+          source={{ uri: String(photo) }}
           style={styles.bgPhoto}
           contentFit="cover"
           blurRadius={Platform.OS === 'ios' ? 28 : 22}
@@ -490,9 +559,10 @@ export default function CallOverlay() {
   const name = isExplore
     ? 'Anonymous'
     : getDisplayName(call.peer?.name, call.peer?.publicId);
-  const photo = isExplore
+  const photoRaw = isExplore
     ? ''
     : resolveMediaUrl(call.peer?.photo) || call.peer?.photo || '';
+  const photo = hasProfilePhoto(photoRaw) ? photoRaw : '';
   const duration =
     call.phase === 'connected' && call.connectedAt
       ? formatDuration(Date.now() - call.connectedAt)
@@ -508,6 +578,12 @@ export default function CallOverlay() {
             callType: call.callType,
             error: call.error,
           });
+
+  // Avoid duplicating the same message in white status + red error (screenshot bug)
+  const showInlineError =
+    !!call.error &&
+    call.phase !== 'ended' &&
+    call.error.trim() !== String(subtitle || '').trim();
 
   const openPeerChat = () => {
     if (isExplore) return;
@@ -567,15 +643,31 @@ export default function CallOverlay() {
     !hasRemoteVideo &&
     call.phase !== 'connected' &&
     call.phase !== 'reconnecting';
-  /** After pickup (or remote video): local → draggable PiP */
-  const localPip =
-    hasLocalPreview &&
+  /** After pickup (or remote video): local → draggable PiP (or black if cam off) */
+  const showPipSlot =
+    isVideo &&
+    !!RTCView &&
     (hasRemoteVideo ||
       call.phase === 'connected' ||
       call.phase === 'reconnecting');
+  const localPip = showPipSlot && hasLocalPreview;
+  const localPipCamOff = showPipSlot && call.cameraOff;
 
-  /** Peer DP — video fallback when camera isn't filling the screen */
-  const showPeerDp = isVideo && !hasRemoteVideo && !localFullscreen;
+  /** Video place/accept: black until own camera — never purple/DP */
+  const outgoingVideoWaiting =
+    isVideo &&
+    !hasLocalPreview &&
+    !hasRemoteVideo &&
+    (call.phase === 'outgoing' ||
+      call.phase === 'ringing' ||
+      call.phase === 'connecting');
+
+  /** Peer DP only when not placing/answering a video call */
+  const showPeerDp =
+    isVideo &&
+    !hasRemoteVideo &&
+    !localFullscreen &&
+    !outgoingVideoWaiting;
   const netHint = isVideo ? qualityLabel(call.quality) : null;
 
   const showActiveControls =
@@ -648,7 +740,7 @@ export default function CallOverlay() {
           {name}
         </Text>
         <Text style={styles.sub}>{subtitle || ' '}</Text>
-        {call.error ? (
+        {showInlineError ? (
           <Text style={styles.error} numberOfLines={2}>
             {call.error}
           </Text>
@@ -700,7 +792,7 @@ export default function CallOverlay() {
             {name}
           </Text>
           <Text style={styles.waSub}>{subtitle || ' '}</Text>
-          {call.error ? (
+          {showInlineError ? (
             <Text style={styles.error} numberOfLines={2}>
               {call.error}
             </Text>
@@ -762,6 +854,11 @@ export default function CallOverlay() {
       pointerEvents="box-none"
       style={[styles.panelFixed, { bottom: panelBottom }]}
     >
+      {call.phase === 'ended' ? (
+        <View style={styles.endedPill}>
+          <Text style={styles.endedHint}>Returning…</Text>
+        </View>
+      ) : (
       <BlurView intensity={48} tint="dark" style={styles.panel}>
         {call.phase === 'incoming' && !isExplore ? (
           <View style={styles.panelRow}>
@@ -781,8 +878,6 @@ export default function CallOverlay() {
               onPress={call.acceptCall}
             />
           </View>
-        ) : call.phase === 'ended' ? (
-          <Text style={styles.endedHint}>Returning…</Text>
         ) : showActiveControls ? (
           <View style={styles.panelRow}>
             {isExplore ? (
@@ -830,6 +925,7 @@ export default function CallOverlay() {
           </View>
         ) : null}
       </BlurView>
+      )}
     </View>
   );
 
@@ -858,7 +954,7 @@ export default function CallOverlay() {
           />
         </View>
       ) : call.phase === 'ended' ? (
-        <View style={styles.waPill}>
+        <View style={styles.endedPill}>
           <Text style={styles.endedHint}>Returning…</Text>
         </View>
       ) : showActiveControls ? (
@@ -943,12 +1039,18 @@ export default function CallOverlay() {
   );
 
   const videoBody = (
-    <View style={styles.fullscreen}>
-      {/* Always keep peer DP under video so fallback never blanks */}
-      {(showPeerDp || !hasRemoteVideo) && <CallBackdrop photo={photo} />}
+    <View style={[styles.fullscreen, styles.videoStage]}>
+      {/* Purple/DP only when waiting on incoming — never for outgoing video */}
+      {showPeerDp ? <CallBackdrop photo={photo} /> : null}
+      {outgoingVideoWaiting ? (
+        <View style={styles.cameraWarmup} pointerEvents="none">
+          <Text style={styles.cameraWarmupText}>Starting camera…</Text>
+        </View>
+      ) : null}
 
       {hasRemoteVideo ? (
         <RTCView
+          key={`remote-${remoteUrl}`}
           streamURL={remoteUrl}
           style={styles.remoteVideo}
           objectFit="cover"
@@ -957,6 +1059,7 @@ export default function CallOverlay() {
         />
       ) : localFullscreen ? (
         <RTCView
+          key={`local-full-${localUrl}`}
           streamURL={localUrl}
           style={styles.remoteVideo}
           objectFit="cover"
@@ -971,12 +1074,22 @@ export default function CallOverlay() {
           insetsBottom={insets.bottom}
         >
           <RTCView
+            key={`local-pip-${localUrl}`}
             streamURL={localUrl}
             style={styles.pipVideo}
             objectFit="cover"
             mirror={call.localMirrored !== false}
-            zOrder={1}
+            // No zOrder — SurfaceView ignores parent borderRadius/overflow on Android
           />
+        </DraggablePip>
+      ) : localPipCamOff ? (
+        <DraggablePip
+          insetsTop={insets.top}
+          insetsBottom={insets.bottom}
+        >
+          <View style={styles.pipCamOff}>
+            <Ionicons name="videocam-off" size={28} color="rgba(255,255,255,0.7)" />
+          </View>
         </DraggablePip>
       ) : null}
 
@@ -1003,17 +1116,19 @@ export default function CallOverlay() {
         if (canMinimize) call.setMinimized(true);
       }}
     >
-      <Animated.View
-        style={[
-          styles.enterRoot,
-          {
-            opacity: enterOpacity,
-            transform: [{ scale: enterScale }],
-          },
-        ]}
-      >
-        {isVideo ? videoBody : voiceBody}
-      </Animated.View>
+      <GestureHandlerRootView style={styles.enterRoot}>
+        <Animated.View
+          style={[
+            styles.enterRoot,
+            {
+              opacity: enterOpacity,
+              transform: [{ scale: enterScale }],
+            },
+          ]}
+        >
+          {isVideo ? videoBody : voiceBody}
+        </Animated.View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -1027,30 +1142,44 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: T.deep,
   },
-  bgPhoto: {
+  videoStage: {
+    backgroundColor: '#000',
+  },
+  cameraWarmup: {
     ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
+  },
+  cameraWarmupText: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  bgPhoto: {
+    ...StyleSheet.absoluteFill,
     width: '100%',
     height: '100%',
     transform: [{ scale: 1.12 }],
   },
   remoteVideo: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#000',
   },
   dimOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(26, 6, 46, 0.72)',
   },
   pip: {
     position: 'absolute',
     left: 0,
     top: 0,
-    borderRadius: 14,
+    borderRadius: PIP_RADIUS,
     overflow: 'hidden',
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.35)',
-    zIndex: 15,
-    elevation: 15,
+    zIndex: 40,
+    elevation: 40,
     backgroundColor: '#111',
     ...Platform.select({
       ios: {
@@ -1059,12 +1188,33 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
         shadowOffset: { width: 0, height: 4 },
       },
-      android: { elevation: 16 },
+      android: { elevation: 40 },
     }),
+  },
+  pipClip: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    borderRadius: PIP_RADIUS,
+    overflow: 'hidden',
+    backgroundColor: '#111',
   },
   pipVideo: {
     width: '100%',
     height: '100%',
+    borderRadius: PIP_RADIUS,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+  },
+  pipCamOff: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    borderRadius: PIP_RADIUS,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1a1a1a',
   },
   netBanner: {
     position: 'absolute',
@@ -1149,6 +1299,14 @@ const styles = StyleSheet.create({
     minHeight: 80,
     alignSelf: 'stretch',
   },
+  endedPill: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(35,35,35,0.55)',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    minHeight: 0,
+  },
   top: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1231,12 +1389,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(26, 6, 46, 0.35)',
-  },
-  avatarImg: {
-    width: AVATAR_SIZE,
-    height: AVATAR_SIZE,
-    borderRadius: AVATAR_SIZE / 2,
+    backgroundColor: '#DFE5E7',
   },
   panel: {
     alignSelf: 'center',
@@ -1245,7 +1398,7 @@ const styles = StyleSheet.create({
     backgroundColor: T.panel,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: T.panelBorder,
-    height: 76,
+    height: CONTROL_PANEL_H,
     paddingHorizontal: 18,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1271,9 +1424,11 @@ const styles = StyleSheet.create({
   },
   endedHint: {
     color: T.textMuted,
-    fontSize: 14,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '500',
     textAlign: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 4,
   },
   miniBar: {
     position: 'absolute',

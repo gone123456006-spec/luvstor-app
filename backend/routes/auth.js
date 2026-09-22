@@ -28,6 +28,11 @@ const {
   extractReferralCodeFromReferrer,
   normalizeReferralCode,
 } = require('../services/referrals');
+const {
+  normalizeDeviceId,
+  isOtherDeviceActive,
+  isLegacyHardwareUpgrade,
+} = require('../utils/deviceIdentity');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEVICE_IN_USE_MESSAGE =
@@ -69,10 +74,17 @@ function issueToken(user) {
 }
 
 async function bindDeviceAndRespond(res, user, deviceId, io = null) {
-  const previousDeviceId = user.activeDeviceId;
-  const isNewDevice = Boolean(previousDeviceId) && previousDeviceId !== deviceId;
+  const previousDeviceId = normalizeDeviceId(user.activeDeviceId);
+  const nextDeviceId = normalizeDeviceId(deviceId);
+  const upgradingLegacy =
+    isLegacyHardwareUpgrade(previousDeviceId, nextDeviceId);
+  // Real cross-device takeover — not UUID→hardware rewrite on the same phone
+  const isNewDevice =
+    Boolean(previousDeviceId) &&
+    previousDeviceId !== nextDeviceId &&
+    !upgradingLegacy;
 
-  user.activeDeviceId = deviceId;
+  user.activeDeviceId = nextDeviceId;
   user.activeDeviceBoundAt = new Date();
   user.isVerified = true;
   await ensureUserPublicId(user);
@@ -80,9 +92,19 @@ async function bindDeviceAndRespond(res, user, deviceId, io = null) {
 
   try {
     const { setCachedActiveDevice } = require('../utils/deviceSessionCache');
-    setCachedActiveDevice(user._id, deviceId);
+    setCachedActiveDevice(user._id, nextDeviceId);
   } catch {
     /* cache is best-effort */
+  }
+
+  if (isNewDevice || upgradingLegacy) {
+    // Drop push tokens for the previous installation id
+    try {
+      const { removeTokensForDevice } = require('../services/deviceTokens');
+      if (previousDeviceId) await removeTokensForDevice(previousDeviceId);
+    } catch {
+      /* ignore */
+    }
   }
 
   if (isNewDevice) {
@@ -97,14 +119,6 @@ async function bindDeviceAndRespond(res, user, deviceId, io = null) {
         body: 'Your account was signed in on a new device. If this was not you, secure your account.',
         data: { code: 'NEW_DEVICE_LOGIN' },
       });
-    } catch {
-      /* ignore */
-    }
-
-    // The old device can no longer use the account — stop pushing to it
-    try {
-      const { removeTokensForDevice } = require('../services/deviceTokens');
-      await removeTokensForDevice(previousDeviceId);
     } catch {
       /* ignore */
     }
@@ -237,10 +251,7 @@ router.post('/google', async (req, res) => {
       user = restoreResult.user;
     }
 
-    const otherDeviceActive =
-      Boolean(user.activeDeviceId) && user.activeDeviceId !== deviceId;
-
-    if (otherDeviceActive && !forceTransfer) {
+    if (isOtherDeviceActive(user, deviceId) && !forceTransfer) {
       return res.status(403).json({
         error: DEVICE_IN_USE_MESSAGE,
         code: 'DEVICE_IN_USE',
@@ -382,10 +393,7 @@ router.post('/verify-otp', async (req, res) => {
       user = restoreResult.user; // Use restored user
     }
 
-    const otherDeviceActive =
-      Boolean(user.activeDeviceId) && user.activeDeviceId !== deviceId;
-
-    if (otherDeviceActive && !forceTransfer) {
+    if (isOtherDeviceActive(user, deviceId) && !forceTransfer) {
       // Keep OTP unused so the user can confirm Transfer Device with the same code
       recordVerifyAttempt(email, true);
       return res.status(403).json({
@@ -521,6 +529,77 @@ router.post('/transfer-device', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// POST /api/auth/sync-device
+// Quietly upgrade the bound device id (e.g. legacy AsyncStorage UUID → hardware id)
+// while this device still holds a valid session. Does NOT trigger transfer UX.
+// Body: { deviceId }
+// ─────────────────────────────────────────────
+router.post('/sync-device', auth, async (req, res) => {
+  try {
+    const deviceId = normalizeDeviceId(req.body.deviceId);
+    if (!isValidDeviceId(deviceId)) {
+      return res.status(400).json({ error: 'Valid device ID is required' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const active = normalizeDeviceId(user.activeDeviceId);
+    const jwtDevice = normalizeDeviceId(req.deviceId);
+
+    // Only the currently active session may rewrite the binding
+    if (!active || !jwtDevice || active !== jwtDevice) {
+      return res.status(401).json({
+        error: 'Session invalidated. Please log in again.',
+        code: 'DEVICE_MISMATCH',
+      });
+    }
+
+    // Already on the stable id
+    if (active === deviceId) {
+      return res.json({
+        success: true,
+        synced: false,
+        token: issueToken(user),
+        user: serializeUser(user),
+      });
+    }
+
+    const previousDeviceId = active;
+    user.activeDeviceId = deviceId;
+    user.activeDeviceBoundAt = new Date();
+    await user.save();
+
+    try {
+      const { setCachedActiveDevice } = require('../utils/deviceSessionCache');
+      setCachedActiveDevice(user._id, deviceId);
+    } catch {
+      /* cache is best-effort */
+    }
+
+    // Retire push tokens registered under the legacy installation id
+    try {
+      const { removeTokensForDevice } = require('../services/deviceTokens');
+      if (previousDeviceId) await removeTokensForDevice(previousDeviceId);
+    } catch {
+      /* ignore */
+    }
+
+    res.json({
+      success: true,
+      synced: true,
+      token: issueToken(user),
+      user: serializeUser(user),
+    });
+  } catch (err) {
+    console.error('sync-device error:', err);
+    res.status(500).json({ error: 'Server error during device sync' });
+  }
+});
+
+// ─────────────────────────────────────────────
 // POST /api/auth/logout
 // Clears active device so another device can sign in
 // ─────────────────────────────────────────────
@@ -532,7 +611,7 @@ router.post('/logout', auth, async (req, res) => {
     }
 
     // Only the currently bound device may clear the session via logout
-    if (user.activeDeviceId && req.deviceId && user.activeDeviceId !== req.deviceId) {
+    if (isOtherDeviceActive(user, req.deviceId)) {
       return res.status(401).json({
         error: 'Session invalidated. Please log in again.',
         code: 'DEVICE_MISMATCH',
@@ -544,6 +623,26 @@ router.post('/logout', auth, async (req, res) => {
     user.isOnline = false;
     user.lastSeen = new Date();
     await user.save();
+
+    try {
+      const presence = require('../utils/presence');
+      await presence.markAway(req.userId);
+    } catch {
+      /* presence is best-effort */
+    }
+
+    try {
+      const io = req.app?.get?.('io');
+      if (io) {
+        io.emit('user:offline', {
+          userId: String(req.userId),
+          isOnline: false,
+          lastSeen: user.lastSeen.toISOString(),
+        });
+      }
+    } catch {
+      /* ignore */
+    }
 
     try {
       const { invalidateActiveDevice } = require('../utils/deviceSessionCache');

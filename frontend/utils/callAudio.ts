@@ -265,7 +265,6 @@ export async function prepareChatRecordingAudio() {
       mgr.stopProximitySensor?.();
       mgr.setForceSpeakerphoneOn?.(false);
       mgr.setSpeakerphoneOn?.(false);
-      // Fully release call audio so expo-audio can own the mic again
       mgr.stop?.();
     } catch {
       /* ignore */
@@ -280,8 +279,7 @@ export async function prepareChatRecordingAudio() {
       /* ignore */
     }
   }
-  // Brief yield so native session teardown settles before record mode
-  await new Promise((r) => setTimeout(r, 60));
+  await new Promise((r) => setTimeout(r, 80));
   await setAudioModeAsync({
     allowsRecording: true,
     playsInSilentMode: true,

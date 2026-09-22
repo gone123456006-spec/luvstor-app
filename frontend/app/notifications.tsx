@@ -1168,30 +1168,32 @@ export default function NotificationsScreen() {
             onStartShouldSetResponder={() => true}
           >
             <View style={styles.sheet}>
-              <TouchableOpacity
-                style={styles.sheetItem}
-                onPress={() => selected && toggleRead(selected)}
-                activeOpacity={0.65}
-              >
-                <Text style={styles.sheetText}>
-                  {selected?.read ? "Mark as unread" : "Mark as read"}
-                </Text>
-              </TouchableOpacity>
-              <View style={styles.sheetDivider} />
-              <TouchableOpacity
-                style={styles.sheetItem}
-                onPress={() => selected && removeOne(selected)}
-                activeOpacity={0.65}
-              >
-                <Text style={[styles.sheetText, styles.menuTextDanger]}>
-                  Delete
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.sheetRow}>
+                <TouchableOpacity
+                  style={styles.sheetItem}
+                  onPress={() => selected && toggleRead(selected)}
+                  activeOpacity={0.65}
+                >
+                  <Text style={styles.sheetText}>
+                    {selected?.read ? "Mark as unread" : "Mark as read"}
+                  </Text>
+                </TouchableOpacity>
+                <View style={styles.sheetVDivider} />
+                <TouchableOpacity
+                  style={styles.sheetItem}
+                  onPress={() => selected && removeOne(selected)}
+                  activeOpacity={0.65}
+                >
+                  <Text style={[styles.sheetText, styles.menuTextDanger]}>
+                    Delete
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
             <TouchableOpacity
               style={styles.sheetCancel}
               onPress={() => setSelected(null)}
-              activeOpacity={0.7}
+            activeOpacity={0.7}
             >
               <Text style={styles.sheetCancelText}>Cancel</Text>
             </TouchableOpacity>
@@ -1667,6 +1669,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
   },
+  sheetRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
   sheetHandle: {
     alignSelf: "center",
     width: 36,
@@ -1684,15 +1690,17 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   sheetItem: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
     paddingVertical: 16,
     minHeight: 52,
   },
-  sheetDivider: {
-    height: StyleSheet.hairlineWidth,
+  sheetVDivider: {
+    width: StyleSheet.hairlineWidth,
     backgroundColor: "#DBDBDB",
+    alignSelf: "stretch",
   },
   sheetText: {
     fontSize: 16,

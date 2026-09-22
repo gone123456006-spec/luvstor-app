@@ -313,6 +313,25 @@ export default function AccountSettingsScreen() {
           <TouchableOpacity
             style={styles.listRow}
             activeOpacity={0.7}
+            onPress={() => router.push('/settings/permissions' as any)}
+          >
+            <View style={[styles.iconCircle, { backgroundColor: '#128C7E' }]}>
+              <Ionicons name="key-outline" size={20} color="#fff" />
+            </View>
+            <View style={styles.rowContent}>
+              <Text style={styles.rowLabel}>Permissions</Text>
+              <Text style={styles.rowSub}>
+                Microphone, camera, photos, music & calls
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.listRow}
+            activeOpacity={0.7}
             onPress={() => router.push('/settings/app-version' as any)}
           >
             <View style={[styles.iconCircle, { backgroundColor: '#370372' }]}>

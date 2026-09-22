@@ -22,7 +22,6 @@ import {
   CallMediaType,
   CallPermissionError,
   NetworkQuality,
-  alertCallPermissionDenied,
   isWebRTCAvailable,
   getWebRTCUnavailableMessage,
 } from '../services/webrtc';
@@ -39,6 +38,13 @@ import {
 } from '../utils/pendingIncomingCall';
 import { setCallSessionActive } from '../utils/callSession';
 import { ensureSocketConnected } from '../utils/ensureSocketConnected';
+import {
+  enterCallPictureInPicture,
+  startOngoingCall,
+  stopOngoingCall,
+  subscribeOngoingCallEnd,
+  subscribeOngoingCallOpen,
+} from '../utils/callOngoing';
 import {
   reinforceCallAudio,
   setCallMicMuted,
@@ -60,6 +66,18 @@ function generateClientCallId(): string {
           12,
         );
   return `c_${Date.now().toString(36)}_${rand}`;
+}
+
+/** Robust across Metro duplicate modules — don't rely on instanceof alone. */
+function isCallPermissionError(err: unknown): err is CallPermissionError {
+  if (err instanceof CallPermissionError) return true;
+  const e = err as { name?: string; message?: string; kind?: string } | null;
+  if (!e) return false;
+  if (e.name === 'CallPermissionError') return true;
+  if (e.kind === 'microphone' || e.kind === 'camera') return true;
+  return /permission is required|Enable it in Settings|NotAllowed|Permission/i.test(
+    String(e.message || ''),
+  );
 }
 
 export type CallPhase =
@@ -367,11 +385,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       stopCallRingback();
       stopIncomingRingtone();
       void dismissCallNotifications(endedId);
+      void stopOngoingCall();
       clearPendingIncomingCall(endedId);
       void stopCallAudio();
       patch({
         phase: 'ended',
         endReason,
+        error:
+          endReason === 'permission'
+            ? null
+            : stateRef.current.error,
         localStream: null,
         remoteStream: null,
         minimized: false,
@@ -514,6 +537,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           },
           onError: (err) => {
             if (!isActiveCall(opts.callId, callType)) return;
+            if (isCallPermissionError(err)) {
+              // Handled by createPeer caller via throw / finishCall — don't paint red toast
+              return;
+            }
             patch({ error: err.message });
           },
         },
@@ -636,27 +663,78 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Calling UI is already open. Load TURN (any-network) then open mic/camera.
+      // Calling UI is already open. Open camera/mic FIRST (WhatsApp preview),
+      // then invite — never ring the friend if permission is denied.
+      // Use STUN immediately so preview is not blocked on ICE/TURN fetch.
       if (isWebRTCAvailable()) {
         void (async () => {
-          const ice = await resolveIceServers();
-          iceServersRef.current = ice;
+          const icePromise = resolveIceServers().then((ice) => {
+            iceServersRef.current = ice;
+            peerRef.current?.updateIceServers?.(ice);
+            return ice;
+          });
           try {
             await createPeer({
-              iceServers: ice,
+              iceServers:
+                iceServersRef.current.length > 0
+                  ? iceServersRef.current
+                  : FALLBACK_ICE_SERVERS,
               isCaller: true,
               callType: opts.callType,
               callId,
             });
+            // User hung up / superseded while permission dialog was open
+            if (
+              pendingCancelRef.current ||
+              stateRef.current.callId !== callId ||
+              stateRef.current.phase === 'ended' ||
+              stateRef.current.phase === 'idle'
+            ) {
+              return;
+            }
+            try {
+              await startCallAudio({ callType: opts.callType, speakerOn });
+              void startCallRingback(speakerOn);
+            } catch {
+              /* non-fatal once preview is up */
+            }
+            // FGS after mic/camera granted + media open (Play while-in-use)
+            void startOngoingCall({
+              callId,
+              peerName: opts.name || 'Call',
+              callType: opts.callType,
+              hasCamera: opts.callType === 'video',
+              status: 'calling',
+            });
+            // Prefer TURN before invite when the network fetch finishes quickly
+            try {
+              await Promise.race([
+                icePromise,
+                new Promise((r) => setTimeout(r, 1200)),
+              ]);
+            } catch {
+              /* STUN preview is enough to invite; TURN may arrive via ringing */
+            }
+            if (
+              pendingCancelRef.current ||
+              stateRef.current.callId !== callId ||
+              stateRef.current.phase === 'ended' ||
+              stateRef.current.phase === 'idle'
+            ) {
+              return;
+            }
+            socket?.emit('call:invite', {
+              receiverId: opts.userId,
+              callType: opts.callType,
+              callId,
+            });
           } catch (err) {
-            if (err instanceof CallPermissionError) {
-              try {
-                socket.emit('call:cancel', { callId });
-              } catch {
-                /* ignore */
-              }
+            if (isCallPermissionError(err)) {
+              Alert.alert(
+                'Microphone needed',
+                'Allow microphone access to place a call. You can enable it in Settings → Permissions.',
+              );
               finishCall('permission');
-              alertCallPermissionDenied(err);
               return;
             }
             const msg =
@@ -669,20 +747,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           }
         })();
       }
-      void (async () => {
-        try {
-          await startCallAudio({ callType: opts.callType, speakerOn });
-          void startCallRingback(speakerOn);
-        } catch {
-          /* non-fatal for UI open */
-        }
-      })();
-
-      socket.emit('call:invite', {
-        receiverId: opts.userId,
-        callType: opts.callType,
-        callId,
-      });
     },
     [createPeer, finishCall, patch, resetSoon, socket]
   );
@@ -690,6 +754,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const acceptCall = useCallback(async () => {
     const s = stateRef.current;
     if (!socket || !s.callId || s.phase !== 'incoming') return;
+    void dismissCallNotifications(s.callId);
     const ready = await ensureSocketConnected(socket);
     if (!ready) {
       Alert.alert(
@@ -708,26 +773,31 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     }
     Vibration.cancel();
     stopIncomingRingtone();
-    // Accept first, then request mic/camera when opening media (WhatsApp-style)
+    // Accept → connecting UI, then open camera/mic before InCall audio session
     patch({ phase: 'connecting', cameraOff: s.callType !== 'video' });
-    await startCallAudio({
-      callType: s.callType,
-      speakerOn: s.speakerOn,
-    });
     if (isWebRTCAvailable() && !peerRef.current) {
       try {
-        let ice = await resolveIceServers(iceServersRef.current);
-        iceServersRef.current = ice;
+        const preferred =
+          iceServersRef.current.length > 0
+            ? iceServersRef.current
+            : FALLBACK_ICE_SERVERS;
+        void resolveIceServers(iceServersRef.current).then((ice) => {
+          iceServersRef.current = ice;
+          peerRef.current?.updateIceServers?.(ice);
+        });
         await createPeer({
-          iceServers: ice,
+          iceServers: preferred,
           isCaller: false,
           callType: s.callType,
           callId: s.callId,
         });
       } catch (err) {
-        if (err instanceof CallPermissionError) {
-          alertCallPermissionDenied(err);
+        if (isCallPermissionError(err)) {
           socket.emit('call:decline', { callId: s.callId });
+          Alert.alert(
+            'Microphone needed',
+            'Allow microphone access to answer this call. You can enable it in Settings → Permissions.',
+          );
           finishCall('permission');
           return;
         }
@@ -741,9 +811,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         finishCall('error');
         return;
       }
-    } else if (peerRef.current && iceServersRef.current.length) {
-      peerRef.current.updateIceServers?.(iceServersRef.current);
+    } else if (peerRef.current) {
+      const ice = await resolveIceServers(iceServersRef.current);
+      iceServersRef.current = ice;
+      peerRef.current.updateIceServers?.(ice);
     }
+    try {
+      await startCallAudio({
+        callType: s.callType,
+        speakerOn: s.speakerOn,
+      });
+    } catch {
+      /* non-fatal once media is up */
+    }
+    // FGS after accept media is up (Play: user-initiated, while-in-use)
+    void startOngoingCall({
+      callId: s.callId,
+      peerName: s.peer?.name || 'Call',
+      callType: s.callType,
+      hasCamera: s.callType === 'video' && !stateRef.current.cameraOff,
+      status: 'connected',
+    });
     socket.emit('call:accept', { callId: s.callId });
   }, [createPeer, finishCall, patch, socket]);
 
@@ -902,6 +990,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           });
         }
       } catch (err) {
+        if (isCallPermissionError(err)) {
+          try {
+            socket.emit('call:cancel', { callId });
+          } catch {
+            /* ignore */
+          }
+          finishCall('permission');
+          return;
+        }
         patch({
           error:
             (err as Error).message ||
@@ -934,13 +1031,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       if (!explore) {
         Vibration.vibrate([0, 500, 400, 500], true);
         void startIncomingRingtone();
-        // App backgrounded / screen off: show a local tray alert (FCM covers fully-killed)
+        // Background / locked: shade with Answer / Decline
+        // (FCM skipped when a socket is live — see backend call:invite).
+        // Foreground uses CallOverlay instead of a duplicate tray.
         if (AppState.currentState !== 'active') {
           void presentIncomingCallLocalNotification({
             callId: String(payload.callId),
             callerName: peer.name || 'Incoming call',
             callType: incomingType,
             callerId: String(payload.from || peer.id || ''),
+            callerPhoto: peer.photo || '',
           });
         }
       }
@@ -1043,6 +1143,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           startHeartbeat(callId);
         }
       } catch (err) {
+        if (isCallPermissionError(err)) {
+          socket.emit('call:end', { callId });
+          finishCall('permission');
+          return;
+        }
         patch({ error: (err as Error).message });
         socket.emit('call:end', { callId });
         finishCall('error');
@@ -1275,6 +1380,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           callerName: peer?.name || 'Incoming call',
           callType: stateRef.current.callType,
           callerId: String(peer?.id || ''),
+          callerPhoto: peer?.photo || '',
         });
       }
     };
@@ -1322,17 +1428,111 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           socket?.emit('call:heartbeat', { callId: s.callId });
         }
         void reinforceCallAudio(s.speakerOn);
+        // Ensure ongoing notification / FGS is still up after resume
+        if (
+          s.callId &&
+          (s.phase === 'connected' ||
+            s.phase === 'connecting' ||
+            s.phase === 'reconnecting')
+        ) {
+          void startOngoingCall({
+            callId: s.callId,
+            peerName: s.peer?.name || 'Call',
+            callType: s.callType,
+            hasCamera: s.callType === 'video' && !s.cameraOff,
+            status:
+              s.phase === 'outgoing'
+                ? 'calling'
+                : s.phase === 'ringing'
+                  ? 'ringing'
+                  : 'connected',
+          });
+        }
         return;
       }
 
-      // background / inactive — do NOT end the call; keep heartbeats flowing
+      // background / inactive — do NOT end the call; keep heartbeats flowing.
+      // Do not first-create mic/camera FGS from background (Android while-in-use).
       if (s.callId && (s.phase === 'connected' || s.phase === 'reconnecting')) {
         socket?.emit('call:heartbeat', { callId: s.callId });
+        void startOngoingCall({
+          callId: s.callId,
+          peerName: s.peer?.name || 'Call',
+          callType: s.callType,
+          hasCamera: s.callType === 'video' && !s.cameraOff,
+          status: 'connected',
+        });
+        if (s.callType === 'video' && !s.cameraOff) {
+          void enterCallPictureInPicture();
+        }
       }
     };
     const sub = AppState.addEventListener('change', onChange);
     return () => sub.remove();
   }, [socket]);
+
+  // Ongoing call FGS only while media is active (Play: user-initiated call).
+  // - Caller: outgoing/ringing already capturing mic after getUserMedia
+  // - Callee: only after accept → connecting (not while incoming tray alone)
+  // - Never while idle/ended; stop immediately on those phases
+  useEffect(() => {
+    const s = state;
+    const shouldShow =
+      !!s.callId &&
+      (s.phase === 'outgoing' ||
+        s.phase === 'ringing' ||
+        s.phase === 'connecting' ||
+        s.phase === 'connected' ||
+        s.phase === 'reconnecting');
+
+    if (!shouldShow) {
+      if (s.phase === 'idle' || s.phase === 'ended' || s.phase === 'incoming') {
+        void stopOngoingCall();
+      }
+      return;
+    }
+
+    void startOngoingCall({
+      callId: s.callId!,
+      peerName: s.peer?.name || 'Call',
+      callType: s.callType,
+      hasCamera: s.callType === 'video' && !s.cameraOff,
+      status:
+        s.phase === 'outgoing'
+          ? 'calling'
+          : s.phase === 'ringing'
+            ? 'ringing'
+            : 'connected',
+    });
+  }, [
+    state.callId,
+    state.phase,
+    state.peer?.name,
+    state.callType,
+    state.cameraOff,
+  ]);
+
+  // End Call from ongoing notification action
+  useEffect(() => {
+    const unsub = subscribeOngoingCallEnd((callId) => {
+      const s = stateRef.current;
+      if (!s.callId) return;
+      if (callId && callId !== s.callId) return;
+      endCall();
+    });
+    return unsub;
+  }, [endCall]);
+
+  // Tap ongoing notification → restore full call UI
+  useEffect(() => {
+    const unsub = subscribeOngoingCallOpen((callId) => {
+      const s = stateRef.current;
+      if (!s.callId) return;
+      if (callId && callId !== s.callId) return;
+      setMinimized(false);
+    });
+    return unsub;
+  }, [setMinimized]);
 
   useEffect(() => {
     return () => {
@@ -1341,6 +1541,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       clearExploreRecover();
       disposePeer();
       Vibration.cancel();
+      void stopOngoingCall();
       if (endClearTimer.current) clearTimeout(endClearTimer.current);
     };
   }, [clearExploreRecover, disposePeer, stopHeartbeat]);

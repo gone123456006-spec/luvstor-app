@@ -7,6 +7,11 @@ export default function SettingsLayout() {
       <Stack.Screen name="index" />
       <Stack.Screen name="account" />
       <Stack.Screen name="notifications" />
+      <Stack.Screen name="permissions" />
+      <Stack.Screen name="app-version" />
+      <Stack.Screen name="privacy-policy" />
+      <Stack.Screen name="terms-conditions" />
+      <Stack.Screen name="account-deletion" />
     </Stack>
   );
 }

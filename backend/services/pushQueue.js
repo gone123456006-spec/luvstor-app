@@ -204,10 +204,24 @@ async function runJob(job, { rethrow = false } = {}) {
       if (ok.length) await deviceTokens.recordSuccess(ok);
 
       if (res.error) lastError = res.error;
+      if (res.failureCount > 0) {
+        const sample = res.results
+          .filter((r) => !r.success)
+          .slice(0, 3)
+          .map((r) => r.errorCode || 'unknown');
+        console.warn(
+          `[PushQueue] FCM failures user=${userId} ok=${res.successCount} fail=${res.failureCount} codes=${sample.join(',')}`,
+        );
+      } else if (res.successCount > 0) {
+        console.log(
+          `[PushQueue] FCM sent user=${userId} count=${res.successCount} type=${payload?.data?.type || '?'}`,
+        );
+      }
     } catch (err) {
       lastError = err.message;
       failureCount += batch.length;
       batch.forEach((t) => retryable.add(t));
+      console.error(`[PushQueue] FCM exception user=${userId}:`, err.message);
     }
   }
 

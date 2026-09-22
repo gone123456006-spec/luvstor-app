@@ -1,6 +1,6 @@
 /**
  * Call-related FCM / notification-center copy.
- * Used for incoming, missed, busy, and offline wake-ups.
+ * Used for incoming, missed, busy, clear, and offline wake-ups.
  */
 const { createNotification } = require('../services/notifications');
 
@@ -10,6 +10,7 @@ function callLabel(callType) {
 
 /**
  * High-priority wake-up when someone is being called (online or offline).
+ * Android: data-heavy so the client can show Answer / Decline locally.
  */
 async function pushIncomingCall(io, {
   calleeId,
@@ -21,10 +22,9 @@ async function pushIncomingCall(io, {
   calleeOnline = true,
 }) {
   const name = (caller && caller.name) || 'Someone';
-  const kind = callLabel(callType);
-  const body = calleeOnline
-    ? `Incoming ${kind} — Accept or Decline`
-    : `Incoming ${kind} — open Luvstor to answer`;
+  const kind = callType === 'video' ? 'video call' : 'voice call';
+  // WhatsApp-style: caller name as title, call type as body
+  const body = `Incoming ${kind}`;
 
   return createNotification(io, {
     userId: calleeId,
@@ -50,12 +50,16 @@ async function pushIncomingCall(io, {
       action: 'incoming',
       calleeOnline: Boolean(calleeOnline),
       categoryId: 'incoming_call',
+      callerName: name,
+      title: name,
+      body,
     },
   });
 }
 
 /**
  * After ring timeout / no answer (callee may have been offline).
+ * Uses the same groupKey/tag as incoming so the ring tray is replaced.
  */
 async function pushMissedCall(io, {
   calleeId,
@@ -83,21 +87,58 @@ async function pushMissedCall(io, {
     actorName: callerName || '',
     priority: 'high',
     push: true,
-    groupKey: `call:missed:${roomId || callId}`,
+    // Same tag as incoming → FCM/OS replaces the ringing notification
+    groupKey: `call:${callId}`,
+    dedupeKey: `call:missed:${callId}`,
     deepLink: `/messages/${callerId}`,
     data: {
       screen: 'messages',
       userId: String(callerId),
       callId: String(callId),
       callType,
+      action: 'missed',
       missed: true,
       reason,
+      roomId: roomId || '',
     },
   });
+}
+
+/**
+ * Data-only dismiss so killed/background callees clear the ringing tray
+ * when the caller cancels, someone answers, or the call ends.
+ * Does not create a notification-center row.
+ */
+async function pushClearIncomingCall(userId, callId) {
+  if (!userId || !callId) return;
+  try {
+    const deviceTokens = require('../services/deviceTokens');
+    const { sendToTokens } = require('../services/fcm');
+    const tokens = await deviceTokens.getActiveTokens(userId);
+    if (!tokens?.length) return;
+    await sendToTokens(tokens, {
+      title: '',
+      body: '',
+      channelId: 'calls',
+      priority: 'high',
+      groupKey: `call:${callId}`,
+      collapseKey: `call:${callId}`,
+      ttlMs: 30 * 1000,
+      data: {
+        type: 'call',
+        action: 'clear',
+        callId: String(callId),
+        groupKey: `call:${callId}`,
+      },
+    });
+  } catch (err) {
+    console.warn('[callPush] clear failed:', err.message);
+  }
 }
 
 module.exports = {
   pushIncomingCall,
   pushMissedCall,
+  pushClearIncomingCall,
   callLabel,
 };

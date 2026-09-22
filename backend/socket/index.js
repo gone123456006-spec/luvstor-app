@@ -82,6 +82,8 @@ module.exports = function initSocket(io) {
   calls.setIo(io);
   /** Throttle Mongo lastSeen writes — Redis TTL is the live source of truth. */
   const lastSeenWriteAt = new Map();
+  /** uid → timeout — finalize Offline after disconnect grace (app kill / drop). */
+  const pendingOfflineTimers = new Map();
 
   // Map: userId → socket.id (latest socket for direct messaging)
   const onlineUsers = new Map();
@@ -99,6 +101,78 @@ module.exports = function initSocket(io) {
     }
   };
 
+  const cancelPendingOffline = (userId) => {
+    const uid = String(userId);
+    const t = pendingOfflineTimers.get(uid);
+    if (t) clearTimeout(t);
+    pendingOfflineTimers.delete(uid);
+  };
+
+  const emitUserOffline = async (
+    userId,
+    { broadcastSocket, touchLastSeen = true } = {},
+  ) => {
+    const uid = String(userId);
+    const now = new Date();
+    const update = touchLastSeen
+      ? { isOnline: false, lastSeen: now }
+      : { isOnline: false };
+    const doc = await User.findByIdAndUpdate(uid, update, {
+      new: true,
+      select: 'lastSeen',
+    }).lean();
+    const lastSeenIso = doc?.lastSeen
+      ? new Date(doc.lastSeen).toISOString()
+      : now.toISOString();
+    const payload = {
+      userId: uid,
+      isOnline: false,
+      lastSeen: lastSeenIso,
+    };
+    if (broadcastSocket) {
+      broadcastSocket.broadcast.emit('user:offline', payload);
+    } else {
+      io.emit('user:offline', payload);
+    }
+  };
+
+  const finalizeOffline = async (userId, { broadcastSocket } = {}) => {
+    const uid = String(userId);
+    cancelPendingOffline(uid);
+    const stillSockets =
+      onlineSockets.has(uid) && (onlineSockets.get(uid)?.size || 0) > 0;
+    if (stillSockets) return false;
+
+    await presence.forceOffline(uid);
+    // Keep lastSeen at last successful heartbeat — not when TTL was noticed
+    await emitUserOffline(uid, { broadcastSocket, touchLastSeen: false });
+
+    try {
+      await calls.handleUserDisconnect(uid);
+    } catch (err) {
+      console.error('call disconnect cleanup:', err.message);
+    }
+    exploreMatchmaking.leaveQueue(uid);
+    return true;
+  };
+
+  /**
+   * App kill / transport drop: do not flip Offline immediately — wait for alive TTL
+   * so background/kill with network still up is not an instant Offline.
+   */
+  const schedulePendingOffline = (userId, broadcastSocket) => {
+    const uid = String(userId);
+    cancelPendingOffline(uid);
+    const delay = Math.max(5_000, presence.ALIVE_TTL_MS || 90_000);
+    const t = setTimeout(() => {
+      pendingOfflineTimers.delete(uid);
+      finalizeOffline(uid, { broadcastSocket: null }).catch((err) =>
+        console.warn('presence grace offline failed:', err.message),
+      );
+    }, delay);
+    pendingOfflineTimers.set(uid, t);
+  };
+
   // JWT + single-device auth middleware for Socket.IO
   io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
@@ -111,7 +185,11 @@ module.exports = function initSocket(io) {
       const user = await User.findById(decoded.userId).select(
         'activeDeviceId name photo gender',
       );
-      if (!user || !user.activeDeviceId || user.activeDeviceId !== decoded.deviceId) {
+      if (
+        !user ||
+        !user.activeDeviceId ||
+        String(user.activeDeviceId).trim() !== String(decoded.deviceId || '').trim()
+      ) {
         return next(new Error('Authentication error: Device mismatch'));
       }
       socket.userId = String(decoded.userId);
@@ -144,15 +222,21 @@ module.exports = function initSocket(io) {
      * call:invite / chat:send / chat:join emitted right after connect.
      */
     const bootstrapPresence = async () => {
+      cancelPendingOffline(uid);
       const presenceState = await presence.socketConnected(uid);
       const becameOnline = redisReady()
         ? presenceState.becameOnline
         : existing.size === 1;
 
       if (becameOnline) {
-        await User.findByIdAndUpdate(uid, { isOnline: true, lastSeen: new Date() });
+        const now = new Date();
+        await User.findByIdAndUpdate(uid, { isOnline: true, lastSeen: now });
         // Instant presence for Discover / Chat / open chats (all other sockets)
-        socket.broadcast.emit('user:online', { userId: uid, isOnline: true });
+        socket.broadcast.emit('user:online', {
+          userId: uid,
+          isOnline: true,
+          lastSeen: now.toISOString(),
+        });
 
         // Flush pending deliveries → single tick becomes double gray for senders
         try {
@@ -167,11 +251,11 @@ module.exports = function initSocket(io) {
             .lean();
 
           if (pending.length) {
-            const now = new Date();
+            const deliveredAt = new Date();
             const ids = pending.map((m) => m._id);
             await Message.updateMany(
               { _id: { $in: ids } },
-              { $set: { delivered: true, deliveredAt: now } },
+              { $set: { delivered: true, deliveredAt } },
             );
 
             const bySender = new Map();
@@ -187,6 +271,12 @@ module.exports = function initSocket(io) {
         } catch (err) {
           console.error('flush deliveries error:', err.message);
         }
+      } else {
+        // Another socket for same user / reconnect while still in ONLINE_SET
+        await User.findByIdAndUpdate(uid, {
+          isOnline: true,
+          lastSeen: new Date(),
+        });
       }
 
       // Also notify active chat rooms (skip blocked pairs — both look offline)
@@ -196,7 +286,11 @@ module.exports = function initSocket(io) {
           const block = await getBlockState(uid, otherUserId);
           if (block.blocked) continue;
           const room = [String(uid), String(otherUserId)].sort().join('_');
-          io.to(room).emit('user:online', { userId: uid, isOnline: true });
+          io.to(room).emit('user:online', {
+            userId: uid,
+            isOnline: true,
+            lastSeen: new Date().toISOString(),
+          });
         } catch {
           /* ignore */
         }
@@ -245,6 +339,7 @@ module.exports = function initSocket(io) {
         }
 
         let otherOnline = false;
+        let otherLastSeen = null;
         try {
           otherOnline = !!(await presence.isUserOnline(otherUserId));
         } catch {
@@ -252,12 +347,29 @@ module.exports = function initSocket(io) {
             onlineSockets.has(String(otherUserId)) &&
             (onlineSockets.get(String(otherUserId))?.size || 0) > 0;
         }
+        if (!otherOnline) {
+          try {
+            const peer = await User.findById(otherUserId)
+              .select('lastSeen')
+              .lean();
+            otherLastSeen = peer?.lastSeen
+              ? new Date(peer.lastSeen).toISOString()
+              : null;
+          } catch {
+            /* ignore */
+          }
+        }
         socket.emit(otherOnline ? 'user:online' : 'user:offline', {
           userId: String(otherUserId),
           isOnline: otherOnline,
+          ...(otherLastSeen ? { lastSeen: otherLastSeen } : {}),
         });
 
-        io.to(room).emit('user:online', { userId: uid, isOnline: true });
+        io.to(room).emit('user:online', {
+          userId: uid,
+          isOnline: true,
+          lastSeen: new Date().toISOString(),
+        });
       } catch (err) {
         console.error('chat:join error:', err.message);
       }
@@ -289,8 +401,8 @@ module.exports = function initSocket(io) {
       }
     });
 
-    // Foreground presence — refresh Redis TTL + lastSeen so "Active now"
-    // cannot stick after the app is closed or the process dies mid-session.
+    // Heartbeat — refresh Redis TTL + lastSeen while the client can reach us.
+    // Closing the app alone does not clear presence; TTL / presence:away does.
     socket.on('presence:ping', async () => {
       try {
         const hb = await presence.heartbeat(uid);
@@ -304,6 +416,32 @@ module.exports = function initSocket(io) {
         });
       } catch (err) {
         console.error('presence:ping error:', err.message);
+      }
+    });
+
+    // Explicit Offline — logout / session end only. Network loss uses disconnect
+    // grace + alive TTL so short blips do not flicker Offline for peers.
+    socket.on('presence:away', async () => {
+      try {
+        cancelPendingOffline(uid);
+        await presence.markAway(uid);
+        const now = new Date();
+        await User.findByIdAndUpdate(uid, {
+          isOnline: false,
+          lastSeen: now,
+        });
+        try {
+          await clearViewing(uid);
+        } catch {
+          /* ignore */
+        }
+        socket.broadcast.emit('user:offline', {
+          userId: uid,
+          isOnline: false,
+          lastSeen: now.toISOString(),
+        });
+      } catch (err) {
+        console.error('presence:away error:', err.message);
       }
     });
 
@@ -804,23 +942,32 @@ module.exports = function initSocket(io) {
           calleeOnline,
         };
 
-        // Deliver over socket when they have one (in-app UI)
+        // Deliver over socket when they have one (in-app UI / local tray)
         notifyUser(io, receiverId, 'call:incoming', incomingPayload);
 
-        // Always FCM — wakes locked / killed / backgrounded devices
-        try {
-          const { pushIncomingCall } = require('../utils/callPush');
-          await pushIncomingCall(io, {
-            calleeId: receiverId,
-            caller: result.caller,
-            callerId: uid,
-            callId: result.session.callId,
-            callType: result.session.callType,
-            roomId: room,
-            calleeOnline,
-          });
-        } catch (err) {
-          console.error('incoming call push:', err.message);
+        // FCM only when no live socket — avoids duplicate trays while
+        // backgrounded-with-socket (local Answer/Decline owns that case).
+        // Killed / offline devices still get a high-priority data push.
+        const hasLiveSocket =
+          onlineSockets instanceof Map &&
+          onlineSockets.has(String(receiverId)) &&
+          (onlineSockets.get(String(receiverId))?.size || 0) > 0;
+
+        if (!hasLiveSocket) {
+          try {
+            const { pushIncomingCall } = require('../utils/callPush');
+            await pushIncomingCall(io, {
+              calleeId: receiverId,
+              caller: result.caller,
+              callerId: uid,
+              callId: result.session.callId,
+              callType: result.session.callType,
+              roomId: room,
+              calleeOnline,
+            });
+          } catch (err) {
+            console.error('incoming call push:', err.message);
+          }
         }
 
         socket.emit('call:ringing', {
@@ -1391,39 +1538,49 @@ module.exports = function initSocket(io) {
 
       const stillConnected =
         onlineSockets.has(uid) && (onlineSockets.get(uid)?.size || 0) > 0;
-      const disc = await presence.socketDisconnected(uid, { stillConnected });
-      const becameOffline = redisReady()
-        ? disc.becameOffline
-        : !stillConnected;
 
-      // Always clear viewing on disconnect so a killed/backgrounded phone
-      // never stays "in chat" and suppresses FCM to all devices.
-      // Any remaining open chat will re-mark via chat:join / heartbeat.
+      // Always clear viewing on disconnect so a killed phone never stays
+      // "in chat" and suppresses FCM. Open chats re-mark via chat:join.
       try {
         await clearViewing(uid);
       } catch (err) {
         console.warn('clearViewing on disconnect:', err.message);
       }
 
-      if (becameOffline) {
-        await User.findByIdAndUpdate(uid, {
-          isOnline: false,
-          lastSeen: new Date(),
+      if (stillConnected) {
+        await presence.socketDisconnected(uid, {
+          stillConnected: true,
+          immediate: false,
         });
+        console.log(`❌ Socket disconnected: ${uid} (other sockets remain)`);
+        return;
+      }
 
+      // Last socket: grace Offline (app kill / background OS drop). Explicit
+      // presence:away already cleared presence for network-loss cases.
+      const disc = await presence.socketDisconnected(uid, {
+        stillConnected: false,
+        immediate: false,
+      });
+
+      if (disc.becameOffline) {
+        await emitUserOffline(uid, { broadcastSocket: socket });
         try {
           await calls.handleUserDisconnect(uid);
         } catch (err) {
           console.error('call disconnect cleanup:', err.message);
         }
-
         exploreMatchmaking.leaveQueue(uid);
-
-        // Instant offline for everyone else
-        socket.broadcast.emit('user:offline', {
-          userId: uid,
-          isOnline: false,
-        });
+      } else if (disc.grace) {
+        // Stay Online for peers until alive TTL expires / grace timer fires
+        schedulePendingOffline(uid, socket);
+        // End ringing/calls quickly even if presence stays Online briefly
+        try {
+          await calls.handleUserDisconnect(uid);
+        } catch (err) {
+          console.error('call disconnect cleanup:', err.message);
+        }
+        exploreMatchmaking.leaveQueue(uid);
       }
 
       console.log(`❌ Socket disconnected: ${uid}`);
@@ -1434,6 +1591,54 @@ module.exports = function initSocket(io) {
       console.error('socket bootstrap error:', err.message),
     );
   });
+
+  // Sweep stale Online when alive TTL expires without a clean disconnect
+  // (zombie sockets, kill without TCP teardown, multi-instance races).
+  const sweepIv = setInterval(() => {
+    (async () => {
+      let expired = [];
+      try {
+        expired = await presence.sweepExpiredOnline();
+      } catch (err) {
+        console.warn('presence sweep list failed:', err.message);
+        return;
+      }
+      for (const uid of expired) {
+        const stillSockets =
+          onlineSockets.has(uid) && (onlineSockets.get(uid)?.size || 0) > 0;
+        if (stillSockets) continue;
+        try {
+          await finalizeOffline(uid, { broadcastSocket: null });
+        } catch (err) {
+          console.warn('presence sweep finalize failed:', err.message);
+        }
+      }
+
+      // Mongo sticky flags with stale lastSeen (no live presence)
+      try {
+        const { STALE_MS } = require('../utils/onlineStatus');
+        const cutoff = new Date(Date.now() - STALE_MS);
+        const stale = await User.find({
+          isOnline: true,
+          $or: [{ lastSeen: { $lt: cutoff } }, { lastSeen: null }],
+        })
+          .select('_id')
+          .limit(100)
+          .lean();
+        for (const row of stale) {
+          const uid = String(row._id);
+          const stillSockets =
+            onlineSockets.has(uid) && (onlineSockets.get(uid)?.size || 0) > 0;
+          if (stillSockets) continue;
+          if (await presence.isUserOnline(uid)) continue;
+          await finalizeOffline(uid, { broadcastSocket: null });
+        }
+      } catch (err) {
+        console.warn('presence mongo sweep failed:', err.message);
+      }
+    })().catch(() => {});
+  }, 30_000);
+  if (typeof sweepIv.unref === 'function') sweepIv.unref();
 
   return io;
 };

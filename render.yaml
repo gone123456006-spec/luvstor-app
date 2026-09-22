@@ -28,11 +28,19 @@ services:
         value: production
       - key: UPLOADS_DIR
         value: /var/data/uploads
+      - key: JSON_BODY_LIMIT
+        value: "12mb"
+      - key: PUBLIC_API_URL
+        value: "https://luvstor-api.onrender.com"
+      - key: PUBLIC_SHARE_BASE_URL
+        value: "https://luvstor-api.onrender.com"
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: HEARTBEAT_SECRET
+        generateValue: true
+      - key: ADMIN_API_KEY
         generateValue: true
       - key: REDIS_URL
         fromService:
@@ -46,6 +54,10 @@ services:
       - key: GOOGLE_WEB_CLIENT_ID
         sync: false
       - key: GOOGLE_ANDROID_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_IDS
+        sync: false
+      - key: BREVO_API_KEY
         sync: false
       - key: SMTP_HOST
         sync: false
@@ -68,7 +80,7 @@ services:
       - key: DAILY_SUGGESTION_TZ_OFFSET_MINUTES
         value: "330"
       # WebRTC — REQUIRED for friend calls across cellular / different Wi‑Fi
-      # (STUN alone only works on the same LAN). Set Metered/Twilio values in dashboard.
+      # TURN_URLS must be turn:/turns: URIs (never paste the Metered API key).
       - key: STUN_URLS
         value: "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302"
       - key: TURN_URLS

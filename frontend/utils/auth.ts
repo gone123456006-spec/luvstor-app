@@ -103,6 +103,27 @@ export async function getCurrentAuthUser(): Promise<AuthUser | null> {
   }
 }
 
+/**
+ * If JWT still carries a legacy installation UUID but this phone now has a
+ * stable hardware id, rewrite the server binding so reinstall won't look new.
+ */
+export async function syncDeviceSessionIfNeeded(token?: string | null): Promise<void> {
+  try {
+    const authToken = token || (await getAuthToken());
+    if (!authToken) return;
+    const { apiSyncDevice, saveAuthSession } = await import('./api');
+    const result = await apiSyncDevice(authToken);
+    if (result?.token) {
+      const rawUser = await AsyncStorage.getItem(AUTH_USER_KEY);
+      const user = rawUser ? JSON.parse(rawUser) : result.user;
+      await saveAuthSession(result.token, user || result.user);
+    }
+  } catch (err) {
+    // Non-fatal — next launch / login still works; worst case one transfer for legacy UUID
+    console.warn('[Auth] device sync skipped:', (err as Error)?.message || err);
+  }
+}
+
 export async function getLocalProfile(email?: string): Promise<StoredProfile | null> {
   const resolvedEmail = email
     ? normalizeEmail(email)
@@ -335,8 +356,14 @@ export async function completeAccountLogin(
 
   await migrateAllGlobalsForAccount(email);
 
+  // Ensure server binding uses hardware device id (survives reinstall)
+  await syncDeviceSessionIfNeeded(token);
+
   try {
-    const hydrated = await hydrateAccountFromServer(token, email);
+    const hydrated = await hydrateAccountFromServer(
+      (await getAuthToken()) || token,
+      email,
+    );
     return {
       id: hydrated.id || user.id,
       email,

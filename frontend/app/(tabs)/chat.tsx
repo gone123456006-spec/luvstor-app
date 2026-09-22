@@ -2143,25 +2143,8 @@ export default function ChatScreen() {
                   style={[styles.filterText, active && styles.filterTextActive]}
                   numberOfLines={1}
                 >
-                  {f}
+                  {showCount ? `${f} ${count > 99 ? "99+" : count}` : f}
                 </Text>
-                {showCount ? (
-                  <View
-                    style={[
-                      styles.filterCount,
-                      active && styles.filterCountActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.filterCountText,
-                        active && styles.filterCountTextActive,
-                      ]}
-                    >
-                      {count > 99 ? "99+" : count}
-                    </Text>
-          </View>
-                ) : null}
               </TouchableOpacity>
             );
           })}
@@ -2309,28 +2292,6 @@ const styles = StyleSheet.create({
   },
   filterTextActive: {
     color: "#FFFFFF",
-  },
-  filterCount: {
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    paddingHorizontal: 4,
-    backgroundColor: C.purple,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  filterCountActive: {
-    backgroundColor: "#FFFFFF",
-  },
-  filterCountText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#fff",
-    includeFontPadding: false,
-  },
-  filterCountTextActive: {
-    color: "#111111",
   },
   centered: {
     flex: 1,

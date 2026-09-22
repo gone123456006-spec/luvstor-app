@@ -1452,22 +1452,28 @@ export default function ProfileScreen() {
                   disabled={savingEdit || uploadingPhoto}
                   style={styles.igEditAvatarTap}
                 >
-                  <WhatsAppAvatar
-                    key={editPhotoUri || profile?.photo || "no-photo"}
-                    photo={editPhotoUri || profile?.photo || null}
-                    name={editName || profile?.name || "You"}
-                    publicId={profile?.publicId}
-                    size={96}
-                  />
-                  {uploadingPhoto ? (
-                    <View style={styles.igEditAvatarBusy}>
-                      <ActivityIndicator color="#fff" />
-                    </View>
-                  ) : (
+                  <View style={styles.igEditAvatarCircle}>
+                    <WhatsAppAvatar
+                      key={editPhotoUri || profile?.photo || "no-photo"}
+                      photo={editPhotoUri || profile?.photo || null}
+                      name={editName || profile?.name || "You"}
+                      publicId={profile?.publicId}
+                      size={96}
+                    />
+                    {uploadingPhoto ? (
+                      <View
+                        style={styles.igEditAvatarBusy}
+                        pointerEvents="none"
+                      >
+                        <ActivityIndicator color="#fff" size="small" />
+                      </View>
+                    ) : null}
+                  </View>
+                  {!uploadingPhoto ? (
                     <View style={styles.igEditAvatarPencil}>
                       <Ionicons name="pencil" size={14} color="#FFFFFF" />
                     </View>
-                  )}
+                  ) : null}
                 </TouchableOpacity>
                 <CopyablePublicId
                   publicId={profile?.publicId}
@@ -2940,12 +2946,19 @@ const styles = StyleSheet.create({
   igEditAvatarTap: {
     width: 96,
     height: 96,
+    position: "relative",
+  },
+  igEditAvatarCircle: {
+    width: 96,
+    height: 96,
     borderRadius: 48,
+    overflow: "hidden",
+    position: "relative",
   },
   igEditAvatarBusy: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: 48,
-    backgroundColor: "rgba(0,0,0,0.35)",
+    backgroundColor: "rgba(0,0,0,0.45)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2961,6 +2974,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 2,
     borderColor: "#F5F5F7",
+    zIndex: 2,
   },
   igEditIdRow: {
     marginTop: 12,
