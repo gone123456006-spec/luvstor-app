@@ -47,7 +47,9 @@ import {
   emitOngoingCallOpen,
 } from '../utils/callOngoing';
 import { setPendingIncomingCall } from '../utils/pendingIncomingCall';
+import { declineCallHttp } from '../utils/callHttpActions';
 import { registerBackgroundNotificationTask } from '../utils/pushBackground';
+import { bindNotifeeCallEvents } from '../utils/callNotifee';
 import { apiRequest } from '../utils/api';
 
 type PushContextValue = {
@@ -108,8 +110,11 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     (data: Record<string, any>, intent: 'open' | 'accept' | 'decline' = 'open') => {
       if (data?.callId && (data?.action === 'incoming' || data?.type === 'call')) {
         setPendingIncomingCall(data, intent);
+        const callId = String(data.callId);
+        void dismissCallNotifications(callId);
         if (intent === 'decline') {
-          // Decline can complete without opening chat
+          // Decline immediately over HTTP — works even before socket connects
+          void declineCallHttp(callId);
           return;
         }
       }
@@ -407,6 +412,17 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [markHandled, navigateTo]);
+
+  // Notifee Answer / Decline (Android Instagram-style call tray)
+  useEffect(() => {
+    if (Platform.OS !== 'android' || isExpoGo) return;
+    return bindNotifeeCallEvents((data, intent) => {
+      const id = `notifee:${intent}:${data.notificationId || data.callId}`;
+      if (!markHandled(id)) return;
+      navigateTo(data, intent);
+      refreshNotifUnread();
+    });
+  }, [markHandled, navigateTo, refreshNotifUnread]);
 
   // Re-sync when the app returns to the foreground (token or count may have changed)
   useEffect(() => {

@@ -54,7 +54,7 @@ const ExploreContext = createContext<ExploreContextValue | null>(null);
 const SKIP_COOLDOWN_SEC = 3;
 
 const ANON_PEER: ExplorePeer = {
-  name: 'Anonymous',
+  name: '',
   publicId: '',
   photo: '',
   gender: '',
@@ -76,9 +76,12 @@ function normalizePrefs(raw: Partial<ExplorePrefs> | null | undefined): ExploreP
   };
 }
 
+/** Keep DP + public ID only — strip real display name. */
 function toAnonPeer(peer?: Partial<ExplorePeer> | null): ExplorePeer {
   return {
     ...ANON_PEER,
+    publicId: String(peer?.publicId || '').trim(),
+    photo: peer?.photo || '',
     gender: peer?.gender || '',
   };
 }

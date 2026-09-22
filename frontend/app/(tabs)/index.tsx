@@ -32,7 +32,7 @@ import WhatsAppAvatar, {
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { useStableBottomInset } from "../../hooks/useStableBottomInset";
-import { mediaIdentity, resolveMediaUrl } from "../../utils/media";
+import { durableMediaPathFromUrl, mediaIdentity } from "../../utils/media";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -303,7 +303,9 @@ export default function DiscoverScreen() {
 
   const [profilePhoto, setProfilePhoto] = React.useState<string | null>(() => {
     const cached = getCachedProfile()?.profile?.photo;
-    return resolveMediaUrl(cached) || cached || null;
+    const t = cached ? String(cached).trim() : "";
+    if (!t || t.startsWith("file://") || t.startsWith("content://")) return null;
+    return t;
   });
   const [nearbyUsers, setNearbyUsers] = React.useState<NearbyUser[]>([]);
   const [forYouUsers, setForYouUsers] = React.useState<NearbyUser[]>([]);
@@ -506,9 +508,18 @@ export default function DiscoverScreen() {
   }, [debouncedSearch]);
 
   // ── Load own profile photo for top-nav DP ───────────────────────
+  // Keep relative `/uploads/...` so MediaImage can fail over hosts after reinstall.
   const applyOwnPhoto = React.useCallback((raw?: string | null) => {
-    const resolved = resolveMediaUrl(raw) || (raw ? String(raw).trim() : "");
-    setProfilePhoto(resolved || null);
+    const trimmed = raw ? String(raw).trim() : "";
+    if (
+      !trimmed ||
+      trimmed.startsWith("file://") ||
+      trimmed.startsWith("content://")
+    ) {
+      setProfilePhoto(null);
+      return;
+    }
+    setProfilePhoto(trimmed);
   }, []);
 
   useFocusEffect(
@@ -786,7 +797,10 @@ export default function DiscoverScreen() {
     const u = lastProfileUpdate;
     const resolve = (photo?: string) => {
       if (!photo) return "";
-      return resolveMediaUrl(photo) || "";
+      // Keep relative `/api/media/...` or `/uploads/...` — MediaImage resolves + failover
+      const t = String(photo).trim();
+      if (t.startsWith("file://") || t.startsWith("content://")) return "";
+      return durableMediaPathFromUrl(t) || t;
     };
     const patch = (user: NearbyUser): NearbyUser => {
       if (user.id !== u.userId) return user;
@@ -1205,16 +1219,19 @@ export default function DiscoverScreen() {
             if (ia && ib) return ia === ib;
             return String(a || "") === String(b || "");
           };
-          const nextPhotos = Array.isArray(full.photos) ? full.photos : [];
+          const nextPhotos = Array.isArray(full.photos) ? full.photos : null;
           const prevPhotos = Array.isArray(base.photos) ? base.photos : [];
-          let photos = nextPhotos;
-          if (nextPhotos.length === 0 && prevPhotos.length > 0) {
-            photos = prevPhotos;
-          } else if (
-            nextPhotos.length === prevPhotos.length &&
-            nextPhotos.every((p, i) => same(p, prevPhotos[i]))
-          ) {
-            photos = prevPhotos;
+          let photos = prevPhotos;
+          if (nextPhotos) {
+            if (
+              nextPhotos.length === prevPhotos.length &&
+              nextPhotos.every((p, i) => same(p, prevPhotos[i]))
+            ) {
+              photos = prevPhotos;
+            } else {
+              // Includes [] — deleted posts must clear for viewers
+              photos = nextPhotos;
+            }
           }
           return {
             ...base,

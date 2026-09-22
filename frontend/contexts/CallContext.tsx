@@ -33,9 +33,11 @@ import {
 import {
   clearPendingIncomingCall,
   getPendingIncomingCall,
+  hydratePendingIncomingCall,
   setPendingIncomingCall,
   subscribePendingIncomingCall,
 } from '../utils/pendingIncomingCall';
+import { declineCallHttp } from '../utils/callHttpActions';
 import { setCallSessionActive } from '../utils/callSession';
 import { ensureSocketConnected } from '../utils/ensureSocketConnected';
 import {
@@ -176,13 +178,15 @@ function isBlankName(name?: string | null) {
 }
 
 function formatExplorePeer(p: any): CallPeerInfo {
-  // Explore is anonymous — never surface real name / photo / publicId in the call UI
+  // Explore: show DP + public ID only — never the real display name
+  const photo = resolveMediaUrl(p?.photo) || p?.photo || '';
+  const publicId = String(p?.publicId || '').trim();
   return {
-    id: 'explore',
-    name: 'Anonymous',
-    photo: '',
+    id: String(p?.id || 'explore'),
+    name: '',
+    photo,
     gender: p?.gender || '',
-    publicId: '',
+    publicId,
   };
 }
 
@@ -939,13 +943,23 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const callType: CallMediaType =
+      const payloadType: CallMediaType =
         payload.callType === 'video' ? 'video' : 'voice';
-      // Keep the type we placed the call with (invite), don't let payload flip it
-      const locked: CallMediaType =
-        callTypeRef.current === 'video' || callTypeRef.current === 'voice'
-          ? callTypeRef.current
-          : callType;
+      // Keep the type from startCall() only when WE already placed that invite.
+      // Explore matchmaking emits call:ringing without startCall(), so callTypeRef
+      // is still the idle default 'voice' — trusting the ref would force audio-only
+      // and the other side never receives our camera (black remote for them).
+      const placedOutgoing =
+        !payload.explore &&
+        !!stateRef.current.callId &&
+        stateRef.current.callId === callId &&
+        (stateRef.current.phase === 'outgoing' ||
+          stateRef.current.phase === 'ringing');
+      const locked: CallMediaType = placedOutgoing
+        ? callTypeRef.current === 'video'
+          ? 'video'
+          : 'voice'
+        : payloadType;
       callTypeRef.current = locked;
       const speakerOn = locked === 'video';
       const mergedPeer = payload.explore
@@ -1031,9 +1045,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       if (!explore) {
         Vibration.vibrate([0, 500, 400, 500], true);
         void startIncomingRingtone();
-        // Background / locked: shade with Answer / Decline
-        // (FCM skipped when a socket is live — see backend call:invite).
-        // Foreground uses CallOverlay instead of a duplicate tray.
+        // Background / locked: shade with Answer / Decline.
+        // FCM also fires (even with a live socket) so Doze / zombie sockets
+        // still wake the device — client dedupes by callId.
         if (AppState.currentState !== 'active') {
           void presentIncomingCallLocalNotification({
             callId: String(payload.callId),
@@ -1323,9 +1337,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const applyPendingIntent = (pending: ReturnType<typeof getPendingIncomingCall>) => {
       if (!pending) return;
       if (pending.intent === 'decline') {
+        void declineCallHttp(pending.callId);
         socket.emit('call:decline', { callId: pending.callId });
         clearPendingIncomingCall(pending.callId);
         pendingNotifIntentRef.current = null;
+        void dismissCallNotifications(pending.callId);
         if (stateRef.current.callId === pending.callId) {
           finishCall('decline');
         }
@@ -1357,6 +1373,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       if (phase !== 'idle' && phase !== 'ended') return;
       socket.emit('call:sync');
     };
+
+    // Cold start: restore Answer/Decline intent from disk, then sync
+    void hydratePendingIncomingCall().then((pending) => {
+      if (pending) applyPendingIntent(pending);
+      else syncIncoming();
+    });
 
     syncIncoming();
 

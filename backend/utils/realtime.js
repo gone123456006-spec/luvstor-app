@@ -3,6 +3,7 @@
  * Uses Socket.IO room `user:{id}` so Redis adapter fans out correctly.
  */
 const { toPersistentMediaUrl, sanitizePhotosArray } = require('./mediaUrl');
+const { keepIfUploadPresent } = require('./uploadExists');
 const { MAX_PROFILE_PHOTOS } = require('../config/profileLimits');
 
 function notifyUser(io, userId, event, payload) {
@@ -116,9 +117,11 @@ async function emitProfileUpdate(io, user) {
     publicId: user.publicId || '',
     name: user.name || '',
     bio: user.bio || '',
-    photo: toPersistentMediaUrl(user.photo) || '',
-    coverPhoto: toPersistentMediaUrl(user.coverPhoto) || '',
-    photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS),
+    photo: keepIfUploadPresent(toPersistentMediaUrl(user.photo)) || '',
+    coverPhoto: keepIfUploadPresent(toPersistentMediaUrl(user.coverPhoto)) || '',
+    photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS)
+      .map((p) => keepIfUploadPresent(p))
+      .filter(Boolean),
     age: user.age ?? null,
     gender: user.gender || '',
     height: user.height ?? null,

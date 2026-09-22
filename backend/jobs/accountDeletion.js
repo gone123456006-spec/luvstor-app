@@ -108,8 +108,14 @@ async function permanentlyDeleteAccounts() {
           $or: [{ userId }, { otherUserId: userId }],
         });
 
-        // Delete all uploads
+        // Delete all uploads (legacy index + MongoDB binaries)
         await Upload.deleteMany({ userId });
+        try {
+          const { deleteUserMedia } = require('../services/mediaStore');
+          await deleteUserMedia(userId);
+        } catch (mediaErr) {
+          console.warn('[Permanent Deletion] MediaAsset cleanup failed:', mediaErr);
+        }
 
         // Drop Discover history on both sides so the account leaves no trace
         // in anyone else's rotation.
@@ -122,7 +128,7 @@ async function permanentlyDeleteAccounts() {
         await NotificationLog.deleteMany({ userId });
         await DeviceToken.deleteMany({ userId });
 
-        // Delete user's upload folder if exists
+        // Delete user's upload folder if exists (legacy disk)
         const { getUploadsDir } = require('../utils/uploadsPath');
         const uploadDir = path.join(getUploadsDir(), String(userId));
         try {

@@ -945,29 +945,23 @@ module.exports = function initSocket(io) {
         // Deliver over socket when they have one (in-app UI / local tray)
         notifyUser(io, receiverId, 'call:incoming', incomingPayload);
 
-        // FCM only when no live socket — avoids duplicate trays while
-        // backgrounded-with-socket (local Answer/Decline owns that case).
-        // Killed / offline devices still get a high-priority data push.
-        const hasLiveSocket =
-          onlineSockets instanceof Map &&
-          onlineSockets.has(String(receiverId)) &&
-          (onlineSockets.get(String(receiverId))?.size || 0) > 0;
-
-        if (!hasLiveSocket) {
-          try {
-            const { pushIncomingCall } = require('../utils/callPush');
-            await pushIncomingCall(io, {
-              calleeId: receiverId,
-              caller: result.caller,
-              callerId: uid,
-              callId: result.session.callId,
-              callType: result.session.callType,
-              roomId: room,
-              calleeOnline,
-            });
-          } catch (err) {
-            console.error('incoming call push:', err.message);
-          }
+        // ALWAYS send high-priority FCM for incoming calls — even if a socket
+        // looks "live". Locked / Doze phones often keep a zombie Socket.IO
+        // connection while JS is frozen, so skipping FCM meant no tray at all.
+        // Client dedupes by callId (same Notifee / expo identifier).
+        try {
+          const { pushIncomingCall } = require('../utils/callPush');
+          await pushIncomingCall(io, {
+            calleeId: receiverId,
+            caller: result.caller,
+            callerId: uid,
+            callId: result.session.callId,
+            callType: result.session.callType,
+            roomId: room,
+            calleeOnline,
+          });
+        } catch (err) {
+          console.error('incoming call push:', err.message);
         }
 
         socket.emit('call:ringing', {

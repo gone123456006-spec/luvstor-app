@@ -44,92 +44,187 @@ export default function PrivacyPolicyScreen() {
         contentContainerStyle={styles.scroll}
       >
         <View style={styles.content}>
-          <Text style={styles.updated}>Last updated: {new Date().toLocaleDateString()}</Text>
+          <Text style={styles.updated}>Last updated: September 22, 2026</Text>
 
-          <Text style={styles.sectionTitle}>1. Information We Collect</Text>
           <Text style={styles.paragraph}>
-            Luvstor collects information you provide directly to us, including:
-          </Text>
-          <Text style={styles.bulletItem}>• Name, email address, and profile information</Text>
-          <Text style={styles.bulletItem}>• Photos and videos you upload</Text>
-          <Text style={styles.bulletItem}>• Messages, voice notes, and call data</Text>
-          <Text style={styles.bulletItem}>• Location data (with your permission) to show nearby matches</Text>
-          <Text style={styles.bulletItem}>• Device information and usage data</Text>
-
-          <Text style={styles.sectionTitle}>2. How We Use Your Information</Text>
-          <Text style={styles.paragraph}>
-            We use the information we collect to:
-          </Text>
-          <Text style={styles.bulletItem}>• Provide, maintain, and improve our services</Text>
-          <Text style={styles.bulletItem}>• Connect you with nearby matches based on your preferences</Text>
-          <Text style={styles.bulletItem}>• Send you notifications about matches, messages, and app updates</Text>
-          <Text style={styles.bulletItem}>• Verify your identity and prevent fraud</Text>
-          <Text style={styles.bulletItem}>• Ensure safety and security on the platform</Text>
-
-          <Text style={styles.sectionTitle}>3. Data Sharing and Disclosure</Text>
-          <Text style={styles.paragraph}>
-            We do not sell your personal data. We may share your information only in the following circumstances:
-          </Text>
-          <Text style={styles.bulletItem}>• With other users as part of the service (profile, photos, messages)</Text>
-          <Text style={styles.bulletItem}>• With service providers who assist in operating our platform</Text>
-          <Text style={styles.bulletItem}>• When required by law or to protect rights and safety</Text>
-          <Text style={styles.bulletItem}>• With your consent for specific purposes</Text>
-
-          <Text style={styles.sectionTitle}>4. Location Data</Text>
-          <Text style={styles.paragraph}>
-            Luvstor uses your location to show you nearby matches. You can control location access through your device settings. Disabling location may limit certain features like discovering nearby users.
+            Luvstor (“we”, “our”, or “us”) helps adults 18+ meet nearby, chat,
+            and connect. This Privacy Policy explains what information we
+            collect, how we use it, and the choices you have. By using Luvstor,
+            you agree to this policy.
           </Text>
 
-          <Text style={styles.sectionTitle}>5. Photos and Media</Text>
+          <Text style={styles.sectionTitle}>1. Who Can Use Luvstor</Text>
           <Text style={styles.paragraph}>
-            When you share photos or media in chats, we store them securely. Other users can view and download content you share with them. Be mindful of what you share.
+            Luvstor is only for users aged 18 and older. We do not knowingly
+            collect personal information from anyone under 18. If you believe a
+            minor has created an account, contact us and we will take action.
           </Text>
 
-          <Text style={styles.sectionTitle}>6. Voice and Video Calls</Text>
-          <Text style={styles.paragraph}>
-            Luvstor uses your device's microphone and camera for voice messages and video/audio calls. We do not record or store call content. Call metadata (duration, participants) may be retained for service quality.
+          <Text style={styles.sectionTitle}>2. Information You Provide</Text>
+          <Text style={styles.bulletItem}>
+            • Account details — email address and login verification codes
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Profile — name, age, gender, bio, interests, photos, cover photo,
+            and other details you choose to add
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Messages — text, photos, and voice notes you send to other users
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Optional Google sign-in details if you choose that login method
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Support messages and feedback you send us
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Payment-related details when you buy Premium or tokens (processed
+            by our payment partner; we do not store full card numbers)
           </Text>
 
-          <Text style={styles.sectionTitle}>7. Push Notifications</Text>
-          <Text style={styles.paragraph}>
-            We send push notifications for new messages, matches, and important updates. You can manage notification preferences in your device settings or within the app.
+          <Text style={styles.sectionTitle}>3. Information Collected Automatically</Text>
+          <Text style={styles.bulletItem}>
+            • Approximate or precise location (only with your permission) to
+            show people nearby
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Device information such as device type, OS, and a device
+            identifier used to keep your session secure
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Push notification token so we can alert you about messages,
+            calls, and important updates
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Basic usage and connection information needed to run chat, calls,
+            and discovery reliably
           </Text>
 
-          <Text style={styles.sectionTitle}>8. Data Security</Text>
-          <Text style={styles.paragraph}>
-            We implement industry-standard security measures to protect your data, including encryption of sensitive information. However, no method of transmission over the internet is 100% secure.
+          <Text style={styles.sectionTitle}>4. How We Use Your Information</Text>
+          <Text style={styles.bulletItem}>• Create and manage your account</Text>
+          <Text style={styles.bulletItem}>
+            • Show nearby people and personalized discovery based on your
+            preferences
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Deliver chat, voice notes, voice calls, and video calls
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Send notifications about messages, calls, likes, and account
+            activity
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Process Premium and token purchases
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Keep the community safer (fraud, abuse, and spam prevention)
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Improve app quality and fix problems
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Communicate about account, security, and service updates
           </Text>
 
-          <Text style={styles.sectionTitle}>9. Data Retention</Text>
+          <Text style={styles.sectionTitle}>5. Location</Text>
           <Text style={styles.paragraph}>
-            We retain your data for as long as your account is active or as needed to provide services. You can request deletion of your account and data at any time through Account Settings.
+            With your permission, Luvstor uses your location to show nearby
+            people and distances. You can turn location off in your device
+            settings. Without location, nearby discovery may be limited or
+            unavailable.
           </Text>
 
-          <Text style={styles.sectionTitle}>10. Your Rights</Text>
+          <Text style={styles.sectionTitle}>6. Photos, Voice Notes & Media</Text>
           <Text style={styles.paragraph}>
-            You have the right to:
-          </Text>
-          <Text style={styles.bulletItem}>• Access, update, or delete your personal information</Text>
-          <Text style={styles.bulletItem}>• Control location and notification permissions</Text>
-          <Text style={styles.bulletItem}>• Request a copy of your data</Text>
-          <Text style={styles.bulletItem}>• Delete your account permanently</Text>
-
-          <Text style={styles.sectionTitle}>11. Children's Privacy</Text>
-          <Text style={styles.paragraph}>
-            Luvstor is not intended for users under 18 years of age. We do not knowingly collect information from children. If you believe a child has provided us with personal information, please contact us.
+            Profile photos, cover photos, gallery images, chat images, and
+            voice notes are stored on our servers so they can be shown to you
+            and to people you share them with. Content you send in chat can be
+            seen by the people in that conversation. Please only share what you
+            are comfortable sharing.
           </Text>
 
-          <Text style={styles.sectionTitle}>12. Changes to This Policy</Text>
+          <Text style={styles.sectionTitle}>7. Voice & Video Calls</Text>
           <Text style={styles.paragraph}>
-            We may update this Privacy Policy from time to time. We will notify you of significant changes through the app or via email.
+            Calls use your microphone and (for video) your camera. We do not
+            record or store the live call audio or video content. We may keep
+            limited call details such as who called whom, call type, and timing
+            so the service can work and be supported.
           </Text>
 
-          <Text style={styles.sectionTitle}>13. Contact Us</Text>
+          <Text style={styles.sectionTitle}>8. Notifications</Text>
           <Text style={styles.paragraph}>
-            If you have questions about this Privacy Policy, please contact us at:
+            If you allow notifications, we may send alerts for new messages,
+            incoming calls, likes, matches, and important account notices. You
+            can change notification permission in your device settings.
+          </Text>
+
+          <Text style={styles.sectionTitle}>9. How We Share Information</Text>
+          <Text style={styles.paragraph}>
+            We do not sell your personal information. We may share information:
+          </Text>
+          <Text style={styles.bulletItem}>
+            • With other users, as part of normal use (your profile, photos you
+            publish, messages you send them)
+          </Text>
+          <Text style={styles.bulletItem}>
+            • With trusted service providers who help us run the app (for
+            example hosting, email delivery, push delivery, and payments)
+          </Text>
+          <Text style={styles.bulletItem}>
+            • When required by law, or to protect users, rights, and safety
+          </Text>
+          <Text style={styles.bulletItem}>
+            • With your consent for a specific purpose
+          </Text>
+
+          <Text style={styles.sectionTitle}>10. Data Security</Text>
+          <Text style={styles.paragraph}>
+            We use reasonable technical and organizational measures to protect
+            your information. No online service is completely secure. Please
+            protect your login email and device.
+          </Text>
+
+          <Text style={styles.sectionTitle}>11. How Long We Keep Data</Text>
+          <Text style={styles.paragraph}>
+            We keep your information while your account is active and as needed
+            to provide the service. If you delete your account, we follow our
+            Account Deletion Policy (including a short grace period, then
+            permanent removal of personal account data, subject to limited legal
+            or safety retention).
+          </Text>
+
+          <Text style={styles.sectionTitle}>12. Your Choices & Rights</Text>
+          <Text style={styles.bulletItem}>• Update your profile and photos in the app</Text>
+          <Text style={styles.bulletItem}>
+            • Control location, camera, microphone, and notification permissions
+            on your device
+          </Text>
+          <Text style={styles.bulletItem}>• Block users and manage privacy settings</Text>
+          <Text style={styles.bulletItem}>
+            • Delete your account from Settings → Account → Delete account
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Contact us to ask questions about your data
+          </Text>
+
+          <Text style={styles.sectionTitle}>13. Children’s Privacy</Text>
+          <Text style={styles.paragraph}>
+            Luvstor is not directed to children. Users must be 18 or older.
+          </Text>
+
+          <Text style={styles.sectionTitle}>14. Changes to This Policy</Text>
+          <Text style={styles.paragraph}>
+            We may update this Privacy Policy from time to time. We will post
+            the updated version in the app and change the “Last updated” date.
+            Important changes may also be communicated in-app or by email.
+          </Text>
+
+          <Text style={styles.sectionTitle}>15. Contact Us</Text>
+          <Text style={styles.paragraph}>
+            Questions about privacy or your data:
           </Text>
           <Text style={styles.bulletItem}>• Email: support@luvstor.com</Text>
-          <Text style={styles.bulletItem}>• In-App: Settings → Help & Support</Text>
+          <Text style={styles.bulletItem}>• In-app: Settings → Help & Support</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

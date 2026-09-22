@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -44,7 +43,7 @@ import {
     getLocalProfile,
     saveLocalProfile,
 } from "../../utils/auth";
-import { resolveMediaUrl } from "../../utils/media";
+import { durableMediaPathFromUrl, resolveMediaUrl } from "../../utils/media";
 import {
     getCachedProfile,
     preloadProfile,
@@ -240,10 +239,10 @@ export default function ProfileScreen() {
     return resolveMediaUrl(url) || url;
   };
 
-  /** Server stores relative paths (/uploads/...) so they survive IP changes. */
+  /** Server stores relative `/api/media/{id}` (or legacy `/uploads/...`). */
   const toRelative = (url?: string | null) => {
     if (!url) return "";
-    const clean = url.split("?")[0];
+    const clean = String(url).trim().split("?")[0];
     if (
       clean.startsWith("file://") ||
       clean.startsWith("content://") ||
@@ -251,31 +250,18 @@ export default function ProfileScreen() {
     ) {
       return "";
     }
-    try {
-      const parsed = new URL(clean);
-      if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
-    } catch {
-      /* relative path */
-    }
-    const base = getApiBase();
-    return clean.startsWith(base) ? clean.slice(base.length) : clean;
+    return durableMediaPathFromUrl(clean) || "";
   };
 
-  /** Upload a local image, returns the server-relative url. */
+  /** Upload a local image, returns the server-relative `/api/media/{id}` url. */
   const uploadImage = async (uri: string): Promise<string | null> => {
     const token = await getAuthToken();
     if (!token) {
       Alert.alert("Error", "Please log in to upload photo");
       return null;
     }
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    const result = await apiRequest("/api/upload/image", token, {
-      method: "POST",
-      body: JSON.stringify({ base64: `data:image/jpeg;base64,${base64}` }),
-    });
-    return (result as any)?.url || null;
+    const { uploadImageDurable } = await import("../../utils/uploadMedia");
+    return uploadImageDurable(uri, token);
   };
 
   // ── Photo Upload Functions ──
@@ -743,19 +729,41 @@ export default function ProfileScreen() {
   // ── Posts gallery (max 6) — independent from cover + DP ──
   const persistGallery = async (next: string[]) => {
     const token = await getAuthToken();
-    if (!token) return;
+    if (!token) throw new Error("Not logged in");
     const relative = next
       .map(toRelative)
-      .filter((u) => u.startsWith("/uploads/"));
+      .filter(Boolean);
 
     // Don't wipe server photos if we only have local previews still uploading
     if (!relative.length && next.some((u) => String(u).startsWith("file:"))) {
-      return;
+      throw new Error("Photo is still uploading — try again in a moment");
     }
 
     const res = await apiRequest("/api/users/me", token, {
       method: "PUT",
       body: JSON.stringify({ photos: relative }),
+    });
+
+    // Prefer server-confirmed paths (authoritative after sanitize)
+    const savedRelative = Array.isArray(res?.photos)
+      ? (res.photos as string[])
+          .map(toRelative)
+          .filter(Boolean)
+      : Array.isArray(res?.profile?.photos)
+        ? (res.profile.photos as string[])
+            .map(toRelative)
+            .filter(Boolean)
+        : relative;
+
+    const savedDisplay = savedRelative.map((u) => toAbsolute(u) || u);
+    setGallery(savedDisplay);
+    const prevSnap = getCachedProfile();
+    updateCachedProfile({
+      gallery: savedDisplay,
+      profile: {
+        ...(prevSnap?.profile || {}),
+        photos: savedRelative,
+      } as any,
     });
 
     const granted = Number(res?.galleryPostTokensGranted || 0);
@@ -769,8 +777,13 @@ export default function ProfileScreen() {
     const authUser = await getCurrentAuthUser();
     if (authUser?.email) {
       const current = await getLocalProfile(authUser.email);
-      await saveLocalProfile(authUser.email, { ...current, photos: relative });
+      await saveLocalProfile(authUser.email, {
+        ...current,
+        photos: savedRelative,
+      });
     }
+
+    return savedDisplay;
   };
 
   const pickGalleryImage = async (index: number, fromCamera: boolean) => {
@@ -801,6 +814,7 @@ export default function ProfileScreen() {
     if (result.canceled || !result.assets?.[0]) return;
 
     const localUri = result.assets[0].uri;
+    const previousRemote = gallery[index] || "";
     setGallerySlotBusy(index);
     // Show the picked image immediately (file://) — don't wait on upload
     setGallery((prev) => {
@@ -813,7 +827,7 @@ export default function ProfileScreen() {
       const url = await uploadImage(localUri);
       if (!url) throw new Error("Upload failed");
 
-      const remote = toAbsolute(url) || localUri;
+      const remote = toAbsolute(url) || url;
       let compact: string[] = [];
       setGallery((prev) => {
         const next = [...prev];
@@ -823,9 +837,24 @@ export default function ProfileScreen() {
         return compact;
       });
       await persistGallery(compact);
-      updateCachedProfile({ gallery: compact });
     } catch (e: any) {
-      // Keep the local preview visible even if upload failed
+      // Never leave file:// as the "post" — others can't see device URIs
+      setGallery((prev) => {
+        const next = [...prev];
+        const idx = next.findIndex((u) => u === localUri);
+        if (idx >= 0) {
+          if (
+            previousRemote &&
+            !previousRemote.startsWith("file:") &&
+            !previousRemote.startsWith("content:")
+          ) {
+            next[idx] = previousRemote;
+          } else {
+            next.splice(idx, 1);
+          }
+        }
+        return next.filter(Boolean).slice(0, MAX_PROFILE_GALLERY);
+      });
       Alert.alert("Upload failed", e?.message || "Please try again.");
     } finally {
       setGallerySlotBusy(null);
@@ -840,11 +869,30 @@ export default function ProfileScreen() {
         text: "Remove",
         style: "destructive",
         onPress: async () => {
+          const previous = [...gallery];
           const next = gallery.filter((_, i) => i !== index);
           setGallery(next);
+          const prevSnap = getCachedProfile();
+          updateCachedProfile({
+            gallery: next,
+            profile: {
+              ...(prevSnap?.profile || {}),
+              photos: next.map(toRelative).filter(Boolean),
+            } as any,
+          });
           try {
             await persistGallery(next);
           } catch {
+            setGallery(previous);
+            updateCachedProfile({
+              gallery: previous,
+              profile: {
+                ...(getCachedProfile()?.profile || {}),
+                photos: previous
+                  .map(toRelative)
+                  .filter(Boolean),
+              } as any,
+            });
             Alert.alert("Error", "Could not remove photo");
           }
         },

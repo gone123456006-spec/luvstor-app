@@ -137,6 +137,10 @@ function ensureAndroidColors() {
 <resources>
   <color name="splashscreen_background">${splashBg}</color>
   <color name="iconBackground">${iconBg}</color>
+  <color name="colorPrimary">${iconBg}</color>
+  <color name="colorPrimaryDark">${iconBg}</color>
+  <color name="colorAccent">${iconBg}</color>
+  <color name="notification_icon_color">${iconBg}</color>
 </resources>
 `;
 
@@ -146,10 +150,12 @@ function ensureAndroidColors() {
   }
   if (
     !current.includes('name="iconBackground"') ||
-    !current.includes('name="splashscreen_background"')
+    !current.includes('name="splashscreen_background"') ||
+    !current.includes('name="colorPrimary"') ||
+    !current.includes('name="notification_icon_color"')
   ) {
     fs.writeFileSync(colorsPath, desired);
-    console.log("✔ Ensured android colors.xml (splash + iconBackground)");
+    console.log("✔ Ensured android colors.xml (splash + theme + notification colors)");
   }
 }
 
@@ -256,6 +262,7 @@ function patchAndroidGradleConfig() {
   ensureAndroidColors();
   ensureAndroidCallPermissions();
   ensureAndroidPackageAlignment();
+  ensureReleaseSigningConfig();
   const propsPath = path.join(androidDir, "gradle.properties");
   if (fs.existsSync(propsPath)) {
     let props = fs.readFileSync(propsPath, "utf8");
@@ -421,6 +428,143 @@ function findFile(dir, predicate) {
   return null;
 }
 
+/**
+ * Persist upload-keystore signing block across expo prebuild regenerations.
+ * Expects android/keystore.properties (see keystore.properties.example).
+ */
+function ensureReleaseSigningConfig() {
+  const gradlePath = path.join(androidDir, "app", "build.gradle");
+  if (!fs.existsSync(gradlePath)) return;
+
+  let gradle = fs.readFileSync(gradlePath, "utf8");
+  if (
+    gradle.includes("keystore.properties") &&
+    gradle.includes("signingConfigs.release")
+  ) {
+    return;
+  }
+
+  const marker = "RELEASE_SIGNING_VIA_KEYSTORE_PROPERTIES";
+  if (gradle.includes(marker)) return;
+
+  // Replace the whole signingConfigs + release signingConfig.debug block with
+  // a properties-driven release config (idempotent enough for Expo templates).
+  const injection = `
+    // ${marker}
+    def keystorePropertiesFile = rootProject.file("keystore.properties")
+    def keystoreProperties = new Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+    }
+`;
+
+  if (!gradle.includes("keystorePropertiesFile")) {
+    gradle = gradle.replace(
+      /signingConfigs\s*\{/,
+      `${injection}    signingConfigs {`,
+    );
+  }
+
+  if (!/signingConfigs\s*\{[\s\S]*?release\s*\{/.test(gradle)) {
+    gradle = gradle.replace(
+      /signingConfigs\s*\{([\s\S]*?)(\n    \})/,
+      (match, body, close) => {
+        if (body.includes("release {")) return match;
+        return `signingConfigs {${body}
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }${close}`;
+      },
+    );
+  }
+
+  // Prefer release keystore when properties exist
+  gradle = gradle.replace(
+    /buildTypes\s*\{([\s\S]*?)release\s*\{([\s\S]*?)signingConfig\s+signingConfigs\.debug/,
+    (match) =>
+      match.replace(
+        "signingConfig signingConfigs.debug",
+        `signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug`,
+      ),
+  );
+
+  // If release block still hard-codes debug only, swap it
+  if (
+    /release\s*\{[\s\S]*?signingConfig\s+signingConfigs\.debug/.test(gradle) &&
+    !gradle.includes("signingConfigs.release")
+  ) {
+    console.warn(
+      "⚠ Could not fully patch release signing automatically — edit android/app/build.gradle manually.",
+    );
+  }
+
+  fs.writeFileSync(gradlePath, gradle);
+  console.log("✔ Ensured release signing via android/keystore.properties");
+}
+
+function assertReleaseSigningReady() {
+  const propsPath = path.join(androidDir, "keystore.properties");
+  const examplePath = path.join(root, "keystore.properties.example");
+  const allow =
+    process.env.ALLOW_DEBUG_SIGNED_RELEASE === "1" ||
+    process.env.ALLOW_DEBUG_SIGNED_RELEASE === "true";
+
+  if (fs.existsSync(propsPath)) {
+    const props = fs.readFileSync(propsPath, "utf8");
+    const storeFile = (props.match(/^storeFile=(.+)$/m) || [])[1]?.trim();
+    if (storeFile) {
+      const storePath = path.isAbsolute(storeFile)
+        ? storeFile
+        : path.join(androidDir, storeFile);
+      if (!fs.existsSync(storePath)) {
+        console.error(`✖ Keystore file missing: ${storePath}`);
+        console.error("  Fix storeFile= in android/keystore.properties");
+        process.exit(1);
+      }
+    }
+    console.log("✔ Release keystore configured (android/keystore.properties)");
+    return;
+  }
+
+  console.warn("");
+  console.warn("⚠ No android/keystore.properties — release would use debug signing.");
+  console.warn("  1) Create keystore (see instructions printed below)");
+  console.warn(
+    `  2) Copy ${examplePath} → android/keystore.properties and fill passwords`,
+  );
+  console.warn("");
+
+  if (mode === "bundle" || mode === "aab") {
+    if (!allow) {
+      console.error("✖ Refusing production AAB without an upload keystore.");
+      console.error("");
+      console.error("Create one (from frontend/):");
+      console.error("  keytool -genkeypair -v \\");
+      console.error("    -storetype PKCS12 \\");
+      console.error("    -keystore android/app/luvstor-upload.keystore \\");
+      console.error("    -alias luvstor-upload \\");
+      console.error("    -keyalg RSA -keysize 2048 -validity 10000");
+      console.error("");
+      console.error("Then:");
+      console.error(
+        "  cp keystore.properties.example android/keystore.properties",
+      );
+      console.error("  # edit passwords in android/keystore.properties");
+      console.error("  npm run android:bundle");
+      console.error("");
+      console.error(
+        "Sideload-only override: ALLOW_DEBUG_SIGNED_RELEASE=1 (not for Play)",
+      );
+      process.exit(1);
+    }
+  }
+}
+
 function main() {
   console.log("═══════════════════════════════════════");
   console.log("  Luvstor Android local release build");
@@ -453,6 +597,14 @@ function main() {
 
   ensureAndroidProject();
   syncSplashAndIcons();
+  ensureReleaseSigningConfig();
+  assertReleaseSigningReady();
+
+  if (mode === "bundle" || mode === "aab") {
+    console.log(
+      "✔ Cleartext HTTP disabled in app.json (production HTTPS only).",
+    );
+  }
 
   if (mode === "apk") {
     gradleTask("assembleRelease");

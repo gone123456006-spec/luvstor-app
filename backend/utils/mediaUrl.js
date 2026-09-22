@@ -2,10 +2,14 @@
  * Persistent media URLs for profile / posts / chat.
  * Device URIs (file://, content://) and LAN/localhost absolutes must never
  * be the source of truth in Mongo — they break after logout / reinstall.
+ *
+ * Preferred durable form: `/api/media/{ObjectId}` (bytes in MongoDB).
+ * Legacy: `/uploads/...` (disk) still accepted for older rows.
  */
 
 const DEVICE_URI_RE = /^(file:|content:|data:|ph:|assets-library:|blob:)/i;
 const UPLOADS_PATH_RE = /^\/uploads\/[A-Za-z0-9_\-./]+$/;
+const MEDIA_API_PATH_RE = /^\/api\/media\/[a-fA-F0-9]{24}(?:\.[a-z0-9]+)?$/i;
 
 function isPrivateOrLocalHost(hostname) {
   const h = String(hostname || '').toLowerCase();
@@ -29,13 +33,19 @@ function isDeviceLocalUri(url) {
   return DEVICE_URI_RE.test(String(url || '').trim());
 }
 
+function normalizeMediaApiPath(pathname) {
+  const raw = String(pathname || '').split('?')[0].split('#')[0];
+  const m = raw.match(/^\/api\/media\/([a-fA-F0-9]{24})/i);
+  if (!m) return '';
+  return `/api/media/${m[1]}`;
+}
+
 /**
  * Normalize any client/server media string to a durable form:
- * - `/uploads/...` relative path (preferred for app uploads)
+ * - `/api/media/{id}` (MongoDB binary — preferred)
+ * - `/uploads/...` relative path (legacy disk)
  * - remote https:// URL (Google / CDN)
  * - '' when empty or not persistable (file://, broken, etc.)
- *
- * Never returns file:// / content:// / localhost absolutes.
  */
 function toPersistentMediaUrl(url) {
   if (url == null) return '';
@@ -45,21 +55,22 @@ function toPersistentMediaUrl(url) {
 
   const noQuery = raw.split('?')[0].split('#')[0];
 
+  const mediaApi = normalizeMediaApiPath(noQuery);
+  if (mediaApi) return mediaApi;
+
   if (UPLOADS_PATH_RE.test(noQuery) || noQuery.startsWith('/uploads/')) {
-    // Collapse accidental double slashes but keep `/uploads/...`
     return noQuery.replace(/\/{2,}/g, '/').replace(/^([^/])/, '/$1');
   }
 
   if (/^https?:\/\//i.test(raw)) {
     try {
       const parsed = new URL(raw);
+      const fromApi = normalizeMediaApiPath(parsed.pathname);
+      if (fromApi) return fromApi;
       if (parsed.pathname.startsWith('/uploads/')) {
-        // LAN / localhost absolute → store relative so any API host can serve it
         if (isPrivateOrLocalHost(parsed.hostname)) {
           return parsed.pathname;
         }
-        // Public host absolute for /uploads — still prefer relative path
-        // so MEDIA_BASE / API host changes don't break images
         return parsed.pathname;
       }
       // External avatar (Google, etc.)
@@ -69,7 +80,6 @@ function toPersistentMediaUrl(url) {
     }
   }
 
-  // Reject bare tokens / garbage
   return '';
 }
 
@@ -117,4 +127,6 @@ module.exports = {
   isPersistentMediaUrl,
   sanitizeProfileMediaUpdate,
   sanitizePhotosArray,
+  MEDIA_API_PATH_RE,
+  normalizeMediaApiPath,
 };

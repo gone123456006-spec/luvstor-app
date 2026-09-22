@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { apiRequest, fetchWithTimeout, getApiBase } from "./api";
-import { RazorpayCheckout, isRazorpayAvailable } from "./razorpay.native";
+import {
+  RazorpayCheckout,
+  isRazorpayAvailable,
+  razorpayCheckoutMethods,
+} from "./razorpay.native";
 
 export type SubscriptionPlanId =
   | "free"
@@ -178,6 +182,7 @@ export async function initiateSubscriptionPurchase(
       },
       theme: { color: "#6750A4" },
       retry: { enabled: true, max_count: 2 },
+      ...razorpayCheckoutMethods(),
     });
 
     try {

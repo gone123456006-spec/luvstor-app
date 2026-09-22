@@ -133,10 +133,14 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false,
+            "extraMavenRepos": [
+              "../../node_modules/@notifee/react-native/android/libs"
+            ]
           }
         }
       ],
+      "./plugins/withNotifee",
       "./plugins/withRazorpay",
       [
         "expo-location",
@@ -181,7 +185,7 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/spashscreen.png",
-          "imageWidth": 220,
+          "imageWidth": 160,
           "resizeMode": "contain",
           "backgroundColor": "#5A2FC7",
           "dark": {

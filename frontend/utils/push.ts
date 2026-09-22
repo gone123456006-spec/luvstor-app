@@ -173,7 +173,8 @@ export async function ensureCallNotificationCategory(): Promise<void> {
         identifier: CALL_ACTION_DECLINE,
         buttonTitle: 'Decline',
         options: {
-          opensAppToForeground: false,
+          // Must open app so JS can decline via HTTP/socket (shade-only often never runs)
+          opensAppToForeground: true,
           isDestructive: true,
           isAuthenticationRequired: false,
         },
@@ -516,16 +517,38 @@ export async function presentIncomingCallLocalNotification(opts: {
   callerId: string;
   callerPhoto?: string;
 }): Promise<void> {
+  // Clear any FCM lock-screen stub for this call before Answer/Decline tray
+  try {
+    await dismissCallNotifications(opts.callId);
+  } catch {
+    /* ignore */
+  }
+
+  // Prefer Notifee on Android (circular avatar + CALL category)
+  if (Platform.OS === 'android') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { displayIncomingCallNotifee } = require('./callNotifee') as typeof import('./callNotifee');
+      const shown = await displayIncomingCallNotifee(opts);
+      if (shown) return;
+    } catch {
+      /* fall through to expo-notifications */
+    }
+  }
+
   const Notifications = loadNotifications();
   if (!Notifications) return;
   try {
     await ensureCallNotificationCategory();
-    const kind = opts.callType === 'video' ? 'video call' : 'voice call';
+    // Instagram-style: name as title, call type as body
     const title = (opts.callerName || 'Incoming call').trim() || 'Incoming call';
+    const body = opts.callType === 'video' ? 'Video call' : 'Audio call';
+    const photo = String(opts.callerPhoto || '').trim();
     await Notifications.scheduleNotificationAsync({
       content: {
         title,
-        body: `Incoming ${kind}`,
+        subtitle: 'Luvstor · now',
+        body,
         sound: true,
         categoryIdentifier: INCOMING_CALL_CATEGORY,
         data: {
@@ -535,7 +558,7 @@ export async function presentIncomingCallLocalNotification(opts: {
           userId: opts.callerId,
           actorId: opts.callerId,
           actorName: title,
-          actorPhoto: opts.callerPhoto || '',
+          actorPhoto: photo,
           callType: opts.callType,
           categoryId: INCOMING_CALL_CATEGORY,
           groupKey: `call:${opts.callId}`,
@@ -543,10 +566,23 @@ export async function presentIncomingCallLocalNotification(opts: {
           screen: 'call',
           deepLink: `/messages/${opts.callerId}`,
         },
+        // iOS attachment shows circular-ish avatar when expanded
+        ...(photo && /^https?:\/\//i.test(photo)
+          ? {
+              attachments: [
+                {
+                  identifier: `caller-${opts.callId}`,
+                  url: photo,
+                  typeHint: 'public.jpeg',
+                },
+              ],
+            }
+          : {}),
         ...(Platform.OS === 'android'
           ? {
               channelId: 'calls' as const,
               sticky: true,
+              color: '#5A2FC7',
               priority: Notifications.AndroidNotificationPriority?.MAX,
             }
           : {}),
@@ -586,12 +622,14 @@ export async function presentChatMessageNotification(opts: {
     : `chat:${senderId}`;
   const title = (opts.senderName || 'New message').trim() || 'New message';
   const body = (opts.body || 'New message').trim() || 'New message';
+  const photo = String(opts.senderPhoto || '').trim();
 
   try {
     await ensureChatReplyCategory();
     await Notifications.scheduleNotificationAsync({
       content: {
         title,
+        subtitle: 'now',
         body,
         sound: true,
         categoryIdentifier: CHAT_REPLY_CATEGORY,
@@ -605,15 +643,27 @@ export async function presentChatMessageNotification(opts: {
           actorId: senderId,
           userId: senderId,
           actorName: title,
-          actorPhoto: opts.senderPhoto || '',
+          actorPhoto: photo,
           actorGender: opts.senderGender || '',
           screen: 'messages',
           messageId: opts.messageId || '',
           roomId: opts.roomId || '',
         },
+        ...(photo && /^https?:\/\//i.test(photo)
+          ? {
+              attachments: [
+                {
+                  identifier: `msg-${senderId}`,
+                  url: photo,
+                  typeHint: 'public.jpeg',
+                },
+              ],
+            }
+          : {}),
         ...(Platform.OS === 'android'
           ? {
               channelId: 'messages' as const,
+              color: '#5A2FC7',
               priority: Notifications.AndroidNotificationPriority?.MAX,
               sticky: false,
             }
@@ -634,9 +684,16 @@ export async function presentChatMessageNotification(opts: {
 /** Dismiss local/tray notifications for a call once answered or ended. */
 export async function dismissCallNotifications(callId?: string | null): Promise<void> {
   if (!callId) return;
+  const id = String(callId);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { cancelIncomingCallNotifee } = require('./callNotifee') as typeof import('./callNotifee');
+    void cancelIncomingCallNotifee(id);
+  } catch {
+    /* ignore */
+  }
   const Notifications = loadNotifications();
   if (!Notifications) return;
-  const id = String(callId);
   try {
     await Notifications.dismissNotificationAsync(`call:${id}`).catch(() => undefined);
     const presented = await Notifications.getPresentedNotificationsAsync();

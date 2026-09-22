@@ -566,6 +566,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           ...(payload.photo !== undefined
             ? { photo: payload.photo ? String(payload.photo) : '' }
             : {}),
+          ...(payload.coverPhoto !== undefined
+            ? { coverPhoto: payload.coverPhoto ? String(payload.coverPhoto) : '' }
+            : {}),
           ...(Array.isArray(payload.photos) ? { photos: payload.photos } : {}),
           ...(payload.age !== undefined ? { age: payload.age ?? null } : {}),
           ...(payload.gender != null ? { gender: String(payload.gender) } : {}),

@@ -45,95 +45,136 @@ export default function AccountDeletionScreen() {
         contentContainerStyle={styles.scroll}
       >
         <View style={styles.content}>
-          <Text style={styles.updated}>Last updated: {new Date().toLocaleDateString()}</Text>
+          <Text style={styles.updated}>Last updated: September 22, 2026</Text>
 
           <Text style={styles.sectionTitle}>Your Right to Delete</Text>
           <Text style={styles.paragraph}>
-            At Luvstor, we believe you have full control over your data. You can permanently delete your account at any time through the app settings.
+            You can deactivate and permanently delete your Luvstor account at
+            any time. You stay in control of your data.
           </Text>
 
-          <Text style={styles.sectionTitle}>How to Delete Your Account</Text>
-          <Text style={styles.paragraph}>
-            To delete your Luvstor account:
+          <Text style={styles.sectionTitle}>How to Delete in the App</Text>
+          <Text style={styles.bulletItem}>1. Open Luvstor</Text>
+          <Text style={styles.bulletItem}>2. Go to Settings → Account</Text>
+          <Text style={styles.bulletItem}>3. Tap Delete account</Text>
+          <Text style={styles.bulletItem}>
+            4. Confirm that you understand deletion is permanent after the grace
+            period
           </Text>
-          <Text style={styles.bulletItem}>1. Open the Luvstor app</Text>
-          <Text style={styles.bulletItem}>2. Go to Profile → Settings</Text>
-          <Text style={styles.bulletItem}>3. Tap on "Account"</Text>
-          <Text style={styles.bulletItem}>4. Scroll down and tap "Delete account"</Text>
-          <Text style={styles.bulletItem}>5. Follow the on-screen confirmation steps</Text>
+          <Text style={styles.bulletItem}>5. Choose a reason (optional)</Text>
+          <Text style={styles.bulletItem}>6. Complete the final confirmation</Text>
 
-          <Text style={styles.sectionTitle}>What Gets Deleted</Text>
+          <Text style={styles.sectionTitle}>What Happens Right Away</Text>
           <Text style={styles.paragraph}>
-            When you delete your account, the following data is permanently removed:
+            When you confirm deletion:
           </Text>
-          <Text style={styles.bulletItem}>• Your profile information (name, photos, bio)</Text>
-          <Text style={styles.bulletItem}>• Your matches and likes</Text>
-          <Text style={styles.bulletItem}>• Your messages and chat history</Text>
-          <Text style={styles.bulletItem}>• Your voice messages and media</Text>
-          <Text style={styles.bulletItem}>• Your location data and preferences</Text>
-          <Text style={styles.bulletItem}>• Your subscription details (active subscriptions are cancelled)</Text>
+          <Text style={styles.bulletItem}>• Your account is deactivated</Text>
+          <Text style={styles.bulletItem}>
+            • Your profile is hidden from other users
+          </Text>
+          <Text style={styles.bulletItem}>
+            • You stop appearing in Nearby, search, and discovery
+          </Text>
+          <Text style={styles.bulletItem}>• You are logged out</Text>
+          <Text style={styles.bulletItem}>
+            • Permanent deletion is scheduled for 7 days later
+          </Text>
 
-          <Text style={styles.sectionTitle}>What Happens Immediately</Text>
+          <Text style={styles.sectionTitle}>7-Day Grace Period</Text>
           <Text style={styles.paragraph}>
-            Once you confirm account deletion:
+            You have 7 days to change your mind. During this time:
           </Text>
-          <Text style={styles.bulletItem}>• You will be logged out immediately</Text>
-          <Text style={styles.bulletItem}>• Your profile will no longer be visible to other users</Text>
-          <Text style={styles.bulletItem}>• You will no longer appear in matches or search results</Text>
-          <Text style={styles.bulletItem}>• Other users' conversations with you will show that you deleted your account</Text>
+          <Text style={styles.bulletItem}>
+            • Your account stays hidden from others
+          </Text>
+          <Text style={styles.bulletItem}>
+            • You can restore your account by logging in again
+          </Text>
+          <Text style={styles.bulletItem}>
+            • We may send a reminder before permanent deletion
+          </Text>
+          <Text style={styles.bulletItem}>
+            • After 7 days, deletion becomes permanent and cannot be undone
+          </Text>
 
-          <Text style={styles.sectionTitle}>Data Retention Period</Text>
+          <Text style={styles.sectionTitle}>What Is Permanently Removed</Text>
           <Text style={styles.paragraph}>
-            Your data is deleted within 30 days of account deletion. During this period:
+            After the grace period ends, we permanently remove account data
+            including:
           </Text>
-          <Text style={styles.bulletItem}>• Your account is deactivated and hidden from all users</Text>
-          <Text style={styles.bulletItem}>• You can reactivate your account by logging in again (within 30 days only)</Text>
-          <Text style={styles.bulletItem}>• After 30 days, deletion is permanent and cannot be reversed</Text>
+          <Text style={styles.bulletItem}>
+            • Profile information (name, bio, preferences)
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Photos, cover photo, and gallery media tied to your account
+          </Text>
+          <Text style={styles.bulletItem}>• Matches, likes, and friendship data</Text>
+          <Text style={styles.bulletItem}>
+            • Chats, text messages, images, and voice notes associated with your
+            account
+          </Text>
+          <Text style={styles.bulletItem}>• Location and discovery history for your account</Text>
+          <Text style={styles.bulletItem}>• Device push tokens for your account</Text>
+          <Text style={styles.bulletItem}>
+            • In-app notifications for your account
+          </Text>
 
-          <Text style={styles.sectionTitle}>Legal and Safety Retention</Text>
+          <Text style={styles.sectionTitle}>What May Be Kept Briefly or Separately</Text>
           <Text style={styles.paragraph}>
-            We may retain certain data for legal, security, or safety purposes:
+            For legal, safety, accounting, or abuse-prevention reasons, we may
+            retain limited information such as:
           </Text>
-          <Text style={styles.bulletItem}>• Transaction records (for accounting and tax compliance)</Text>
-          <Text style={styles.bulletItem}>• Content subject to legal investigations or disputes</Text>
-          <Text style={styles.bulletItem}>• Data necessary to prevent fraud or abuse</Text>
-          <Text style={styles.bulletItem}>• Anonymized analytics data (without personal identifiers)</Text>
+          <Text style={styles.bulletItem}>
+            • Payment or transaction records required for accounting or tax
+            rules
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Information needed for fraud, safety, or legal investigations
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Anonymized or aggregated data that no longer identifies you
+          </Text>
 
-          <Text style={styles.sectionTitle}>Active Subscriptions</Text>
+          <Text style={styles.sectionTitle}>Premium & Purchases</Text>
           <Text style={styles.paragraph}>
-            If you have an active paid subscription:
+            If you have Premium or token purchases:
           </Text>
-          <Text style={styles.bulletItem}>• Your subscription will be cancelled immediately</Text>
-          <Text style={styles.bulletItem}>• No refund for unused subscription time (per our Refund Policy)</Text>
-          <Text style={styles.bulletItem}>• Auto-renewal will be stopped</Text>
-          <Text style={styles.bulletItem}>• You can cancel subscription separately before deleting if preferred</Text>
+          <Text style={styles.bulletItem}>
+            • Benefits tied to your Luvstor account end when the account is
+            deleted
+          </Text>
+          <Text style={styles.bulletItem}>
+            • Refunds follow our subscription / refund terms
+          </Text>
+          <Text style={styles.bulletItem}>
+            • If you bought through a store (for example Google Play), you may
+            also need to manage that purchase in the store’s subscription
+            settings
+          </Text>
 
           <Text style={styles.sectionTitle}>Before You Delete</Text>
-          <Text style={styles.paragraph}>
-            Consider these alternatives to permanent deletion:
-          </Text>
-          <Text style={styles.bulletItem}>• Temporarily hide your profile (coming soon)</Text>
-          <Text style={styles.bulletItem}>• Adjust privacy settings to limit who can find you</Text>
-          <Text style={styles.bulletItem}>• Block specific users instead of leaving entirely</Text>
-          <Text style={styles.bulletItem}>• Contact support if you're experiencing issues</Text>
-
-          <Text style={styles.sectionTitle}>Cannot Delete?</Text>
-          <Text style={styles.paragraph}>
-            If you're unable to delete your account through the app, you can request deletion by contacting us at support@luvstor.com. We will process your request within 7 business days.
+          <Text style={styles.bulletItem}>• Block specific people instead of leaving</Text>
+          <Text style={styles.bulletItem}>• Adjust who can find or message you</Text>
+          <Text style={styles.bulletItem}>
+            • Contact Help & Support if you are facing a problem we can fix
           </Text>
 
-          <Text style={styles.sectionTitle}>After Deletion</Text>
+          <Text style={styles.sectionTitle}>Request Deletion by Email</Text>
           <Text style={styles.paragraph}>
-            You can create a new Luvstor account at any time using the same or different email address. Your new account will be completely separate from your deleted account - no data will be carried over.
+            If you cannot delete from the app, email support@luvstor.com from
+            the address linked to your account. We aim to process verified
+            requests within 7 business days.
           </Text>
 
-          <Text style={styles.sectionTitle}>Questions or Concerns</Text>
+          <Text style={styles.sectionTitle}>After Permanent Deletion</Text>
           <Text style={styles.paragraph}>
-            If you have questions about account deletion or data removal:
+            You may create a new account later with the same or a different
+            email. A new account does not restore old matches, chats, or media.
           </Text>
+
+          <Text style={styles.sectionTitle}>Contact</Text>
           <Text style={styles.bulletItem}>• Email: support@luvstor.com</Text>
-          <Text style={styles.bulletItem}>• In-App: Settings → Help & Support</Text>
-          <Text style={styles.bulletItem}>• We typically respond within 48 hours</Text>
+          <Text style={styles.bulletItem}>• In-app: Settings → Help & Support</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

@@ -7,10 +7,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../utils/api';
-import { resolveMediaUrl } from '../utils/media';
+import WhatsAppAvatar from './WhatsAppAvatar';
 
 const PURPLE = '#370372';
 const REFRESH_INTERVAL = 60000; // 1 minute
@@ -120,10 +119,10 @@ export function OnlineNearbyPulse({ token, onUserPress, refreshTrigger }: Props)
             activeOpacity={0.7}
           >
             <View style={styles.avatarContainer}>
-              <Image
-                source={{ uri: resolveMediaUrl(user.photo) || user.photo }}
-                style={styles.avatar}
-                contentFit="cover"
+              <WhatsAppAvatar
+                photo={user.photo}
+                name={user.name}
+                size={64}
               />
               <View style={styles.onlineBadge} />
               {user.photoVerified && (

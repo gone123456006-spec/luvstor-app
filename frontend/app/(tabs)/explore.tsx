@@ -201,9 +201,11 @@ export default function ExploreScreen() {
             prefsLabel={prefsSummary(prefs)}
           />
           <LiveCallState
-            name="Anonymous"
-            publicId=""
-            photo=""
+            name=""
+            publicId={
+              matchedPeer?.publicId || call.peer?.publicId || ''
+            }
+            photo={matchedPeer?.photo || call.peer?.photo || ''}
             gender={matchedPeer?.gender || call.peer?.gender}
           />
           <ExplorePrefsSheet
@@ -307,7 +309,6 @@ function Header({
     <View style={styles.header}>
       <View style={styles.headerLeft}>
         <Text style={styles.headerTitle}>Explore</Text>
-        <Text style={styles.headerSub}>Anonymous live matches</Text>
       </View>
       <TouchableOpacity
         onPress={onPrefs}
@@ -332,7 +333,6 @@ function IdleHome({
   onVideo: () => void;
   onVoice: () => void;
 }) {
-  const float = useRef(new Animated.Value(0)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(18)).current;
 
@@ -340,38 +340,16 @@ function IdleHome({
     Animated.parallel([
       Animated.timing(fadeIn, {
         toValue: 1,
-        duration: 520,
+        duration: 420,
         useNativeDriver: true,
       }),
       Animated.timing(slideUp, {
         toValue: 0,
-        duration: 520,
+        duration: 420,
         useNativeDriver: true,
       }),
     ]).start();
-
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(float, {
-          toValue: 1,
-          duration: 2400,
-          useNativeDriver: true,
-        }),
-        Animated.timing(float, {
-          toValue: 0,
-          duration: 2400,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [fadeIn, float, slideUp]);
-
-  const floatY = float.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -8],
-  });
+  }, [fadeIn, slideUp]);
 
   return (
     <TabPadded style={styles.idle}>
@@ -381,32 +359,17 @@ function IdleHome({
           { opacity: fadeIn, transform: [{ translateY: slideUp }] },
         ]}
       >
-        <View style={styles.anonPill}>
-          <Ionicons name="eye-off-outline" size={13} color={T.primary} />
-          <Text style={styles.anonPillText}>Fully anonymous</Text>
-        </View>
-
-        <Animated.View
-          style={[styles.idleHero, { transform: [{ translateY: floatY }] }]}
-        >
-          <View style={styles.heroGlow} />
-          <View style={styles.pairRow}>
-            <View style={[styles.pairAvatar, styles.pairBoy]}>
+        {/* WhatsApp-style overlapping profile banner */}
+        <View style={styles.idleHero}>
+          <View style={styles.pairBanner}>
+            <View style={[styles.pairAvatar, styles.pairLeft]}>
               <Image
                 source={BOY_IMG}
                 style={styles.pairPhoto}
                 contentFit="cover"
               />
             </View>
-            <View style={styles.pairSpark}>
-              <LinearGradient
-                colors={[T.rose, T.primaryMid]}
-                style={styles.pairSparkInner}
-              >
-                <Ionicons name="flash" size={16} color="#fff" />
-              </LinearGradient>
-            </View>
-            <View style={[styles.pairAvatar, styles.pairGirl]}>
+            <View style={[styles.pairAvatar, styles.pairRight]}>
               <Image
                 source={GIRL_IMG}
                 style={styles.pairPhoto}
@@ -414,15 +377,12 @@ function IdleHome({
               />
             </View>
           </View>
-        </Animated.View>
+        </View>
 
         <View style={styles.idleCopy}>
           <Text style={styles.idleTitle}>
             Meet someone{"\n"}
             <Text style={styles.idleTitleAccent}>right now</Text>
-          </Text>
-          <Text style={styles.idleSub}>
-            Instant anonymous video or voice — no profiles, no pressure.
           </Text>
         </View>
       </Animated.View>
@@ -433,6 +393,7 @@ function IdleHome({
           { opacity: fadeIn, transform: [{ translateY: slideUp }] },
         ]}
       >
+        <Text style={styles.callTypeLabel}>Select Call type</Text>
         <TouchableOpacity
           activeOpacity={0.9}
           onPress={onVideo}
@@ -903,7 +864,8 @@ function MatchedState({
   };
   mode: "video" | "voice";
 }) {
-  const name = "Anonymous";
+  const id = String(peer.publicId || '').trim().toUpperCase();
+  const photo = peer.photo || '';
   const pop = useRef(new Animated.Value(0.82)).current;
   const glow = useRef(new Animated.Value(0.4)).current;
 
@@ -963,17 +925,19 @@ function MatchedState({
           >
             <View style={styles.matchAvatarInner}>
               <WhatsAppAvatar
-                name={name}
-                publicId=""
-                photo=""
+                name={id || 'Anonymous'}
+                publicId={id}
+                photo={photo}
                 gender={peer.gender}
                 size={118}
               />
             </View>
           </LinearGradient>
         </Animated.View>
-        <Text style={styles.matchName}>{name}</Text>
-        <Text style={styles.matchAnonHint}>Identity hidden</Text>
+        <Text style={styles.matchName}>{id || 'Anonymous'}</Text>
+        <Text style={styles.matchAnonHint}>
+          {id ? 'Name hidden · ID only' : 'Identity hidden'}
+        </Text>
         <View style={styles.connectingRow}>
           <ActivityIndicator size="small" color={T.primary} />
           <Text style={styles.connectingText}>
@@ -997,7 +961,9 @@ function LiveCallState({
   gender?: string;
 }) {
   const uri = resolveMediaUrl(photo) || photo || "";
-  const display = getDisplayName(name, publicId) || "Anonymous";
+  const id = String(publicId || "").trim().toUpperCase();
+  // Explore anonymity: DP + public ID only (ignore real name)
+  const display = id || getDisplayName(name, publicId) || "Anonymous";
 
   return (
     <TabPadded style={styles.stateScreen}>
@@ -1014,7 +980,7 @@ function LiveCallState({
             <View style={styles.matchAvatarInner}>
               <WhatsAppAvatar
                 name={display}
-                publicId={publicId}
+                publicId={id}
                 photo={uri}
                 gender={gender}
                 size={118}
@@ -1023,7 +989,9 @@ function LiveCallState({
           </LinearGradient>
         </View>
         <Text style={styles.matchName}>{display}</Text>
-        <Text style={styles.stateSub}>Controls are on the call screen</Text>
+        <Text style={styles.stateSub}>
+          {id ? "Name hidden · ID only" : "Controls are on the call screen"}
+        </Text>
       </View>
     </TabPadded>
   );
@@ -1144,71 +1112,29 @@ const styles = StyleSheet.create({
   idleHero: {
     alignItems: "center",
     justifyContent: "center",
-    height: 168,
-    marginBottom: 8,
+    marginBottom: 14,
+    marginTop: 4,
   },
-  heroGlow: {
-    position: "absolute",
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: "rgba(255, 75, 110, 0.12)",
-  },
-  pairRow: {
-    width: 220,
-    height: 148,
+  pairBanner: {
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
   },
   pairAvatar: {
-    position: "absolute",
-    width: 124,
-    height: 124,
-    borderRadius: 62,
+    width: 128,
+    height: 128,
+    borderRadius: 64,
     overflow: "hidden",
-    borderWidth: 3.5,
-    borderColor: T.surface,
-    backgroundColor: T.surface,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.18,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
-      },
-      android: { elevation: 6 },
-    }),
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    backgroundColor: "#E8E0F5",
   },
-  pairBoy: {
-    left: 0,
-    transform: [{ translateY: 8 }, { rotate: "-4deg" }],
+  pairLeft: {
+    marginRight: -32,
     zIndex: 1,
   },
-  pairGirl: {
-    right: 0,
-    transform: [{ translateY: -4 }, { rotate: "5deg" }],
+  pairRight: {
     zIndex: 2,
-  },
-  pairSpark: {
-    zIndex: 3,
-    ...Platform.select({
-      ios: {
-        shadowColor: T.rose,
-        shadowOpacity: 0.45,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 3 },
-      },
-      android: { elevation: 8 },
-    }),
-  },
-  pairSparkInner: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2.5,
-    borderColor: T.surface,
   },
   pairPhoto: {
     width: "100%",
@@ -1229,6 +1155,15 @@ const styles = StyleSheet.create({
   },
   idleTitleAccent: {
     color: T.primary,
+  },
+  callTypeLabel: {
+    fontSize: 18,
+    fontWeight: "700",
+    lineHeight: 24,
+    color: T.text,
+    textAlign: "center",
+    letterSpacing: -0.2,
+    marginBottom: 2,
   },
   idleSub: {
     marginTop: 10,

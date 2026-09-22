@@ -5,8 +5,11 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
+  AudioModule,
   AudioQuality,
   IOSOutputFormat,
+  RecordingPresets,
+  type AudioRecorder,
   type RecordingOptions,
 } from 'expo-audio';
 import {
@@ -15,34 +18,52 @@ import {
   UPLOAD_FETCH_TIMEOUT_MS,
 } from './api';
 import { getAuthToken } from './auth';
-import { uploadsPathFromUrl } from './media';
+import { durableMediaPathFromUrl } from './media';
 import { requestMicrophone } from './appPermissions';
 
 /** WhatsApp-like voice note: mono AAC in .m4a (works on Android APK + iOS). */
 export const VOICE_NOTE_PRESET: RecordingOptions = {
+  ...RecordingPresets.HIGH_QUALITY,
   extension: '.m4a',
-  sampleRate: 22050,
+  sampleRate: 44100,
   numberOfChannels: 1,
-  bitRate: 48_000,
+  bitRate: 128_000,
   isMeteringEnabled: true,
   android: {
     extension: '.m4a',
     outputFormat: 'mpeg4',
     audioEncoder: 'aac',
+    sampleRate: 44100,
+    numberOfChannels: 1,
+    bitRate: 128_000,
   },
   ios: {
     extension: '.m4a',
     outputFormat: IOSOutputFormat.MPEG4AAC,
-    audioQuality: AudioQuality.MEDIUM,
+    audioQuality: AudioQuality.MAX,
+    sampleRate: 44100,
+    numberOfChannels: 1,
+    bitRate: 128_000,
     linearPCMBitDepth: 16,
     linearPCMIsBigEndian: false,
     linearPCMIsFloat: false,
   },
-  web: {
-    mimeType: 'audio/webm',
-    bitsPerSecond: 48_000,
-  },
 };
+
+/** Create a prepared recorder — falls back to HIGH_QUALITY if custom preset fails. */
+export async function createPreparedVoiceRecorder(): Promise<AudioRecorder> {
+  const tryPrepare = async (opts: RecordingOptions) => {
+    const rec = new AudioModule.AudioRecorder(opts);
+    await rec.prepareToRecordAsync();
+    return rec;
+  };
+  try {
+    return await tryPrepare(VOICE_NOTE_PRESET);
+  } catch (first) {
+    console.warn('[Voice] custom preset failed, using HIGH_QUALITY', first);
+    return await tryPrepare(RecordingPresets.HIGH_QUALITY);
+  }
+}
 
 /** System mic dialog — returns false if denied (never throws). */
 export async function ensureVoiceMicPermission(): Promise<boolean> {
@@ -101,17 +122,14 @@ function preferRelativeUploadUrl(json: {
   url?: string;
   absoluteUrl?: string;
 }): string | null {
-  const relative = String(json?.url || '').trim();
-  if (relative.startsWith('/uploads/')) return relative;
-  const abs = String(json?.absoluteUrl || '').trim();
-  if (!abs) return relative || null;
-  const path = uploadsPathFromUrl(abs);
-  return path || abs;
+  const fromUrl = durableMediaPathFromUrl(json?.url);
+  if (fromUrl) return fromUrl;
+  return durableMediaPathFromUrl(json?.absoluteUrl) || null;
 }
 
 /**
  * Upload a local voice file. Prefers binary (like images); falls back to base64 JSON.
- * Returns durable `/uploads/...` path for chat:message.
+ * Returns durable `/api/media/{id}` (MongoDB) path for chat:message.
  */
 export async function uploadVoiceNote(uri: string): Promise<string | null> {
   const token = await getAuthToken();

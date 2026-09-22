@@ -5,7 +5,7 @@
 const { createNotification } = require('../services/notifications');
 
 function callLabel(callType) {
-  return callType === 'video' ? 'video call' : 'voice call';
+  return callType === 'video' ? 'Video call' : 'Audio call';
 }
 
 /**
@@ -22,9 +22,8 @@ async function pushIncomingCall(io, {
   calleeOnline = true,
 }) {
   const name = (caller && caller.name) || 'Someone';
-  const kind = callType === 'video' ? 'video call' : 'voice call';
-  // WhatsApp-style: caller name as title, call type as body
-  const body = `Incoming ${kind}`;
+  // Instagram-style: caller name as title, Audio/Video call as body
+  const body = callLabel(callType);
 
   return createNotification(io, {
     userId: calleeId,

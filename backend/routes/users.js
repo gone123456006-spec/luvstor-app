@@ -31,12 +31,23 @@ const {
   sanitizeProfileMediaUpdate,
   sanitizePhotosArray,
 } = require("../utils/mediaUrl");
+const {
+  keepIfUploadPresent,
+  isUploadsPath,
+  isUploadsAuthoritative,
+  mediaExistsAsync,
+  isMediaApiPath,
+} = require("../utils/uploadExists");
 
 /** Normalize owner media for API responses; heal bad Mongo values in the background. */
 function shapeOwnerMediaFields(user) {
-  const photo = toPersistentMediaUrl(user.photo);
-  const coverPhoto = toPersistentMediaUrl(user.coverPhoto);
-  const photos = sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS);
+  const photo = keepIfUploadPresent(toPersistentMediaUrl(user.photo));
+  const coverPhoto = keepIfUploadPresent(
+    toPersistentMediaUrl(user.coverPhoto),
+  );
+  const photos = sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS)
+    .map((p) => keepIfUploadPresent(p))
+    .filter(Boolean);
   const prevPhoto = String(user.photo || "");
   const prevCover = String(user.coverPhoto || "");
   const prevPhotos = Array.isArray(user.photos)
@@ -172,6 +183,16 @@ router.put("/me", auth, async (req, res) => {
       const next = sanitizeProfileMediaUpdate(updates.photo);
       if (next === undefined) {
         delete updates.photo; // invalid device URI — keep existing DB photo
+      } else if (next && !(await mediaExistsAsync(next))) {
+        // Missing Mongo media or authoritative disk file
+        if (isMediaApiPath(next) || (isUploadsPath(next) && isUploadsAuthoritative())) {
+          return res.status(400).json({
+            error:
+              "Photo file is missing on the server. Please upload the image again.",
+            code: "MEDIA_MISSING",
+          });
+        }
+        updates.photo = next;
       } else {
         updates.photo = next;
       }
@@ -183,6 +204,15 @@ router.put("/me", auth, async (req, res) => {
       );
       if (next === undefined) {
         delete updates.coverPhoto;
+      } else if (next && !(await mediaExistsAsync(next))) {
+        if (isMediaApiPath(next) || (isUploadsPath(next) && isUploadsAuthoritative())) {
+          return res.status(400).json({
+            error:
+              "Cover photo file is missing on the server. Please upload again.",
+            code: "MEDIA_MISSING",
+          });
+        }
+        updates.coverPhoto = next;
       } else {
         updates.coverPhoto = next;
       }
@@ -193,7 +223,24 @@ router.put("/me", auth, async (req, res) => {
       if (!Array.isArray(updates.photos)) {
         return res.status(400).json({ error: "photos must be an array" });
       }
-      updates.photos = sanitizePhotosArray(updates.photos, MAX_PROFILE_PHOTOS);
+      let photos = sanitizePhotosArray(updates.photos, MAX_PROFILE_PHOTOS);
+      const missing = [];
+      for (const p of photos) {
+        if (!(await mediaExistsAsync(p))) {
+          if (isMediaApiPath(p) || (isUploadsPath(p) && isUploadsAuthoritative())) {
+            missing.push(p);
+          }
+        }
+      }
+      if (missing.length) {
+        return res.status(400).json({
+          error:
+            "One or more post photos are missing on the server. Please upload again.",
+          code: "MEDIA_MISSING",
+          missing,
+        });
+      }
+      updates.photos = photos;
     }
 
     if (
@@ -348,7 +395,7 @@ router.put("/me", auth, async (req, res) => {
 
     const before = await User.findById(req.userId)
       .select(
-        "name age bio gender photo photos interests relationshipGoal welcomeTokensGrantedAt tokenBalance photoVerification galleryPostRewardCount galleryPostRewardInitialized",
+        "name age bio gender photo coverPhoto photos interests relationshipGoal welcomeTokensGrantedAt tokenBalance photoVerification galleryPostRewardCount galleryPostRewardInitialized",
       )
       .lean();
     if (!before) return res.status(404).json({ error: "User not found" });
@@ -362,6 +409,40 @@ router.put("/me", auth, async (req, res) => {
 
     if (!user) return res.status(404).json({ error: "User not found" });
     await ensureUserPublicId(user);
+
+    // Hard-delete gallery/DP/cover files removed from the profile (permanent delete)
+    if (
+      updates.photo !== undefined ||
+      updates.coverPhoto !== undefined ||
+      updates.photos !== undefined
+    ) {
+      try {
+        const {
+          orphanedMediaUrls,
+          purgeOrphanedUploads,
+        } = require("../utils/purgeOrphanedUploads");
+        const orphans = orphanedMediaUrls(
+          {
+            photo: before.photo,
+            coverPhoto: before.coverPhoto,
+            photos: before.photos,
+          },
+          {
+            photo: user.photo,
+            coverPhoto: user.coverPhoto,
+            photos: user.photos,
+          },
+        );
+        if (orphans.length) {
+          // Don't block the response on disk cleanup
+          purgeOrphanedUploads(req.userId, orphans).catch((e) =>
+            console.warn("purgeOrphanedUploads failed", e?.message || e),
+          );
+        }
+      } catch (e) {
+        console.warn("orphan media cleanup skipped", e?.message || e);
+      }
+    }
 
     // Re-verify if main profile photo changed a lot after photo verification
     const photoChanged =
@@ -541,6 +622,10 @@ router.put("/me", auth, async (req, res) => {
     res.json({
       message: "Profile updated",
       profile: user,
+      // Convenience for clients syncing gallery after PUT
+      photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS),
+      photo: keepIfUploadPresent(toPersistentMediaUrl(user.photo)) || "",
+      coverPhoto: keepIfUploadPresent(toPersistentMediaUrl(user.coverPhoto)) || "",
       publicId: user.publicId || "",
       welcomeTokensGranted,
       galleryPostTokensGranted,
@@ -697,8 +782,8 @@ router.get("/profile/:userId", auth, async (req, res) => {
       name: safe.name,
       age: safe.age ?? null,
       bio: safe.bio || "",
-      photo: safe.privacyHidden ? "" : toPersistentMediaUrl(safe.photo) || "",
-      coverPhoto: safe.privacyHidden ? "" : toPersistentMediaUrl(safe.coverPhoto) || "",
+      photo: safe.privacyHidden ? "" : keepIfUploadPresent(toPersistentMediaUrl(safe.photo)) || "",
+      coverPhoto: safe.privacyHidden ? "" : keepIfUploadPresent(toPersistentMediaUrl(safe.coverPhoto)) || "",
       photos: safe.privacyHidden
         ? []
         : sanitizePhotosArray(safe.photos || [], MAX_PROFILE_PHOTOS),
@@ -811,8 +896,8 @@ router.get("/search-by-id", auth, async (req, res) => {
       name: user.name,
       age: user.age,
       bio: user.bio,
-      photo: toPersistentMediaUrl(user.photo) || "",
-      coverPhoto: toPersistentMediaUrl(user.coverPhoto) || "",
+      photo: keepIfUploadPresent(toPersistentMediaUrl(user.photo)) || "",
+      coverPhoto: keepIfUploadPresent(toPersistentMediaUrl(user.coverPhoto)) || "",
       photos: sanitizePhotosArray(user.photos || [], MAX_PROFILE_PHOTOS),
       gender: user.gender,
       interests: user.interests,

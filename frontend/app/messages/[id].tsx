@@ -1,9 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {
-    AudioModule,
-    type AudioRecorder,
-} from "expo-audio";
+import { type AudioRecorder } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -82,9 +79,9 @@ import {
 } from "../../utils/callAudio";
 import {
   ensureVoiceMicPermission,
+  createPreparedVoiceRecorder,
   pauseActiveVoicePlayback,
   uploadVoiceNote,
-  VOICE_NOTE_PRESET,
 } from "../../utils/voiceMessages";
 import {
   apiRequest,
@@ -92,7 +89,7 @@ import {
   getApiBase,
   UPLOAD_FETCH_TIMEOUT_MS,
 } from "../../utils/api";
-import { resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
+import { durableMediaPathFromUrl, resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
 import {
   getRememberedPeerProfile,
   isUsableName,
@@ -119,7 +116,6 @@ import {
     unlikeUser,
 } from "../../utils/friends";
 import { fetchUserProfile, NearbyUser } from "../../utils/nearby";
-import { formatLastSeen } from "../../utils/timeFormat";
 import {
     clearThreadCache,
     getThreadFromMemory,
@@ -1383,6 +1379,10 @@ export default function MessageScreen() {
   const recordingRef = useRef<AudioRecorder | null>(null);
   /** WhatsApp hold-to-record: finger still down / released while start was in flight */
   const micPressedRef = useRef(false);
+  /** Finger released while recorder was still preparing — finish/send when ready */
+  const releaseWhileStartingRef = useRef(false);
+  /** Ignore Pressable onPressOut fired by re-render right after record() starts */
+  const ignorePressOutUntilRef = useRef(0);
   const micSlideCancelRef = useRef(false);
   const recordStartedAtRef = useRef(0);
   const recordingBusyRef = useRef(false);
@@ -3802,24 +3802,18 @@ export default function MessageScreen() {
   };
 
   // Upload image as raw bytes (faster than base64 JSON)
-  // Always return relative `/uploads/...` — never LAN absoluteUrl (breaks after reinstall)
+  // Always return relative `/api/media/{id}` — never LAN absoluteUrl
   const uploadImage = async (uri: string): Promise<string | null> => {
     const pickPersistentUrl = (json: {
       url?: string;
       absoluteUrl?: string;
     } | null) => {
       if (!json) return null;
-      const relative = String(json.url || "").trim();
-      if (relative.startsWith("/uploads/")) return relative;
-      const abs = String(json.absoluteUrl || "").trim();
-      if (!abs) return null;
-      try {
-        const parsed = new URL(abs);
-        if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
-      } catch {
-        /* ignore */
-      }
-      return null;
+      return (
+        durableMediaPathFromUrl(json.url) ||
+        durableMediaPathFromUrl(json.absoluteUrl) ||
+        null
+      );
     };
     try {
       const token = await getAuthToken();
@@ -4223,6 +4217,7 @@ export default function MessageScreen() {
     if (recordingRef.current || recordingBusyRef.current) return false;
     if (!requireMediaUnlocked()) return false;
     recordingBusyRef.current = true;
+    releaseWhileStartingRef.current = false;
     pauseActiveVoicePlayback();
 
     try {
@@ -4236,22 +4231,22 @@ export default function MessageScreen() {
         return false;
       }
 
-      // Released while the OS permission dialog was open — try again by holding mic
-      if (!micPressedRef.current) {
+      // Finger already up after permission dialog — ask them to hold again
+      if (!micPressedRef.current && !releaseWhileStartingRef.current) {
+        showAlert({
+          title: "Hold to record",
+          message: "Press and hold the mic button to record a voice message.",
+          icon: "mic",
+        });
         return false;
       }
 
       await prepareChatRecordingAudio();
 
-      // Check again after async audio prep
-      if (!micPressedRef.current) {
-        await restoreChatPlaybackAudio();
-        return false;
-      }
+      const rec = await createPreparedVoiceRecorder();
 
-      const rec = new AudioModule.AudioRecorder(VOICE_NOTE_PRESET);
-      await rec.prepareToRecordAsync();
-      if (!micPressedRef.current) {
+      // User cancelled (slide) while preparing
+      if (micSlideCancelRef.current) {
         try {
           await rec.stop();
         } catch {
@@ -4260,9 +4255,15 @@ export default function MessageScreen() {
         await restoreChatPlaybackAudio();
         return false;
       }
+
+      // Finger released while preparing → still start, then stop+send immediately
+      const releasedEarly = !micPressedRef.current || releaseWhileStartingRef.current;
+
       rec.record();
       recordingRef.current = rec;
       recordStartedAtRef.current = Date.now();
+      // Prevent Pressable remount/onPressOut from killing the take instantly
+      ignorePressOutUntilRef.current = Date.now() + 400;
       setRecording(rec);
       setIsRecording(true);
       setRecordingDuration(0);
@@ -4287,6 +4288,14 @@ export default function MessageScreen() {
         }
       }, 200);
       (rec as any).__durationTick = tick;
+
+      if (releasedEarly) {
+        // Brief take after a short hold — still try to send (≥350ms)
+        await new Promise((r) => setTimeout(r, 350));
+        if (recordingRef.current === rec && !micSlideCancelRef.current) {
+          await stopRecording({ discardIfShort: false });
+        }
+      }
       return true;
     } catch (e) {
       console.error("startRecording failed", e);
@@ -4295,13 +4304,14 @@ export default function MessageScreen() {
       setRecording(null);
       showAlert({
         title: "Voice message",
-        message: "Could not start recording. Try again in a moment.",
+        message: "Could not start recording. Check microphone permission and try again.",
         icon: "mic",
       });
       void restoreChatPlaybackAudio();
       return false;
     } finally {
       recordingBusyRef.current = false;
+      releaseWhileStartingRef.current = false;
     }
   }
 
@@ -4325,8 +4335,8 @@ export default function MessageScreen() {
     setRecording(null);
     setRecordingDuration(0);
 
-    // WhatsApp: very short hold is ignored
-    if (opts?.discardIfShort !== false && elapsed < 500) {
+    // WhatsApp: ignore accidental taps under ~300ms (was 500 — felt like “won't record”)
+    if (opts?.discardIfShort !== false && elapsed < 300) {
       return;
     }
 
@@ -4455,6 +4465,7 @@ export default function MessageScreen() {
       return;
     }
     micPressedRef.current = true;
+    releaseWhileStartingRef.current = false;
     micSlideCancelRef.current = false;
     setSlideCancelHint(false);
     if (isRecording || recordingRef.current) return;
@@ -4463,14 +4474,28 @@ export default function MessageScreen() {
 
   async function onMicPressOut() {
     if (showSendIcon) return;
+    // Re-render right after record() often fires a fake pressOut — ignore it
+    if (Date.now() < ignorePressOutUntilRef.current) {
+      return;
+    }
     const wasPressed = micPressedRef.current;
     const slidCancel = micSlideCancelRef.current;
     micPressedRef.current = false;
     micSlideCancelRef.current = false;
+
+    // Still preparing — mark release so startRecording finishes then sends
+    if (recordingBusyRef.current && !recordingRef.current) {
+      releaseWhileStartingRef.current = !slidCancel;
+      if (slidCancel) {
+        micSlideCancelRef.current = true;
+      }
+      return;
+    }
+
     if (!wasPressed && !recordingRef.current) return;
-    // Wait briefly if start is still racing
+
     let waits = 0;
-    while (recordingBusyRef.current && waits < 20) {
+    while (recordingBusyRef.current && waits < 25) {
       await new Promise((r) => setTimeout(r, 40));
       waits += 1;
     }
@@ -4734,24 +4759,27 @@ export default function MessageScreen() {
               </View>
               <View>
                 <Text style={styles.userName}>{avatarName}</Text>
-                <Text
-                  style={[
-                    styles.userStatus,
-                    (!isTyping && !otherUserOnline) ||
-                    friendshipStatus?.theyBlocked ||
-                    friendshipStatus?.iBlocked
-                      ? { color: "#999" }
-                      : null,
-                  ]}
-                >
-                  {friendshipStatus?.theyBlocked || friendshipStatus?.iBlocked
-                    ? "Offline"
-                    : isTyping
-                      ? "Typing..."
-                      : otherUserOnline
-                        ? "Online"
-                        : formatLastSeen(otherUserLastSeen)}
-                </Text>
+                {(friendshipStatus?.theyBlocked ||
+                  friendshipStatus?.iBlocked ||
+                  isTyping ||
+                  otherUserOnline) && (
+                  <Text
+                    style={[
+                      styles.userStatus,
+                      friendshipStatus?.theyBlocked ||
+                      friendshipStatus?.iBlocked ||
+                      (!isTyping && !otherUserOnline)
+                        ? { color: "#999" }
+                        : null,
+                    ]}
+                  >
+                    {friendshipStatus?.theyBlocked || friendshipStatus?.iBlocked
+                      ? "Offline"
+                      : isTyping
+                        ? "Typing..."
+                        : "Online"}
+                  </Text>
+                )}
               </View>
             </TouchableOpacity>
             <View style={styles.headerActions}>

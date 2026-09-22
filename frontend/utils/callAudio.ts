@@ -261,11 +261,12 @@ export async function prepareChatRecordingAudio() {
   const mgr = getInCallManager();
   if (mgr) {
     try {
+      // Unmute + loosen routing only — do NOT mgr.stop() here.
+      // stop() can tear down the Android audio session and block AudioRecord.
       mgr.setMicrophoneMute?.(false);
       mgr.stopProximitySensor?.();
       mgr.setForceSpeakerphoneOn?.(false);
       mgr.setSpeakerphoneOn?.(false);
-      mgr.stop?.();
     } catch {
       /* ignore */
     }
@@ -279,7 +280,7 @@ export async function prepareChatRecordingAudio() {
       /* ignore */
     }
   }
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 40));
   await setAudioModeAsync({
     allowsRecording: true,
     playsInSilentMode: true,

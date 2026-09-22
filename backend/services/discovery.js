@@ -12,6 +12,7 @@ const {
   selectDiscoveryBatch,
 } = require('./discoveryRotation');
 const { toPersistentMediaUrl, sanitizePhotosArray } = require('../utils/mediaUrl');
+const { keepIfUploadPresent } = require('../utils/uploadExists');
 const { MAX_PROFILE_PHOTOS } = require('../config/profileLimits');
 
 /**
@@ -562,9 +563,11 @@ async function buildNearbyBatch({
       name: doc.name,
       age: doc.age,
       bio: doc.bio,
-      photo: toPersistentMediaUrl(doc.photo) || '',
-      coverPhoto: toPersistentMediaUrl(doc.coverPhoto) || '',
-      photos: sanitizePhotosArray(doc.photos || [], MAX_PROFILE_PHOTOS),
+      photo: keepIfUploadPresent(toPersistentMediaUrl(doc.photo)) || '',
+      coverPhoto: keepIfUploadPresent(toPersistentMediaUrl(doc.coverPhoto)) || '',
+      photos: sanitizePhotosArray(doc.photos || [], MAX_PROFILE_PHOTOS)
+        .map((p) => keepIfUploadPresent(p))
+        .filter(Boolean),
       gender: doc.gender,
       interests: doc.interests,
       height: doc.height,
