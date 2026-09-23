@@ -13,6 +13,10 @@ const {
 } = require('../services/tokenPacks');
 const { resolvePaidPackFromOrder } = require('../utils/paidPackFromOrder');
 const { getRazorpay, paymentUnavailable } = require('../utils/razorpayClient');
+const {
+  applyTokenBonus,
+  getTokenBonusPercent,
+} = require('../services/subscriptions');
 
 // GET /api/payment/packs — personalized prices (pack 10 ladder)
 router.get('/packs', auth, async (req, res) => {
@@ -164,7 +168,11 @@ router.post('/verify', auth, async (req, res) => {
       });
     }
 
-    const { packId, credited } = resolved;
+    const { packId, credited: baseTokens } = resolved;
+    // Gold / Platinum / Black get +10% / +25% / +40% only while the plan is live.
+    // Free, Explore Plus, and expired plans get the pack size with no extra.
+    const bonus = applyTokenBonus(baseTokens, existingUser);
+    const credited = bonus.totalTokens;
     const inc = { tokenBalance: credited };
     if (String(packId) === PACK_10_ID) {
       inc.tokenPack10PurchaseCount = 1;
@@ -208,14 +216,20 @@ router.post('/verify', auth, async (req, res) => {
     }
 
     const io = req.app.get('io');
+    const bonusNote =
+      bonus.bonusTokens > 0
+        ? ` Includes +${bonus.bonusTokens} subscriber bonus.`
+        : '';
     await createNotification(io, {
       userId: req.userId,
       type: 'token_purchase',
       title: 'Purchase successful',
-      body: `${credited} tokens added to your wallet.`,
+      body: `${credited} tokens added to your wallet.${bonusNote}`,
       data: {
         screen: 'token',
         credited,
+        baseTokens: bonus.baseTokens,
+        bonusTokens: bonus.bonusTokens,
         packId,
         paymentId: razorpay_payment_id,
       },
@@ -225,6 +239,9 @@ router.post('/verify', auth, async (req, res) => {
       success: true,
       verified: true,
       credited,
+      baseTokens: bonus.baseTokens,
+      bonusTokens: bonus.bonusTokens,
+      tokenBonusPercent: getTokenBonusPercent(existingUser),
       tokenBalance: user.tokenBalance ?? 0,
       paymentId: razorpay_payment_id,
       orderId: razorpay_order_id,

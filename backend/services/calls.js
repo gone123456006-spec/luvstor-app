@@ -42,10 +42,73 @@ function generateCallId() {
   return `c_${Date.now().toString(36)}_${crypto.randomBytes(6).toString('hex')}`;
 }
 
+/**
+ * Public STUN — geographic distance is never a call rule (Nearby 100 km is
+ * display/filter only). STUN helps easy NAT; TURN is required across ISPs.
+ */
+const DEFAULT_STUN_URLS = [
+  'stun:stun.l.google.com:19302',
+  'stun:stun1.l.google.com:19302',
+  'stun:stun2.l.google.com:19302',
+  'stun:stun.cloudflare.com:3478',
+];
+
+/**
+ * Last-resort public TURN so distant / cellular / CGNAT calls still connect
+ * when TURN_URLS is unset. Prefer your own Metered / Twilio / coturn in prod.
+ */
+const PUBLIC_TURN_FALLBACK = [
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:80?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
+function iceListHasTurn(list) {
+  if (!Array.isArray(list) || !list.length) return false;
+  return list.some((s) => {
+    const urls = [].concat(s?.urls || []);
+    return urls.some((u) => /^turns?:/i.test(String(u || '')));
+  });
+}
+
+/** Fill missing UDP / TCP / TLS transports per host (carriers block odd ports). */
+function ensureTurnTransports(urls) {
+  const seen = new Set(urls);
+  const byHost = new Map();
+  for (const url of urls) {
+    const m = String(url).match(/^turns?:([^:/?#]+)/i);
+    if (!m) continue;
+    const host = m[1].toLowerCase();
+    if (!byHost.has(host)) byHost.set(host, []);
+    byHost.get(host).push(url);
+  }
+  const out = urls.slice();
+  for (const [host, list] of byHost) {
+    const hasUdp = list.some((u) => !/\?transport=tcp/i.test(u) && !/^turns:/i.test(u));
+    const hasTcp = list.some((u) => /\?transport=tcp/i.test(u) || /:443/.test(u));
+    const hasTls = list.some((u) => /^turns:/i.test(u));
+    const add = [];
+    if (!hasUdp) add.push(`turn:${host}:3478`);
+    if (!hasTcp) add.push(`turn:${host}:3478?transport=tcp`);
+    if (!hasTls) add.push(`turns:${host}:443?transport=tcp`);
+    for (const extra of add) {
+      if (!seen.has(extra)) {
+        seen.add(extra);
+        out.push(extra);
+      }
+    }
+  }
+  return out;
+}
+
 function getIceServers() {
-  const defaultStun =
-    'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302';
-  const stun = (process.env.STUN_URLS || defaultStun)
+  const stun = (process.env.STUN_URLS || DEFAULT_STUN_URLS.join(','))
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -72,28 +135,7 @@ function getIceServers() {
     validTurnUrls.push(url);
   }
 
-  // Metered / common relays: ensure UDP+TCP 3478 exist when only 80/443 were pasted
-  // (cellular carriers often block odd ports; 3478 + 443 TCP covers most networks)
-  const expanded = [];
-  for (const url of validTurnUrls) {
-    expanded.push(url);
-    const m = url.match(/^(turns?):([^:/?#]+)/i);
-    if (!m) continue;
-    const scheme = m[1].toLowerCase();
-    const host = m[2];
-    if (!/metered\.ca|twilio\.com|expressturn|coturn/i.test(host)) continue;
-    const extras = [
-      `${scheme}:${host}:3478`,
-      `${scheme}:${host}:3478?transport=tcp`,
-      `turns:${host}:443?transport=tcp`,
-    ];
-    for (const extra of extras) {
-      if (!seen.has(extra)) {
-        seen.add(extra);
-        expanded.push(extra);
-      }
-    }
-  }
+  const expanded = ensureTurnTransports(validTurnUrls);
 
   if (invalidTurnUrls.length && !turnWarned) {
     turnWarned = true;
@@ -111,12 +153,16 @@ function getIceServers() {
     credential: turnPass || undefined,
   }));
 
-  if (!turnWarned && turn.length === 0) {
-    turnWarned = true;
-    console.warn(
-      '[calls] No valid TURN_URLS set — friend calls only work on the same Wi‑Fi / LAN. ' +
-        'Set TURN_URLS + TURN_USERNAME + TURN_CREDENTIAL (e.g. Metered.ca) for any-network calling.',
-    );
+  // Distance does not matter — without TURN, different ISPs / CGNAT never connect.
+  if (turn.length === 0) {
+    if (!turnWarned) {
+      turnWarned = true;
+      console.warn(
+        '[calls] No TURN_URLS — using public relay fallback so calls work at any range. ' +
+          'Set TURN_URLS + TURN_USERNAME + TURN_CREDENTIAL for production quality.',
+      );
+    }
+    return [...stun, ...PUBLIC_TURN_FALLBACK];
   }
 
   return [...stun, ...turn];
@@ -227,24 +273,42 @@ function storePendingOffer(callId, sdp, fromUserId) {
   session.pendingOffer = { sdp, from: String(fromUserId) };
 }
 
+function storePendingAnswer(callId, sdp, fromUserId) {
+  const session = sessions.get(callId);
+  if (!session || !sdp) return;
+  session.pendingAnswer = { sdp, from: String(fromUserId) };
+}
+
 function storePendingIce(callId, candidate, fromUserId) {
   const session = sessions.get(callId);
   if (!session || !candidate) return;
   if (!Array.isArray(session.pendingIce)) session.pendingIce = [];
-  // Cap buffer — ICE floods can be large
-  if (session.pendingIce.length < 64) {
+  // Cap buffer — TURN/TCP/TLS gathering produces more candidates than host/srflx
+  if (session.pendingIce.length < 128) {
     session.pendingIce.push({ candidate, from: String(fromUserId) });
   }
 }
 
 function takePendingSignaling(callId) {
   const session = sessions.get(callId);
-  if (!session) return { offer: null, ice: [] };
+  if (!session) return { offer: null, answer: null, ice: [] };
   const offer = session.pendingOffer;
+  const answer = session.pendingAnswer;
   const ice = Array.isArray(session.pendingIce) ? session.pendingIce.slice() : [];
   session.pendingOffer = null;
+  session.pendingAnswer = null;
   session.pendingIce = [];
-  return { offer, ice };
+  return { offer, answer, ice };
+}
+
+function peekPendingSignaling(callId) {
+  const session = sessions.get(callId);
+  if (!session) return { offer: null, answer: null, ice: [] };
+  return {
+    offer: session.pendingOffer || null,
+    answer: session.pendingAnswer || null,
+    ice: Array.isArray(session.pendingIce) ? session.pendingIce.slice() : [],
+  };
 }
 
 function getActiveCallForUser(userId) {
@@ -448,6 +512,7 @@ async function startOutgoing({
     offerFrom: null,
     /** Buffered SDP / ICE so late-joining (offline→online) callees still connect */
     pendingOffer: null,
+    pendingAnswer: null,
     pendingIce: [],
   };
 
@@ -704,8 +769,11 @@ module.exports = {
   getActiveCallForUser,
   getRingingIncomingForUser,
   storePendingOffer,
+  storePendingAnswer,
   storePendingIce,
   takePendingSignaling,
+  peekPendingSignaling,
+  iceListHasTurn,
   getSession,
   isParticipant,
   otherParty,

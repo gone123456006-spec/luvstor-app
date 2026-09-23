@@ -52,9 +52,7 @@ async function tokenFetch(
       },
     });
   } catch {
-    throw new Error(
-      `Cannot reach server at ${getApiBase()}. Check Wi‑Fi and that the backend is running.`,
-    );
+    throw new Error("Couldn't connect. Check your internet and try again.");
   }
   let data: ChatAccessStatus = {} as ChatAccessStatus;
   try {

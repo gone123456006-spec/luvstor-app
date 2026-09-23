@@ -121,7 +121,16 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
         gender: doc.gender,
         isOnline: true,
         lastSeen: doc.lastSeen,
-        distanceKm: km < 1 ? '1' : km > 100 ? '100' : km.toFixed(1),
+        distanceKm:
+          !Number.isFinite(km) || km > 100
+            ? null
+            : km <= 0.1
+              ? '1'
+              : km < 1
+                ? km.toFixed(1)
+                : Math.abs(km - Math.round(km)) < 0.05
+                  ? String(Math.round(km))
+                  : km.toFixed(1),
         friendshipStatus: friendship?.status || 'stranger',
         areFriends: !!areFriends,
         iLiked: !!iLiked,

@@ -29,6 +29,7 @@ import {
 } from '../utils/auth';
 import { AUTH_TOKEN_KEY, AUTH_USER_KEY, setOnSessionInvalid } from '../utils/api';
 import { clearLegacyGlobalStorage } from '../utils/accountStorage';
+import { hydrateNearbyFeedCache } from '../utils/nearbyFeedCache';
 
 type AuthContextValue = {
   sessionVersion: number;
@@ -58,6 +59,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await syncDeviceSessionIfNeeded();
       const current = await getCurrentAuthUser();
+      if (current?.email) {
+        await hydrateNearbyFeedCache(current.email);
+      }
       setUser(current);
     } catch (err) {
       console.warn('[Auth] Error loading session:', err);
@@ -81,6 +85,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithToken = useCallback(
     async (token: string, authUser: AuthUser) => {
       const hydrated = await completeAccountLogin(token, authUser);
+      if (hydrated?.email) {
+        await hydrateNearbyFeedCache(hydrated.email);
+      }
       setUser(hydrated);
       bump();
       return hydrated;

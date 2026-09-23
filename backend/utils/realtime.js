@@ -101,6 +101,12 @@ async function emitFriendSync(io, User, actorUserId, otherUserId, status) {
     status,
     silent: true,
     otherUserId: String(otherUserId),
+    // Actor just performed the like / accept — never treat this as incoming.
+    iLiked:
+      status === 'pending_like' ||
+      status === 'friends' ||
+      status === 'mutual_match',
+    theyLiked: status === 'friends' || status === 'mutual_match',
   });
 }
 

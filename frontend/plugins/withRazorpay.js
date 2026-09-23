@@ -50,6 +50,22 @@ function ensureUpiQueries(androidManifest) {
       data: [{ $: { 'android:scheme': 'upi' } }],
     });
   }
+
+  // Rate us → market://details?id=com.luvstor.app (Android 11+ package visibility)
+  if (!existingPkgs.has('com.android.vending')) {
+    queries.package.push({ $: { 'android:name': 'com.android.vending' } });
+  }
+  const hasMarketIntent = queries.intent.some((intent) => {
+    const data = intent?.data;
+    if (!Array.isArray(data)) return false;
+    return data.some((d) => d?.$?.['android:scheme'] === 'market');
+  });
+  if (!hasMarketIntent) {
+    queries.intent.push({
+      action: [{ $: { 'android:name': 'android.intent.action.VIEW' } }],
+      data: [{ $: { 'android:scheme': 'market' } }],
+    });
+  }
 }
 
 const withRazorpay = (config) => {

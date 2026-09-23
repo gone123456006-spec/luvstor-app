@@ -825,9 +825,13 @@ export default function TokenScreen() {
         updateCachedTokenBalance({ tokenBalance: result.tokenBalance });
       }
 
+      const added = result.credited ?? pack.count;
+      const bonus = result.bonusTokens || 0;
       Alert.alert(
         "Payment Successful",
-        `${pack.count.toLocaleString()} tokens have been added to your balance.`,
+        bonus > 0
+          ? `${added.toLocaleString()} tokens added, including +${bonus.toLocaleString()} subscriber bonus.`
+          : `${added.toLocaleString()} tokens have been added to your balance.`,
         [{ text: "OK" }],
       );
 

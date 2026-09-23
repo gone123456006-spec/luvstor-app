@@ -19,6 +19,10 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { getSheetBottomPadding } from "../utils/navigation";
+import {
+  sanitizeUserMessage,
+  sanitizeUserTitle,
+} from "../utils/userFacingError";
 import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { useTabBarOverlayInset } from "../hooks/useTabBarOverlayInset";
 
@@ -168,6 +172,10 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
     closingRef.current = false;
     setOptions({
       ...opts,
+      title: sanitizeUserTitle(opts.title),
+      message: opts.message
+        ? sanitizeUserMessage(opts.message)
+        : undefined,
       buttons: normalizeButtons(opts.buttons),
     });
     setVisible(true);

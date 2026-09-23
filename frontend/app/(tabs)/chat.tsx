@@ -50,6 +50,7 @@ import {
     type ConversationItem,
 } from "../../utils/chatListCache";
 import {
+    isIncomingRequestRow,
     patchListsForFriendAction,
     removeConversationFromAllLists,
     removeConversationFromMainLists,
@@ -324,6 +325,11 @@ function apiConversationToItem(c: any, myId: string): ConversationItem | null {
     relationshipStatus: c.friendshipStatus || "none",
     areFriends: !!c.areFriends,
     iLiked: !!c.iLiked || !!c.areFriends,
+    theyLiked:
+      !!c.theyLiked ||
+      !!c.areFriends ||
+      c.category === "request" ||
+      c.friendshipStatus === "mutual_match",
     privacyHidden,
     iBlocked: !!c.iBlocked,
     theyBlocked: !!c.theyBlocked,
@@ -587,7 +593,7 @@ export default function ChatScreen() {
           });
         setConversations(fix(hydrated.conversations));
         setFriendRows(fix(hydrated.friendRows));
-        setRequestRows(fix(hydrated.requestRows));
+        setRequestRows(fix(hydrated.requestRows).filter(isIncomingRequestRow));
         // Never restore Online tab from disk — it goes stale and shows fake "Online now"
         setOnlineRows([]);
         setArchiveRows(fix(hydrated.archiveRows || []));
@@ -598,7 +604,7 @@ export default function ChatScreen() {
           ...listSnapshotRef.current,
           conversations: fix(hydrated.conversations),
           friendRows: fix(hydrated.friendRows),
-          requestRows: fix(hydrated.requestRows),
+          requestRows: fix(hydrated.requestRows).filter(isIncomingRequestRow),
           onlineRows: [],
           archiveRows: fix(hydrated.archiveRows || []),
         };
@@ -739,6 +745,9 @@ export default function ChatScreen() {
 
         if (requests !== null) {
           for (const request of requestList) {
+            if (myId && String((request as any).initiatedBy || "") === myId) {
+              continue;
+            }
             const row = relationshipToRow(request, "request");
             const existing = byId.get(row.otherId);
             if (existing) {
@@ -859,11 +868,15 @@ export default function ChatScreen() {
         const apiRequests =
           requests !== null
             ? hideArchived(
-                requestList.map((request) =>
-                  relationshipToRow(request, "request"),
-                ),
-              )
-            : hideArchived(live.requestRows);
+                requestList
+                  .filter(
+                    (request) =>
+                      !myId ||
+                      String((request as any).initiatedBy || "") !== myId,
+                  )
+                  .map((request) => relationshipToRow(request, "request")),
+              ).filter(isIncomingRequestRow)
+            : hideArchived(live.requestRows).filter(isIncomingRequestRow);
         const apiFriends =
           friends !== null
             ? hideArchived(
@@ -871,29 +884,37 @@ export default function ChatScreen() {
               )
             : hideArchived(live.friendRows);
 
-        // Requests never auto-drop just because the API list is shorter / raced.
-        // Only leave Request when THIS user declined/deleted, or they are friends.
         const friendIds = new Set(
           (friends !== null ? apiFriends : live.friendRows).map(
             (r) => r.otherId,
           ),
         );
-        let nextRequests = mergeKeepLocalRows(
-          hideArchived(live.requestRows),
-          apiRequests,
-        ).filter((row) => !friendIds.has(row.otherId));
 
-        // Ensure every API request still has category=request after merge
+        // Incoming likes I received only. API list is source of truth so a
+        // like I sent never stays in my Request tab from cache/socket.
+        let nextRequests: ConversationItem[];
         if (requests !== null) {
           const apiReqIds = new Set(apiRequests.map((r) => r.otherId));
-          nextRequests = nextRequests.map((row) =>
-            apiReqIds.has(row.otherId) || row.category === "request"
-              ? {
-                  ...row,
-                  category: "request" as ChatCategory,
-                  theyLiked: row.theyLiked !== false,
-                }
-              : row,
+          nextRequests = apiRequests.filter((row) => !friendIds.has(row.otherId));
+          for (const row of hideArchived(live.requestRows)) {
+            if (friendIds.has(row.otherId) || apiReqIds.has(row.otherId)) continue;
+            if (!isIncomingRequestRow(row)) continue;
+            if (Date.now() - (row.lastMessageAt || 0) > 20_000) continue;
+            nextRequests = [row, ...nextRequests];
+            apiReqIds.add(row.otherId);
+          }
+          nextRequests = nextRequests.map((row) => ({
+            ...row,
+            category: "request" as ChatCategory,
+            theyLiked: true,
+            requestType:
+              row.requestType === "mutual_match"
+                ? "mutual_match"
+                : "incoming_like",
+          }));
+        } else {
+          nextRequests = apiRequests.filter(
+            (row) => !friendIds.has(row.otherId) && isIncomingRequestRow(row),
           );
         }
 
@@ -905,16 +926,28 @@ export default function ChatScreen() {
         const nextConversations = mergeKeepLocalRows(
           hideArchived(live.conversations),
           hideArchived(mergedRaw),
-        ).map((row) =>
-          requestIds.has(row.otherId) && !row.areFriends
-            ? {
-                ...row,
-                category: "request" as ChatCategory,
-                theyLiked: true,
-                requestType: row.requestType || "incoming_like",
-              }
-            : row,
-        );
+        ).map((row) => {
+          if (row.areFriends) return row;
+          if (requestIds.has(row.otherId)) {
+            return {
+              ...row,
+              category: "request" as ChatCategory,
+              theyLiked: true,
+              requestType:
+                row.requestType === "mutual_match"
+                  ? "mutual_match"
+                  : "incoming_like",
+            };
+          }
+          if (row.category === "request" && !isIncomingRequestRow(row)) {
+            return {
+              ...row,
+              category: "stranger" as ChatCategory,
+              requestType: row.iLiked ? "outgoing_like" : undefined,
+            };
+          }
+          return row;
+        });
 
         const nextOnline =
           nearby !== null
@@ -1142,18 +1175,14 @@ export default function ChatScreen() {
     } else if (payload.action === "sync") {
       if (payload.status === "friends") action = "friends";
       else if (payload.status === "pending_like") {
-        // Do NOT map all pending_like → like_sent (that wiped Request rows).
-        const alreadyIncoming =
-          existing.category === "request" ||
+        // friend:sync is only sent to the actor who just liked.
+        // Never treat my own outgoing like as an incoming Request.
+        const theyLiked =
+          !!(payload as any).theyLiked ||
           existing.requestType === "incoming_like" ||
-          !!existing.theyLiked;
-        const iLiked = !!(payload as any).iLiked || !!existing.iLiked;
-        if (alreadyIncoming && !iLiked) action = "incoming_like";
-        else if (alreadyIncoming && iLiked) action = "like_back";
-        else if (iLiked && (existing.theyLiked || alreadyIncoming))
-          action = "like_back";
-        else if (iLiked) action = "like_sent";
-        else action = "incoming_like";
+          existing.requestType === "mutual_match" ||
+          (existing.category === "request" && !!existing.theyLiked);
+        action = theyLiked ? "like_back" : "like_sent";
       } else if (
         payload.status === "stranger" ||
         payload.status === "declined"
@@ -1449,7 +1478,22 @@ export default function ChatScreen() {
         profileUser.iLiked ||
         profileUser.friendshipStatus === "friends" ||
         profileUser.friendshipStatus === "mutual_match";
+      const row: ConversationItem = {
+        otherId: profileUser.id,
+        name: profileUser.name || "User",
+        photo: profileUser.photo || "",
+        gender: profileUser.gender || "",
+        isOnline: !!profileUser.isOnline,
+        lastMessage: "",
+        lastMessageAt: Date.now(),
+        unread: 0,
+        category: profileUser.areFriends ? "friend" : "stranger",
+        areFriends: !!profileUser.areFriends,
+        iLiked: !!profileUser.iLiked,
+        theyLiked: !!profileUser.theyLiked,
+      };
       if (liked) {
+        applyLocalFriendPatch(profileUser.id, row, "unlike");
         await unlikeUser(token, profileUser.id);
         setProfileUser((prev) =>
           prev
@@ -1462,6 +1506,11 @@ export default function ChatScreen() {
             : prev,
         );
       } else {
+        applyLocalFriendPatch(
+          profileUser.id,
+          row,
+          profileUser.theyLiked ? "like_back" : "like_sent",
+        );
         await sendLike(token, profileUser.id);
         setProfileUser((prev) =>
           prev
@@ -1469,8 +1518,9 @@ export default function ChatScreen() {
                 ...prev,
                 iLiked: true,
                 friendshipStatus: prev.theyLiked
-                  ? "mutual_match"
+                  ? "friends"
                   : "pending_like",
+                areFriends: !!prev.theyLiked,
               }
             : prev,
         );
@@ -1487,8 +1537,12 @@ export default function ChatScreen() {
     }
   };
 
+  const incomingRequestRows = React.useMemo(
+    () => requestRows.filter(isIncomingRequestRow),
+    [requestRows],
+  );
   const friendCount = friendRows.length;
-  const requestCount = requestRows.length;
+  const requestCount = incomingRequestRows.length;
   const unreadRows = React.useMemo(
     () => conversations.filter((row) => (row.unread || 0) > 0),
     [conversations],
@@ -1714,7 +1768,7 @@ export default function ChatScreen() {
       activeFilter === "Friend"
         ? friendRows
         : activeFilter === "Request"
-          ? requestRows
+          ? incomingRequestRows
           : activeFilter === "Online"
             ? onlineRows
             : activeFilter === "Unread"
@@ -1725,7 +1779,7 @@ export default function ChatScreen() {
     [
       activeFilter,
       friendRows,
-      requestRows,
+      incomingRequestRows,
       onlineRows,
       unreadRows,
       archiveRows,
@@ -1774,6 +1828,10 @@ export default function ChatScreen() {
 
   const handleRequestAction = async (item: ConversationItem) => {
     if (updatingId) return;
+    if (!isIncomingRequestRow(item)) {
+      applyLocalFriendPatch(item.otherId, item, "like_sent");
+      return;
+    }
     setUpdatingId(item.otherId);
     applyLocalFriendPatch(item.otherId, item, "friends");
     try {
@@ -1782,7 +1840,11 @@ export default function ChatScreen() {
       if (item.requestType === "mutual_match") {
         await acceptFriendRequest(token, item.otherId);
       } else {
-        await sendLike(token, item.otherId);
+        try {
+          await acceptFriendRequest(token, item.otherId);
+        } catch {
+          await sendLike(token, item.otherId);
+        }
       }
       loadConversations(true);
       showAlert({

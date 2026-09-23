@@ -548,18 +548,39 @@ export default function NotificationsScreen() {
       return;
     }
 
-    // Profile views → open viewer profile (not a message thread)
-    if (n.type === "profile_view" && n.actorId) {
-      setViewerProfile({
-        id: String(n.actorId),
-        name: n.actorName || "User",
-        age: 0,
-        bio: "",
-        photo: resolvePhoto(n.actorPhoto) || "",
-        gender: n.actorGender || "",
-        interests: [],
+    if (route.startsWith("/u/")) {
+      router.push({
+        pathname: "/u/[publicId]",
+        params: { publicId: route.split("/u/")[1] },
       });
-      setViewerModalVisible(true);
+      return;
+    }
+
+    if (route.startsWith("/profile/")) {
+      router.push({
+        pathname: "/profile/[id]",
+        params: { id: route.split("/profile/")[1] },
+      });
+      return;
+    }
+
+    // Interest / like / view → that person's profile (photos + gallery)
+    if (
+      (n.type === "profile_view" ||
+        n.type === "like" ||
+        n.type === "friend_request" ||
+        n.type === "suggestion") &&
+      n.actorId
+    ) {
+      router.push({
+        pathname: "/profile/[id]",
+        params: { id: String(n.actorId) },
+      });
+      return;
+    }
+
+    if (!route || route.startsWith("luvstor:")) {
+      router.push("/notifications");
       return;
     }
 

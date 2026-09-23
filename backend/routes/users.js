@@ -9,8 +9,18 @@ const {
   serializeSubscription,
   ensureDiscoverTopSpot,
   syncExpiredSubscription,
+  getPlanEntitlements,
+  todayKey,
 } = require("../services/subscriptions");
-const { buildNearbyBatch, hasRealLocation } = require("../services/discovery");
+const {
+  buildNearbyBatch,
+  buildNearbyFeed,
+  hasRealLocation,
+  distanceMetres,
+  publicNearbyDistance,
+  NEARBY_HARD_RADIUS_M,
+} = require("../services/discovery");
+const nearbyRequestCache = require("../services/nearbyRequestCache");
 const { recordProfileView } = require("../services/profileViews");
 const {
   canonicalShowMe,
@@ -664,6 +674,22 @@ router.put("/location", auth, async (req, res) => {
         .json({ error: "Could not read a valid GPS fix. Try again." });
     }
 
+    const current = await User.findById(req.userId).select("location").lean();
+    if (!current) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (hasRealLocation(current.location?.coordinates)) {
+      const [lng, lat] = current.location.coordinates;
+      const moved = distanceMetres(lat, lng, latitude, longitude);
+      if (Number.isFinite(moved) && moved < 40) {
+        return res.json({
+          success: true,
+          location: current.location,
+          unchanged: true,
+        });
+      }
+    }
+
     const updated = await User.findByIdAndUpdate(
       req.userId,
       {
@@ -755,7 +781,12 @@ router.get("/profile/:userId", auth, async (req, res) => {
           distanceM = Math.round(
             getDistanceMetres(myLat, myLng, theirLat, theirLng),
           );
-          distanceKm = (distanceM / 1000).toFixed(1);
+          const pub = publicNearbyDistance(
+            distanceM,
+            distanceM <= NEARBY_HARD_RADIUS_M ? "nearby" : "random",
+          );
+          distanceKm = pub.distanceKm;
+          distanceM = pub.distanceM;
         }
       }
     } catch {
@@ -863,6 +894,10 @@ router.get("/search-by-id", auth, async (req, res) => {
       Number.isFinite(userLng)
         ? getDistanceMetres(myLat, myLng, userLat, userLng)
         : NaN;
+    const pubDistance = publicNearbyDistance(
+      distM,
+      Number.isFinite(distM) && distM <= NEARBY_HARD_RADIUS_M ? "nearby" : "random",
+    );
 
     // Get friendship status
     const { userA, userB } = Friendship.getSortedPair(req.userId, user._id);
@@ -905,8 +940,8 @@ router.get("/search-by-id", auth, async (req, res) => {
       relationshipGoal: user.relationshipGoal || "",
       isOnline,
       lastSeen: user.lastSeen,
-      distance: Number.isFinite(distM) ? Math.round(distM) : null,
-      distanceKm: Number.isFinite(distM) ? (distM / 1000).toFixed(1) : null,
+      distance: pubDistance.distanceM,
+      distanceKm: pubDistance.distanceKm,
       friendshipStatus: friendship?.status || "stranger",
       areFriends,
       iLiked,
@@ -920,11 +955,23 @@ router.get("/search-by-id", auth, async (req, res) => {
   }
 });
 
+function maybeRefreshViewerSideEffects(userId, me) {
+  const plan = me.subscriptionPlan || "free";
+  const exp = me.subscriptionExpiresAt
+    ? new Date(me.subscriptionExpiresAt)
+    : null;
+  if (plan !== "free" && (!exp || exp.getTime() <= Date.now())) {
+    void syncExpiredSubscription(userId);
+  }
+  const ent = getPlanEntitlements(me);
+  if (ent.topSpotDaily && me.discoverTopSpotDate !== todayKey()) {
+    void ensureDiscoverTopSpot(userId);
+  }
+}
+
 /**
  * Persist the Discover filters a viewer is actually browsing with.
- *
- * Fire-and-forget and only when something changed, so the common case (endless
- * scrolling with the same filters) costs no extra write.
+ * Fire-and-forget and only when something changed.
  */
 function rememberDiscoveryPrefs(userId, current, next) {
   const gender = canonicalShowMe(next.gender);
@@ -943,12 +990,10 @@ function rememberDiscoveryPrefs(userId, current, next) {
   if (unchanged) return;
 
   const $set = {
-    discoveryPrefs: {
-      gender,
-      radiusKm,
-      activeWithinMinutes,
-      updatedAt: new Date(),
-    },
+    'discoveryPrefs.gender': gender,
+    'discoveryPrefs.radiusKm': radiusKm,
+    'discoveryPrefs.activeWithinMinutes': activeWithinMinutes,
+    'discoveryPrefs.updatedAt': new Date(),
   };
   // Keep Profile "Show me" in sync with the Nearby filter the user just applied.
   if (gender) $set.showMe = gender;
@@ -967,16 +1012,13 @@ function rememberDiscoveryPrefs(userId, current, next) {
 // ─────────────────────────────────────────────
 router.get("/nearby", auth, async (req, res) => {
   try {
-    // These three reads are independent — run them in one wave instead of
-    // three sequential round-trips before the geo query even starts.
-    const [me] = await Promise.all([
-      User.findById(req.userId)
-        .select("location gender showMe discoveryPrefs")
-        .lean(),
-      syncExpiredSubscription(req.userId),
-      ensureDiscoverTopSpot(req.userId),
-    ]);
+    const me = await User.findById(req.userId)
+      .select(
+        "location gender showMe discoveryPrefs subscriptionPlan subscriptionExpiresAt chatSessionExpiresAt chatSessionStartedAt discoverTopSpotUntil discoverTopSpotDate",
+      )
+      .lean();
     if (!me) return res.status(404).json({ error: "User not found" });
+    maybeRefreshViewerSideEffects(req.userId, me);
 
     if (!hasRealLocation(me.location?.coordinates)) {
       return res
@@ -991,9 +1033,6 @@ router.get("/nearby", auth, async (req, res) => {
       : toGenderFilter(resolveShowMe(me));
     const activeWithinMinutes = parseInt(req.query.activeWithin, 10) || 0;
 
-    // Legacy params (nearbyLimit/randomLimit/limit) still drive the batch size
-    // so existing callers keep working; the split itself is now handled by the
-    // rotation pipeline's radius passes.
     const requested =
       (parseInt(req.query.nearbyLimit, 10) || 0) +
         (parseInt(req.query.randomLimit, 10) || 0) ||
@@ -1001,21 +1040,14 @@ router.get("/nearby", auth, async (req, res) => {
       DEFAULT_TARGET_COUNT;
     const targetCount = Math.min(Math.max(requested, 0), MAX_TARGET_COUNT);
 
-    // Session exclusion list, newest ids kept — see MAX_SESSION_EXCLUDE.
     const excludeIds = String(req.query.exclude || "")
       .split(",")
       .map((id) => id.trim())
       .filter(Boolean)
       .slice(-MAX_SESSION_EXCLUDE);
 
-    // Callers that only read the feed (e.g. the chat online list) pass track=0
-    // so they never consume a viewer's daily freshness.
     const trackImpressions = String(req.query.track || "1") !== "0";
 
-    // Remember the viewer's filters so (a) the app can restore them after a
-    // restart and (b) other people's feeds can score mutual relevance against
-    // them. Only real Discover traffic counts — read-only callers such as the
-    // chat online strip must not overwrite what the user actually chose.
     if (trackImpressions) {
       rememberDiscoveryPrefs(req.userId, me.discoveryPrefs, {
         gender: genderFilter,
@@ -1024,17 +1056,50 @@ router.get("/nearby", auth, async (req, res) => {
       });
     }
 
-    const { users, hasMore } = await buildNearbyBatch({
-      viewer: me,
-      radiusMetres,
-      genderFilter,
-      activeWithinMinutes,
-      excludeIds,
-      targetCount,
-      trackImpressions,
+    const runBatch = () =>
+      (trackImpressions
+        ? buildNearbyFeed({
+            viewer: me,
+            radiusMetres,
+            genderFilter,
+            activeWithinMinutes,
+            excludeIds,
+            trackImpressions,
+          })
+        : buildNearbyBatch({
+            viewer: me,
+            radiusMetres,
+            genderFilter,
+            activeWithinMinutes,
+            excludeIds,
+            targetCount,
+            trackImpressions,
+          })
+      ).then(({ users, hasMore }) => ({ users, hasMore }));
+
+    if (excludeIds.length) {
+      return res.json(await runBatch());
+    }
+
+    const [lng, lat] = me.location.coordinates;
+    const cacheKey =
+      nearbyRequestCache.cacheKey({
+        userId: req.userId,
+        radiusMetres,
+        gender: genderFilter,
+        activeWithinMinutes,
+        limit: targetCount,
+        track: trackImpressions,
+        excludeCount: 0,
+      }) + `|${Number(lng).toFixed(3)},${Number(lat).toFixed(3)}`;
+
+    const payload = await nearbyRequestCache.coalesce(cacheKey, async () => {
+      // Do not reuse a cached Nearby page — rotation must re-rank after
+      // lastShownAt is written. Coalesce only covers in-flight duplicates.
+      return runBatch();
     });
 
-    res.json({ users, hasMore });
+    res.json(payload);
   } catch (err) {
     console.error("nearby error:", err);
     res.status(500).json({ error: "Server error" });

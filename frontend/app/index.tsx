@@ -1,5 +1,6 @@
 import { Redirect } from 'expo-router';
 import { useEffect, useState } from 'react';
+import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from './../contexts/AuthContext';
 import { resolvePostLoginRoute } from '../utils/auth';
 import { consumePendingProfileId } from '../utils/pendingProfileLink';
@@ -40,6 +41,19 @@ export default function Index() {
     };
   }, [user]);
 
-  if (!href) return null;
+  if (!href) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: '#FDF8FF',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <ActivityIndicator size="large" color="#6750A4" />
+      </View>
+    );
+  }
   return <Redirect href={href as any} />;
 }

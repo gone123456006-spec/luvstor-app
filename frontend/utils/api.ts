@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import { getOrCreateDeviceId } from './device';
+import { userFacingMessage, USER_ERROR } from './userFacingError';
 
 /** Production API (Render). Release APKs use this unless EXPO_PUBLIC_API_URL overrides. */
 export const PRODUCTION_API_URL = 'https://luvstor-api.onrender.com';
@@ -119,7 +120,7 @@ export function setOnSessionInvalid(handler: SessionInvalidHandler | null) {
 
 const DEFAULT_FETCH_TIMEOUT_MS = 12_000;
 /** Render cold start + Brevo send often exceeds 12s — auth must wait longer. */
-const AUTH_FETCH_TIMEOUT_MS = 45_000;
+export const AUTH_FETCH_TIMEOUT_MS = 45_000;
 /** Uploads move real bytes over mobile data — they need more room than reads. */
 export const UPLOAD_FETCH_TIMEOUT_MS = 60_000;
 
@@ -148,15 +149,9 @@ export async function fetchWithTimeout(
       (err instanceof Error && err.name === 'AbortError') ||
       controller.signal.aborted;
     if (aborted && !externalSignal?.aborted) {
-      throw new Error(
-        `Server took too long at ${getApiBase()}. Check your connection and try again.`,
-      );
+      throw new Error(USER_ERROR.offline);
     }
-    throw new Error(
-      __DEV__
-        ? `Cannot reach server at ${getApiBase()}. Run "npm run dev" in backend and ensure phone + PC share the same Wi‑Fi.`
-        : `Cannot reach server at ${getApiBase()}.`,
-    );
+    throw new Error(USER_ERROR.offline);
   } finally {
     clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onExternalAbort);
@@ -212,7 +207,11 @@ async function apiFetchUncoalesced(
       onSessionInvalid?.(code);
     }
 
-    throw new ApiError(message, res.status, code);
+    throw new ApiError(
+      userFacingMessage({ message, code, status: res.status }, USER_ERROR.generic),
+      res.status,
+      code,
+    );
   }
   return data;
 }
@@ -354,14 +353,19 @@ export async function saveAuthSession(token: string, user: object): Promise<void
 export async function apiRequest(
   path: string,
   token: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<any> {
-  return apiFetch(path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(options.headers || {}),
+  return apiFetch(
+    path,
+    {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
     },
-  });
+    timeoutMs,
+  );
 }

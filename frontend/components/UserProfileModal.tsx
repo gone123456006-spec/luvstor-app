@@ -21,6 +21,7 @@ import { getAuthToken, isValidPublicId } from "../utils/auth";
 import { blockUser, ReportReason, reportUser } from "../utils/friends";
 import { mediaIdentity, resolveMediaUrl } from "../utils/media";
 import { getSheetBottomPadding } from "../utils/navigation";
+import { nearbyKmLabel } from "../utils/nearby";
 import { showMeLabel } from "../utils/showMe";
 import { useAppAlert } from "./AppAlert";
 import CopyablePublicId, { sharePublicProfile } from "./CopyablePublicId";
@@ -317,16 +318,12 @@ function UserProfileModal({
     resolveMediaUrl(displayUser.coverPhoto) || displayUser.coverPhoto || null;
   const coverHeight = 148 + Math.max(insets.top, 0);
   const avatarPhoto = displayUser.photo || "";
-
-  const rawKm =
-    displayUser.distanceKm != null
-      ? String(displayUser.distanceKm).trim()
-      : "";
-  const kmFromField =
-    rawKm && rawKm !== "?" ? rawKm.replace(/\s*km$/i, "").trim() : "";
-  // Only show distance when the list/API provided distanceKm (nearby only).
-  // Do not invent km from raw metres — that would surface non-nearby / unclamped values.
-  const kmValue = kmFromField;
+  const kmValue =
+    nearbyKmLabel(displayUser.distanceKm) ||
+    nearbyKmLabel(
+      displayUser.distance != null ? Number(displayUser.distance) / 1000 : undefined,
+    ) ||
+    "";
 
   const profileInfoRows = [
     {

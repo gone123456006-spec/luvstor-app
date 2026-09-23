@@ -23,6 +23,26 @@ try {
 
 export type CallMediaType = 'voice' | 'video';
 
+/**
+ * STUN + public TURN. Distance is never a call rule — TURN is what lets
+ * different ISPs / cellular / 1000 km peers connect when host/srflx fail.
+ */
+export const FALLBACK_ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:80?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
 export type NetworkQuality = 'excellent' | 'good' | 'fair' | 'poor' | 'unknown';
 
 /** WhatsApp-style adaptive encode presets (send-side). */
@@ -273,6 +293,10 @@ export class CallPeer {
   private lastQuality: NetworkQuality = 'unknown';
   private facingFront = true;
   private adaptBusy = false;
+  private gotRelay = false;
+  private candidateCount = 0;
+  private iceReadyWaiters: Array<() => void> = [];
+  private icePolicy: 'all' | 'relay' = 'all';
 
   constructor(opts: {
     iceServers: any[];
@@ -283,30 +307,100 @@ export class CallPeer {
   }) {
     this.iceServers = opts.iceServers?.length
       ? opts.iceServers
-      : [{ urls: 'stun:stun.l.google.com:19302' }];
+      : FALLBACK_ICE_SERVERS;
     this.isCaller = opts.isCaller;
     this.callType = opts.callType;
     this.handlers = opts.handlers;
     this.onQuality = opts.onQuality;
   }
 
+  private notifyIceProgress() {
+    if (this.gotRelay || this.pc?.iceGatheringState === 'complete') {
+      const waiters = this.iceReadyWaiters.splice(0);
+      waiters.forEach((fn) => {
+        try {
+          fn();
+        } catch {
+          /* ignore */
+        }
+      });
+    }
+  }
+
+  /**
+   * Brief gather window only — trickle ICE does the rest. Do not block the
+   * UI for seconds waiting on TURN.
+   */
+  async waitForUsefulIce(timeoutMs = 800): Promise<boolean> {
+    if (this.disposed || !this.pc) return false;
+    if (this.gotRelay || this.pc.iceGatheringState === 'complete') return true;
+    if (this.candidateCount > 0 && timeoutMs <= 400) return true;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.iceReadyWaiters = this.iceReadyWaiters.filter((w) => w !== onReady);
+        clearTimeout(timer);
+        clearTimeout(early);
+        resolve(ok);
+      };
+      const onReady = () => finish(true);
+      const timer = setTimeout(() => {
+        finish(!!(this.gotRelay || this.candidateCount > 0 || this.pc?.iceGatheringState === 'complete'));
+      }, timeoutMs);
+      const early = setTimeout(() => {
+        if (this.gotRelay || this.candidateCount > 0) onReady();
+      }, Math.min(400, timeoutMs));
+      this.iceReadyWaiters.push(onReady);
+    });
+  }
+
+  getLocalDescription() {
+    const desc = this.pc?.localDescription;
+    if (!desc) return null;
+    return { type: desc.type, sdp: desc.sdp };
+  }
+
+  getIceState() {
+    return {
+      ice: this.pc?.iceConnectionState || 'closed',
+      connection: this.pc?.connectionState || 'closed',
+    };
+  }
+
+  private applyPcConfig() {
+    this.pc?.setConfiguration?.({
+      iceServers: this.iceServers,
+      iceCandidatePoolSize: this.icePolicy === 'relay' ? 4 : 8,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      iceTransportPolicy: this.icePolicy,
+    });
+  }
+
+  /** Force TURN after host/srflx fail (different networks / any distance). */
+  preferRelay() {
+    this.icePolicy = 'relay';
+    this.gotRelay = false;
+    this.candidateCount = 0;
+    try {
+      this.applyPcConfig();
+    } catch (err) {
+      console.warn('[WebRTC] preferRelay:', (err as Error).message);
+    }
+  }
+
   /** Update ICE (TURN) without tearing down the local camera preview. */
   updateIceServers(iceServers: any[]) {
     if (!iceServers?.length) return;
     this.iceServers = iceServers;
+    this.gotRelay = false;
+    this.candidateCount = 0;
     try {
-      this.pc?.setConfiguration?.({
-        iceServers: this.iceServers,
-        iceCandidatePoolSize: 8,
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-      });
-      // Re-gather so TURN relays are available across cellular / different Wi‑Fi
-      const g = this.pc?.restartIce || this.pc?.iceRestart;
+      this.applyPcConfig();
       if (typeof this.pc?.restartIce === 'function') {
         this.pc.restartIce();
-      } else if (typeof g === 'function') {
-        g.call(this.pc);
       }
     } catch (err) {
       console.warn('[WebRTC] setConfiguration:', (err as Error).message);
@@ -418,14 +512,13 @@ export class CallPeer {
     }
     this.handlers.onLocalStream?.(this.localStream);
 
+    this.icePolicy = 'all';
     this.pc = new RTCPeerConnection({
       iceServers: this.iceServers,
-      // Gather early so TURN relays are ready before the offer (any-network)
-      iceCandidatePoolSize: 10,
+      iceCandidatePoolSize: 8,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      // Do NOT set iceTransportPolicy: 'relay' — allow host/srflx too;
-      // TURN is used automatically when peers are on different networks.
+      iceTransportPolicy: 'all',
     });
 
     for (const track of this.localStream.getTracks()) {
@@ -433,7 +526,17 @@ export class CallPeer {
     }
 
     this.pc.onicecandidate = (ev: any) => {
-      if (ev.candidate) this.handlers.onIceCandidate?.(ev.candidate);
+      if (ev.candidate) {
+        this.candidateCount += 1;
+        const cand = String(ev.candidate.candidate || '');
+        if (/\btyp relay\b/i.test(cand)) this.gotRelay = true;
+        this.handlers.onIceCandidate?.(ev.candidate);
+      }
+      this.notifyIceProgress();
+    };
+
+    this.pc.onicegatheringstatechange = () => {
+      this.notifyIceProgress();
     };
 
     this.pc.ontrack = (ev: any) => {
@@ -566,12 +669,13 @@ export class CallPeer {
     }
   }
 
-  async createOffer() {
+  async createOffer(opts?: { iceRestart?: boolean }) {
     const { RTCSessionDescription } = getRTC();
     const offer = await this.pc.createOffer({
       offerToReceiveAudio: true,
       offerToReceiveVideo: this.callType === 'video',
       voiceActivityDetection: true,
+      ...(opts?.iceRestart ? { iceRestart: true } : {}),
     });
     const preferred = preferOpusSdp(offer.sdp || '');
     await this.pc.setLocalDescription(
@@ -583,6 +687,35 @@ export class CallPeer {
       type: this.pc.localDescription.type,
       sdp: this.pc.localDescription.sdp,
     };
+  }
+
+  /** ICE restart + new offer. `relayOnly` forces TURN when P2P already failed. */
+  async restartNegotiation(opts?: { relayOnly?: boolean }) {
+    if (!this.pc || this.disposed) return null;
+    if (opts?.relayOnly) this.preferRelay();
+    this.gotRelay = false;
+    this.candidateCount = 0;
+    try {
+      if (typeof this.pc.restartIce === 'function') this.pc.restartIce();
+    } catch {
+      /* createOffer iceRestart is enough */
+    }
+    const offer = await this.createOffer({ iceRestart: true });
+    await this.waitForUsefulIce(800);
+    return this.getLocalDescription() || offer;
+  }
+
+  /** Wi‑Fi ↔ cellular / app resume — restart only if the pair is not live. */
+  async recoverAfterNetworkChange() {
+    if (!this.pc || this.disposed) return null;
+    const ice = this.pc.iceConnectionState;
+    const conn = this.pc.connectionState;
+    if (ice === 'connected' || ice === 'completed' || conn === 'connected') {
+      return null;
+    }
+    return this.restartNegotiation({
+      relayOnly: ice === 'failed' || conn === 'failed',
+    });
   }
 
   async createAnswer() {
@@ -729,6 +862,7 @@ export class CallPeer {
 
   dispose() {
     this.disposed = true;
+    this.iceReadyWaiters.splice(0);
     if (this.statsTimer) {
       clearInterval(this.statsTimer);
       this.statsTimer = null;
@@ -750,6 +884,7 @@ export class CallPeer {
         this.pc.ontrack = null;
         this.pc.onconnectionstatechange = null;
         this.pc.oniceconnectionstatechange = null;
+        this.pc.onicegatheringstatechange = null;
         this.pc.onnegotiationneeded = null;
       }
       this.pc?.close?.();

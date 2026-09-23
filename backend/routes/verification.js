@@ -16,6 +16,8 @@ const {
   POSES,
   REVIEW_DELAY_MS,
 } = require('../services/photoFaceMatch');
+const { mediaIdFromUrl } = require('../services/mediaStore');
+const MediaAsset = require('../models/MediaAsset');
 
 const submitLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000,
@@ -67,7 +69,13 @@ function serializePhotoVerification(user) {
   };
 }
 
-function isOwnedUploadUrl(selfieUrl, userId) {
+function isAllowedSelfieUrl(selfieUrl) {
+  if (mediaIdFromUrl(selfieUrl)) return true;
+  if (selfieUrl.startsWith('/uploads/')) return true;
+  return /^https?:\/\//i.test(selfieUrl);
+}
+
+function isLegacyOwnedUpload(selfieUrl, userId) {
   const uid = String(userId);
   if (selfieUrl.startsWith('/uploads/')) {
     return selfieUrl.includes(`/uploads/${uid}/`);
@@ -78,6 +86,18 @@ function isOwnedUploadUrl(selfieUrl, userId) {
   } catch {
     return false;
   }
+}
+
+/** Mongo `/api/media/{id}` must belong to this user; legacy `/uploads/{userId}/` still ok. */
+async function isOwnedUploadUrl(selfieUrl, userId) {
+  const mediaId = mediaIdFromUrl(selfieUrl);
+  if (mediaId) {
+    const asset = await MediaAsset.findOne({ _id: mediaId, userId })
+      .select('_id')
+      .lean();
+    return !!asset;
+  }
+  return isLegacyOwnedUpload(selfieUrl, userId);
 }
 
 function publicApiBase(req) {
@@ -361,10 +381,10 @@ router.post('/selfie', auth, redisSubmitGuard, submitLimiter, async (req, res) =
     if (!selfieUrl || selfieUrl.length > 2000) {
       return res.status(400).json({ error: 'selfieUrl is required' });
     }
-    if (!/^https?:\/\//i.test(selfieUrl) && !selfieUrl.startsWith('/uploads/')) {
+    if (!isAllowedSelfieUrl(selfieUrl)) {
       return res.status(400).json({ error: 'Invalid selfieUrl' });
     }
-    if (!isOwnedUploadUrl(selfieUrl, req.userId)) {
+    if (!(await isOwnedUploadUrl(selfieUrl, req.userId))) {
       return res.status(400).json({
         error: 'Selfie must be an upload from your account',
         code: 'SELFIE_OWNERSHIP',

@@ -133,8 +133,20 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
                 isOnline: 'false',
               },
             });
-          } else {
+          } else if (route.startsWith('/u/')) {
+            router.push({
+              pathname: '/u/[publicId]',
+              params: { publicId: route.split('/u/')[1] },
+            });
+          } else if (route.startsWith('/profile/')) {
+            router.push({
+              pathname: '/profile/[id]',
+              params: { id: route.split('/profile/')[1] },
+            });
+          } else if (route && !route.startsWith('luvstor:')) {
             router.push(route as any);
+          } else {
+            router.push('/notifications');
           }
         } catch (err: any) {
           console.warn('[Push] Navigation failed:', err?.message);

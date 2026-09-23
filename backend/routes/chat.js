@@ -221,6 +221,11 @@ async function enrichConversationsBatch(reqUserId, conversations) {
       friendship?.status === 'mutual_match' ||
       (friendship?.status === 'pending_like' &&
         String(friendship.initiatedBy) === me);
+    const theyLiked =
+      friendsStatus ||
+      friendship?.status === 'mutual_match' ||
+      (friendship?.status === 'pending_like' &&
+        String(friendship.initiatedBy) !== me);
 
     const otherForClient = safeOther
       ? {
@@ -248,6 +253,7 @@ async function enrichConversationsBatch(reqUserId, conversations) {
       friendshipStatus: friendship?.status || 'none',
       areFriends: friendsStatus && !block.blocked,
       iLiked: !!iLiked && !block.blocked,
+      theyLiked: !!theyLiked && !block.blocked,
       iBlocked: block.iBlocked,
       theyBlocked: block.theyBlocked,
       privacyHidden: !!safeOther?.privacyHidden,

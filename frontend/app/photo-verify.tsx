@@ -16,8 +16,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { apiRequest, getApiBase } from '../utils/api';
+import { getApiBase } from '../utils/api';
 import { getAuthToken } from '../utils/auth';
+import { uploadImageDurable } from '../utils/uploadMedia';
+import { userFacingMessage } from '../utils/userFacingError';
 import {
   fetchPhotoChallenge,
   fetchPhotoVerification,
@@ -131,8 +133,8 @@ function LiveAutoCaptureModal({
     try {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.75,
-        base64: true,
+        quality: 0.55,
+        base64: false,
         shutterSound: false,
         mirror: true,
       });
@@ -143,7 +145,6 @@ function LiveAutoCaptureModal({
         {
           pose: pose.id,
           uri: photo.uri,
-          base64: photo.base64 || undefined,
         },
       ];
 
@@ -447,7 +448,7 @@ export default function PhotoVerifyScreen() {
         setChallenge(null);
       }
     } catch (err: any) {
-      setLoadError(err?.message || 'Could not load verification.');
+      setLoadError(userFacingMessage(err, 'Couldn’t load verification. Please try again.'));
       setStatus({ status: 'none' });
     } finally {
       setLoading(false);
@@ -475,14 +476,6 @@ export default function PhotoVerifyScreen() {
       return null;
     }
   }, []);
-
-  const uploadDataUri = async (token: string, dataUri: string) => {
-    const uploaded = await apiRequest('/api/upload/image', token, {
-      method: 'POST',
-      body: JSON.stringify({ base64: dataUri }),
-    });
-    return uploaded?.url || uploaded?.absoluteUrl || '';
-  };
 
   const startAutoVerify = useCallback(async () => {
     if (uploading || status?.status === 'pending') return;
@@ -535,19 +528,8 @@ export default function PhotoVerifyScreen() {
 
       setUploading(true);
       try {
-        let dataUri = '';
-        if (match.base64) {
-          dataUri = `data:image/jpeg;base64,${match.base64}`;
-        } else if (match.uri) {
-          const FileSystem = await import('expo-file-system/legacy');
-          const raw = await FileSystem.readAsStringAsync(match.uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          dataUri = `data:image/jpeg;base64,${raw}`;
-        }
-        if (!dataUri) throw new Error('Could not read selfie image');
-
-        const url = await uploadDataUri(token, dataUri);
+        if (!match.uri) throw new Error('Could not read selfie image');
+        const url = await uploadImageDurable(match.uri, token);
         if (!url) throw new Error('Upload failed');
 
         const result = await submitPhotoVerification(token, url, {

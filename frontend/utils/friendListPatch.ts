@@ -40,6 +40,19 @@ export type FriendPatchResult = {
   onlineRows: ConversationItem[];
 };
 
+/** Incoming request I received — never a like I sent. */
+export function isIncomingRequestRow(row: ConversationItem | null | undefined): boolean {
+  if (!row || row.areFriends) return false;
+  if (row.requestType === 'outgoing_like') return false;
+  if (row.iLiked && !row.theyLiked) return false;
+  return (
+    row.requestType === 'incoming_like' ||
+    row.requestType === 'mutual_match' ||
+    row.category === 'request' ||
+    !!row.theyLiked
+  );
+}
+
 /** Instant list update after like / unlike / accept / decline — WhatsApp-style. */
 export function patchListsForFriendAction(
   snapshot: Pick<
@@ -99,7 +112,8 @@ export function patchListsForFriendAction(
       lastMessage: 'You liked them',
     };
     conversations = upsertRow(conversations, row);
-    // Keep existing request rows — never wipe Request on outgoing sync.
+    // Sender's own like never belongs in Request.
+    requestRows = removeRow(requestRows, otherId);
     onlineRows = patchRow(onlineRows, otherId, { iLiked: true });
   } else if (action === 'like_back' || action === 'friends') {
     const row: ConversationItem = {

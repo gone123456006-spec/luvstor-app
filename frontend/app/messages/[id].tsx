@@ -1305,7 +1305,13 @@ export default function MessageScreen() {
   const router = useRouter();
   const { showAlert } = useAppAlert();
   const { sessionVersion, user } = useAuth();
-  const { startCall: startMediaCall, phase: callPhase, isExplore: callIsExplore, minimized: callMinimized } = useCall();
+  const {
+    startCall: startMediaCall,
+    phase: callPhase,
+    callType: activeCallType,
+    isExplore: callIsExplore,
+    minimized: callMinimized,
+  } = useCall();
   const chatLeaveOpacity = useRef(new Animated.Value(1)).current;
   const chatLeaveScale = useRef(new Animated.Value(1)).current;
 
@@ -1314,9 +1320,19 @@ export default function MessageScreen() {
   const callUiBlocking =
     !callIsExplore &&
     !callMinimized &&
+    activeCallType === "video" &&
     (callPhase === "outgoing" ||
       callPhase === "ringing" ||
       callPhase === "incoming" ||
+      callPhase === "connecting" ||
+      callPhase === "reconnecting" ||
+      callPhase === "connected");
+
+  const inCallChatBanner =
+    !callIsExplore &&
+    callMinimized &&
+    (callPhase === "outgoing" ||
+      callPhase === "ringing" ||
       callPhase === "connecting" ||
       callPhase === "reconnecting" ||
       callPhase === "connected");
@@ -1377,16 +1393,8 @@ export default function MessageScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const recordingRef = useRef<AudioRecorder | null>(null);
-  /** WhatsApp hold-to-record: finger still down / released while start was in flight */
-  const micPressedRef = useRef(false);
-  /** Finger released while recorder was still preparing — finish/send when ready */
-  const releaseWhileStartingRef = useRef(false);
-  /** Ignore Pressable onPressOut fired by re-render right after record() starts */
-  const ignorePressOutUntilRef = useRef(0);
-  const micSlideCancelRef = useRef(false);
   const recordStartedAtRef = useRef(0);
   const recordingBusyRef = useRef(false);
-  const [slideCancelHint, setSlideCancelHint] = useState(false);
   const recordingPulse = useRef(new Animated.Value(1)).current;
   const [selectedImage, setSelectedImage] = useState<{
     uri: string;
@@ -3674,7 +3682,7 @@ export default function MessageScreen() {
       const sock = socketRef.current;
       if (state === "background" || state === "inactive") {
         // Cancel in-progress voice note + pause playback (release mic)
-        if (recordingRef.current || micPressedRef.current) {
+        if (recordingRef.current) {
           void cancelRecording();
         }
         pauseActiveVoicePlayback();
@@ -3731,7 +3739,6 @@ export default function MessageScreen() {
 
   useEffect(
     () => () => {
-      micPressedRef.current = false;
       const rec = recordingRef.current;
       if (rec) {
         if ((rec as any).__durationTick) {
@@ -4217,7 +4224,6 @@ export default function MessageScreen() {
     if (recordingRef.current || recordingBusyRef.current) return false;
     if (!requireMediaUnlocked()) return false;
     recordingBusyRef.current = true;
-    releaseWhileStartingRef.current = false;
     pauseActiveVoicePlayback();
 
     try {
@@ -4231,43 +4237,15 @@ export default function MessageScreen() {
         return false;
       }
 
-      // Finger already up after permission dialog — ask them to hold again
-      if (!micPressedRef.current && !releaseWhileStartingRef.current) {
-        showAlert({
-          title: "Hold to record",
-          message: "Press and hold the mic button to record a voice message.",
-          icon: "mic",
-        });
-        return false;
-      }
-
       await prepareChatRecordingAudio();
 
       const rec = await createPreparedVoiceRecorder();
-
-      // User cancelled (slide) while preparing
-      if (micSlideCancelRef.current) {
-        try {
-          await rec.stop();
-        } catch {
-          /* ignore */
-        }
-        await restoreChatPlaybackAudio();
-        return false;
-      }
-
-      // Finger released while preparing → still start, then stop+send immediately
-      const releasedEarly = !micPressedRef.current || releaseWhileStartingRef.current;
-
       rec.record();
       recordingRef.current = rec;
       recordStartedAtRef.current = Date.now();
-      // Prevent Pressable remount/onPressOut from killing the take instantly
-      ignorePressOutUntilRef.current = Date.now() + 400;
       setRecording(rec);
       setIsRecording(true);
       setRecordingDuration(0);
-      setSlideCancelHint(false);
       try {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       } catch {
@@ -4276,26 +4254,20 @@ export default function MessageScreen() {
       const tick = setInterval(() => {
         try {
           const st = rec.getStatus();
-          if (st?.isRecording) {
-            setRecordingDuration(
-              typeof st.durationMillis === "number"
-                ? st.durationMillis
-                : Date.now() - recordStartedAtRef.current,
-            );
-          }
+          const fromStatus =
+            typeof st?.durationMillis === "number" && st.durationMillis > 0
+              ? st.durationMillis
+              : typeof rec.currentTime === "number" && rec.currentTime > 0
+                ? rec.currentTime * 1000
+                : 0;
+          setRecordingDuration(
+            fromStatus || Date.now() - recordStartedAtRef.current,
+          );
         } catch {
-          /* ignore */
+          setRecordingDuration(Date.now() - recordStartedAtRef.current);
         }
       }, 200);
       (rec as any).__durationTick = tick;
-
-      if (releasedEarly) {
-        // Brief take after a short hold — still try to send (≥350ms)
-        await new Promise((r) => setTimeout(r, 350));
-        if (recordingRef.current === rec && !micSlideCancelRef.current) {
-          await stopRecording({ discardIfShort: false });
-        }
-      }
       return true;
     } catch (e) {
       console.error("startRecording failed", e);
@@ -4311,15 +4283,14 @@ export default function MessageScreen() {
       return false;
     } finally {
       recordingBusyRef.current = false;
-      releaseWhileStartingRef.current = false;
     }
   }
 
   async function stopRecording(opts?: { discardIfShort?: boolean }) {
     const rec = recordingRef.current;
-    if (!rec) return;
+    if (!rec || recordingBusyRef.current) return;
+    recordingBusyRef.current = true;
     setIsRecording(false);
-    setSlideCancelHint(false);
     if ((rec as any).__durationTick) {
       clearInterval((rec as any).__durationTick);
     }
@@ -4330,20 +4301,24 @@ export default function MessageScreen() {
       console.warn("recording.stop", e);
     }
     await restoreChatPlaybackAudio();
-    const uri = rec.uri;
+    let uri = rec.uri || rec.getStatus()?.url || null;
+    if (!uri) {
+      await new Promise((r) => setTimeout(r, 80));
+      uri = rec.uri || rec.getStatus()?.url || null;
+    }
     recordingRef.current = null;
     setRecording(null);
     setRecordingDuration(0);
 
-    // WhatsApp: ignore accidental taps under ~300ms (was 500 — felt like “won't record”)
-    if (opts?.discardIfShort !== false && elapsed < 300) {
+    try {
+    if (opts?.discardIfShort !== false && elapsed < 200) {
       return;
     }
 
     if (!uri) {
       showAlert({
         title: "Voice message",
-        message: "Hold the mic a moment longer to record.",
+        message: "Could not save the voice note. Tap the mic and try again.",
         icon: "mic",
       });
       return;
@@ -4424,19 +4399,18 @@ export default function MessageScreen() {
         icon: "mic",
       });
     }
+    } finally {
+      recordingBusyRef.current = false;
+    }
   }
 
   async function cancelRecording() {
     const rec = recordingRef.current;
     if (!rec) {
-      micPressedRef.current = false;
       setIsRecording(false);
-      setSlideCancelHint(false);
       return;
     }
-    micPressedRef.current = false;
     setIsRecording(false);
-    setSlideCancelHint(false);
     if ((rec as any).__durationTick) {
       clearInterval((rec as any).__durationTick);
     }
@@ -4456,56 +4430,39 @@ export default function MessageScreen() {
     }
   }
 
-  async function onMicPressIn() {
-    if (showSendIcon) return;
-    if (friendshipStatus?.theyBlocked) return;
-    if (!conversationStatus.canSend && !friendshipStatus?.theyBlocked) return;
+  async function onMicTap() {
+    if (showSendIcon) {
+      void sendMessage();
+      return;
+    }
+    if (friendshipStatus?.theyBlocked) {
+      showAlert({
+        title: "Text only",
+        message: "Only text messages can be sent right now.",
+        icon: "ban",
+      });
+      return;
+    }
+    if (!conversationStatus.canSend && !friendshipStatus?.theyBlocked) {
+      showAlert({
+        title: "Waiting for reply",
+        message:
+          conversationStatus.message ||
+          "Wait for them to reply before sending more.",
+        icon: "chatbubbles",
+      });
+      return;
+    }
     if (!isMediaUnlocked) {
       requireMediaUnlocked();
       return;
     }
-    micPressedRef.current = true;
-    releaseWhileStartingRef.current = false;
-    micSlideCancelRef.current = false;
-    setSlideCancelHint(false);
-    if (isRecording || recordingRef.current) return;
+    if (recordingBusyRef.current) return;
+    if (isRecording || recordingRef.current) {
+      await stopRecording({ discardIfShort: false });
+      return;
+    }
     await startRecording();
-  }
-
-  async function onMicPressOut() {
-    if (showSendIcon) return;
-    // Re-render right after record() often fires a fake pressOut — ignore it
-    if (Date.now() < ignorePressOutUntilRef.current) {
-      return;
-    }
-    const wasPressed = micPressedRef.current;
-    const slidCancel = micSlideCancelRef.current;
-    micPressedRef.current = false;
-    micSlideCancelRef.current = false;
-
-    // Still preparing — mark release so startRecording finishes then sends
-    if (recordingBusyRef.current && !recordingRef.current) {
-      releaseWhileStartingRef.current = !slidCancel;
-      if (slidCancel) {
-        micSlideCancelRef.current = true;
-      }
-      return;
-    }
-
-    if (!wasPressed && !recordingRef.current) return;
-
-    let waits = 0;
-    while (recordingBusyRef.current && waits < 25) {
-      await new Promise((r) => setTimeout(r, 40));
-      waits += 1;
-    }
-    if (slidCancel) {
-      await cancelRecording();
-      return;
-    }
-    if (recordingRef.current) {
-      await stopRecording({ discardIfShort: true });
-    }
   }
 
   const deleteSelected = () => {
@@ -4663,6 +4620,7 @@ export default function MessageScreen() {
       >
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView edges={["top"]} style={{ backgroundColor: "#FFFFFF" }}>
+        {inCallChatBanner ? <View style={styles.inCallBannerSpacer} /> : null}
         {selectionMode ? (
           <View style={styles.selectionHeader}>
             <View style={styles.selectionHeaderLeft}>
@@ -5209,16 +5167,8 @@ export default function MessageScreen() {
                             {fmtDuration(recordingDuration)}
                           </Text>
                         </View>
-                        <Text
-                          style={[
-                            styles.recordingText,
-                            slideCancelHint && styles.recordingTextCancel,
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {slideCancelHint
-                            ? "Release to cancel"
-                            : "Slide left to cancel"}
+                        <Text style={styles.recordingText} numberOfLines={1}>
+                          Tap send to send
                         </Text>
                         <TouchableOpacity
                           onPress={cancelRecording}
@@ -5265,57 +5215,7 @@ export default function MessageScreen() {
 
                 <Pressable
                   onPress={() => {
-                    if (showSendIcon) {
-                      void sendMessage();
-                      return;
-                    }
-                    if (friendshipStatus?.theyBlocked) {
-                      showAlert({
-                        title: "Text only",
-                        message:
-                          "Only text messages can be sent right now.",
-                        icon: "ban",
-                      });
-                      return;
-                    }
-                    if (
-                      !conversationStatus.canSend &&
-                      !friendshipStatus?.theyBlocked
-                    ) {
-                      showAlert({
-                        title: "Waiting for reply",
-                        message:
-                          conversationStatus.message ||
-                          "Wait for them to reply before sending more.",
-                        icon: "chatbubbles",
-                      });
-                      return;
-                    }
-                    // Locked recording (finger already up): tap mic again to send
-                    if (
-                      (isRecording || recordingRef.current) &&
-                      !micPressedRef.current
-                    ) {
-                      void stopRecording({ discardIfShort: false });
-                    }
-                  }}
-                  onPressIn={() => {
-                    if (showSendIcon) return;
-                    void onMicPressIn();
-                  }}
-                  onPressOut={() => {
-                    if (showSendIcon) return;
-                    void onMicPressOut();
-                  }}
-                  onTouchMove={(e) => {
-                    if (!isRecording && !recordingRef.current) return;
-                    const { locationX } = e.nativeEvent;
-                    // Slide left away from mic → cancel (WhatsApp-style)
-                    const cancel = locationX < -48;
-                    if (micSlideCancelRef.current !== cancel) {
-                      micSlideCancelRef.current = cancel;
-                      setSlideCancelHint(cancel);
-                    }
+                    void onMicTap();
                   }}
                   style={({ pressed }) => [
                     styles.sendButton,
@@ -5337,7 +5237,7 @@ export default function MessageScreen() {
                   >
                     <Ionicons
                       name={
-                        showSendIcon
+                        showSendIcon || isRecording
                           ? "send"
                           : friendshipStatus?.theyBlocked
                             ? "send"
@@ -5381,10 +5281,16 @@ export default function MessageScreen() {
         visible={!!pendingPhoto}
         transparent
         animationType="fade"
+        statusBarTranslucent
         onRequestClose={() => !sendingPhoto && setPendingPhoto(null)}
       >
         <View style={styles.pendingPhotoOverlay}>
-          <View style={styles.pendingPhotoTopBar}>
+          <View
+            style={[
+              styles.pendingPhotoTopBar,
+              { paddingTop: Math.max(insets.top, 12) + 8 },
+            ]}
+          >
             <TouchableOpacity
               onPress={() => !sendingPhoto && setPendingPhoto(null)}
               hitSlop={10}
@@ -5403,8 +5309,19 @@ export default function MessageScreen() {
             />
           ) : null}
 
-          {/* WhatsApp-style bottom bar: eye toggle + send */}
-          <View style={styles.pendingPhotoBar}>
+          {/* WhatsApp-style bottom bar: eye toggle + send — above Android nav */}
+          <View
+            style={[
+              styles.pendingPhotoBar,
+              {
+                paddingBottom:
+                  Math.max(
+                    insets.bottom,
+                    Platform.OS === "android" ? 48 : 16,
+                  ) + 12,
+              },
+            ]}
+          >
             <TouchableOpacity
               onPress={() => setPendingViewOnce((v) => !v)}
               disabled={sendingPhoto}
@@ -5938,6 +5855,7 @@ export default function MessageScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#ECE5DD", position: "relative" },
   chatLeaveLayer: { flex: 1 },
+  inCallBannerSpacer: { height: 62 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -7033,7 +6951,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   pendingPhotoTopBar: {
-    paddingTop: Platform.OS === "ios" ? 54 : 28,
     paddingHorizontal: 14,
     paddingBottom: 8,
   },
@@ -7054,7 +6971,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 14,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 28 : 16,
     gap: 12,
     backgroundColor: "rgba(0,0,0,0.55)",
   },

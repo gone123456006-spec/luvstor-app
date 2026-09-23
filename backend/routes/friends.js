@@ -103,11 +103,39 @@ router.post('/like', auth, async (req, res) => {
         }
       }
 
-      // If declined or blocked, don't allow new like
-      if (friendship.status === 'declined' || friendship.status === 'blocked') {
-        return res.status(403).json({ 
-          error: 'Cannot like this user', 
-          status: friendship.status 
+      if (friendship.status === 'blocked') {
+        return res.status(403).json({
+          error: 'Cannot like this user',
+          status: friendship.status,
+        });
+      }
+
+      // They cut the request — allow a new like, keep declinedAt for low Nearby rank.
+      if (friendship.status === 'declined') {
+        friendship.status = 'pending_like';
+        friendship.initiatedBy = req.userId;
+        friendship.likedAt = new Date();
+        friendship.acceptedBy = [];
+        friendship.matchedAt = null;
+        friendship.friendsSince = null;
+        await friendship.save();
+
+        const io = req.app.get('io');
+        await emitFriendUpdate(io, User, targetUserId, req.userId, 'like', 'pending_like');
+        await emitFriendSync(io, User, req.userId, targetUserId, 'pending_like');
+        await createNotification(io, {
+          userId: targetUserId,
+          type: 'friend_request',
+          title: 'New friend request',
+          body: 'Someone liked you. Open Requests to respond.',
+          actorId: req.userId,
+          data: { screen: 'chat', filter: 'Request', userId: String(req.userId) },
+        });
+
+        return res.json({
+          message: 'Like sent successfully',
+          status: 'pending_like',
+          friendship,
         });
       }
     }
@@ -153,8 +181,8 @@ router.get('/requests', auth, async (req, res) => {
     const mongoose = require('mongoose');
     const myObjId = new mongoose.Types.ObjectId(req.userId);
 
-    // Incoming one-way likes and any legacy mutual matches belong in Requests.
-    // Outgoing likes are intentionally omitted.
+    // Incoming one-way likes (someone liked ME) + leftover mutual matches.
+    // Outgoing likes I sent must never appear here.
     const matches = await Friendship.find({
       $and: [
         { $or: [{ userA: myObjId }, { userB: myObjId }] },
@@ -163,15 +191,19 @@ router.get('/requests', auth, async (req, res) => {
             { status: 'mutual_match' },
             {
               status: 'pending_like',
-              initiatedBy: { $ne: myObjId },
+              initiatedBy: { $nin: [myObjId, String(req.userId)] },
             },
           ],
         },
       ],
     }).sort({ updatedAt: -1 }).lean();
 
+    const incoming = matches.filter(
+      (m) => m.status !== 'pending_like' || String(m.initiatedBy) !== req.userId,
+    );
+
     // Populate the other user's info (one User query, not N)
-    const otherIds = matches.map((m) =>
+    const otherIds = incoming.map((m) =>
       String(m.userA) === req.userId ? m.userB : m.userA,
     );
     const others = await User.find({ _id: { $in: otherIds } })
@@ -185,7 +217,7 @@ router.get('/requests', auth, async (req, res) => {
         return [id, { ...u, isOnline: onlineMap.get(id) === true }];
       }),
     );
-    const enriched = matches.map((m) => {
+    const enriched = incoming.map((m) => {
       const otherId = String(m.userA) === req.userId ? m.userB : m.userA;
       return {
         ...m,
@@ -193,6 +225,8 @@ router.get('/requests', auth, async (req, res) => {
         otherId: String(otherId),
         requestType: m.status === 'pending_like' ? 'incoming_like' : 'mutual_match',
         acceptedByMe: (m.acceptedBy || []).some((id) => String(id) === req.userId),
+        theyLiked: true,
+        iLiked: m.status === 'mutual_match',
       };
     });
 
@@ -223,18 +257,60 @@ router.post('/accept', auth, async (req, res) => {
       return res.status(404).json({ error: 'Friendship not found' });
     }
 
-    if (friendship.status !== 'mutual_match') {
-      return res.status(400).json({ 
-        error: 'Can only accept mutual matches', 
-        status: friendship.status 
+    const mongoose = require('mongoose');
+    const myObjId = new mongoose.Types.ObjectId(req.userId);
+
+    // Incoming one-way like: Like back / Accept → friends.
+    if (friendship.status === 'pending_like') {
+      if (String(friendship.initiatedBy) === req.userId) {
+        return res.status(400).json({
+          error: 'You already sent this request',
+          status: 'pending_like',
+        });
+      }
+      friendship.status = 'friends';
+      friendship.matchedAt = friendship.matchedAt || new Date();
+      friendship.friendsSince = new Date();
+      friendship.acceptedBy = [friendship.initiatedBy, req.userId];
+      await friendship.save();
+
+      const io = req.app.get('io');
+      await emitFriendUpdate(io, User, targetUserId, req.userId, 'friends', 'friends');
+      await emitFriendSync(io, User, req.userId, targetUserId, 'friends');
+      await createNotification(io, {
+        userId: targetUserId,
+        type: 'match',
+        title: "It's a match!",
+        body: 'You liked each other. Start chatting now!',
+        actorId: req.userId,
+        deepLink: `/messages/${req.userId}`,
+        data: { screen: 'messages', userId: String(req.userId) },
+      });
+      await createNotification(io, {
+        userId: req.userId,
+        type: 'match',
+        title: "It's a match!",
+        body: 'You liked each other. Start chatting now!',
+        actorId: targetUserId,
+        deepLink: `/messages/${targetUserId}`,
+        data: { screen: 'messages', userId: String(targetUserId) },
+      });
+
+      return res.json({
+        message: 'You are now friends!',
+        status: 'friends',
+        friendship,
       });
     }
 
-    // A mutual match already contains consent from both likes. Accepting it
-    // completes the request and moves it to Friends immediately.
-    const mongoose = require('mongoose');
-    const myObjId = new mongoose.Types.ObjectId(req.userId);
-    if (!friendship.acceptedBy.some(id => id.equals(myObjId))) {
+    if (friendship.status !== 'mutual_match') {
+      return res.status(400).json({
+        error: 'Can only accept incoming requests',
+        status: friendship.status,
+      });
+    }
+
+    if (!friendship.acceptedBy.some((id) => id.equals(myObjId))) {
       friendship.acceptedBy.push(myObjId);
     }
 
@@ -372,7 +448,7 @@ router.get('/likes', auth, async (req, res) => {
 
     const likes = await Friendship.find({
       status: 'pending_like',
-      initiatedBy: myObjId,
+      initiatedBy: { $in: [myObjId, String(req.userId)] },
       $or: [{ userA: myObjId }, { userB: myObjId }],
     })
       .sort({ likedAt: -1, updatedAt: -1 })
@@ -502,10 +578,16 @@ router.get('/status/:userId', auth, async (req, res) => {
       });
     }
 
+    const liveLike =
+      friendship.status === 'pending_like' ||
+      friendship.status === 'mutual_match' ||
+      friendship.status === 'friends';
     const iLiked =
-      matched || String(friendship.initiatedBy) === req.userId;
+      !!matched ||
+      (liveLike && String(friendship.initiatedBy) === req.userId);
     const theyLiked =
-      matched || String(friendship.initiatedBy) === targetUserId;
+      !!matched ||
+      (liveLike && String(friendship.initiatedBy) === targetUserId);
 
     res.json({
       status: friendship.status,

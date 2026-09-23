@@ -1,4 +1,4 @@
-import { apiRequest } from './api';
+import { apiRequest, AUTH_FETCH_TIMEOUT_MS } from './api';
 
 export type PhotoVerification = {
   status: 'none' | 'pending' | 'approved' | 'rejected' | string;
@@ -32,11 +32,11 @@ export type PhotoChallenge = {
 };
 
 export async function fetchPhotoVerification(token: string): Promise<PhotoVerification> {
-  return apiRequest('/api/verification/me', token);
+  return apiRequest('/api/verification/me', token, {}, AUTH_FETCH_TIMEOUT_MS);
 }
 
 export async function fetchPhotoChallenge(token: string): Promise<PhotoChallenge> {
-  return apiRequest('/api/verification/challenge', token);
+  return apiRequest('/api/verification/challenge', token, {}, AUTH_FETCH_TIMEOUT_MS);
 }
 
 export async function submitPhotoVerification(
@@ -44,12 +44,17 @@ export async function submitPhotoVerification(
   selfieUrl: string,
   opts: { pose: string; challengeToken: string },
 ): Promise<PhotoVerification> {
-  return apiRequest('/api/verification/selfie', token, {
-    method: 'POST',
-    body: JSON.stringify({
-      selfieUrl,
-      pose: opts.pose,
-      challengeToken: opts.challengeToken,
-    }),
-  });
+  return apiRequest(
+    '/api/verification/selfie',
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        selfieUrl,
+        pose: opts.pose,
+        challengeToken: opts.challengeToken,
+      }),
+    },
+    AUTH_FETCH_TIMEOUT_MS,
+  );
 }

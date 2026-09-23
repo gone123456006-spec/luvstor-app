@@ -1060,21 +1060,52 @@ module.exports = function initSocket(io) {
       }
     });
 
-    // Re-deliver ringing incoming after push wake / app reopen
+    // Re-deliver ringing incoming after push wake / app reopen.
+    // Also replay offer/ICE if the socket flapped while connecting (long-range).
     socket.on('call:sync', async () => {
       try {
         const ringing = calls.getRingingIncomingForUser(uid);
-        if (!ringing) return;
-        const caller = await calls.actorSnapshot(ringing.callerId);
-        socket.emit('call:incoming', {
-          callId: ringing.callId,
-          from: ringing.callerId,
-          callType: ringing.callType,
-          roomId: ringing.roomId,
-          caller,
-          iceServers: calls.getIceServers(),
-          ringTimeoutMs: calls.RING_TIMEOUT_MS,
-        });
+        if (ringing) {
+          const caller = await calls.actorSnapshot(ringing.callerId);
+          socket.emit('call:incoming', {
+            callId: ringing.callId,
+            from: ringing.callerId,
+            callType: ringing.callType,
+            roomId: ringing.roomId,
+            caller,
+            iceServers: calls.getIceServers(),
+            ringTimeoutMs: calls.RING_TIMEOUT_MS,
+          });
+          return;
+        }
+        const active = calls.getActiveCallForUser(uid);
+        if (
+          active &&
+          (active.status === 'connecting' || active.status === 'connected')
+        ) {
+          const pending = calls.peekPendingSignaling(active.callId);
+          if (pending.offer?.sdp) {
+            socket.emit('call:offer', {
+              callId: active.callId,
+              sdp: pending.offer.sdp,
+              from: pending.offer.from,
+            });
+          }
+          if (pending.answer?.sdp) {
+            socket.emit('call:answer', {
+              callId: active.callId,
+              sdp: pending.answer.sdp,
+              from: pending.answer.from,
+            });
+          }
+          for (const ice of pending.ice) {
+            socket.emit('call:ice-candidate', {
+              callId: active.callId,
+              candidate: ice.candidate,
+              from: ice.from,
+            });
+          }
+        }
       } catch (err) {
         console.error('call:sync error:', err.message);
       }
@@ -1161,11 +1192,11 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !sdp) return;
       const otherId = calls.otherParty(session, uid);
-      // Buffer while ringing — delivered on accept (covers offline callees)
-      if (session.status === 'ringing') {
+      // Keep a copy until connected so a socket flap can replay (any-range ICE)
+      if (session.status === 'ringing' || session.status === 'connecting') {
         calls.storePendingOffer(callId, sdp, uid);
-        return;
       }
+      if (session.status === 'ringing') return;
       notifyUser(io, otherId, 'call:offer', { callId, sdp, from: uid });
     });
 
@@ -1173,6 +1204,9 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !sdp) return;
       const otherId = calls.otherParty(session, uid);
+      if (session.status === 'connecting') {
+        calls.storePendingAnswer(callId, sdp, uid);
+      }
       notifyUser(io, otherId, 'call:answer', { callId, sdp, from: uid });
     });
 
@@ -1180,11 +1214,11 @@ module.exports = function initSocket(io) {
       const session = calls.getSession(callId);
       if (!session || !calls.isParticipant(session, uid) || !candidate) return;
       const otherId = calls.otherParty(session, uid);
-      // Buffer while ringing — replayed with the offer on accept
-      if (session.status === 'ringing') {
+      // Buffer until connected — TURN relay candidates often arrive late
+      if (session.status !== 'connected') {
         calls.storePendingIce(callId, candidate, uid);
-        return;
       }
+      if (session.status === 'ringing') return;
       notifyUser(io, otherId, 'call:ice-candidate', {
         callId,
         candidate,

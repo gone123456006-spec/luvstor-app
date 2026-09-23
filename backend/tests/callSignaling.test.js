@@ -187,6 +187,12 @@ test('voice call: full invite → accept → offer/answer → ice → connected 
     assert.equal(incoming.callType, 'voice');
     assert.equal(String(incoming.from), String(caller._id));
     assert.ok(Array.isArray(incoming.iceServers), 'ICE servers delivered to callee');
+    assert.ok(
+      incoming.iceServers.some((s) =>
+        [].concat(s.urls || []).some((u) => /^turns?:/i.test(String(u || ''))),
+      ),
+      'callee ICE must include TURN so long-range calls can connect',
+    );
     assert.equal(ringing.callId, incoming.callId, 'both sides share one callId');
     assert.ok(Array.isArray(ringing.iceServers), 'ICE servers delivered to caller');
 

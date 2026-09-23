@@ -284,7 +284,7 @@ function freshnessScore(entry, viewer, nowMs, weights = null) {
     w.exposure * exposureScore(entry.candidate.exposureCount, entry.impressionCount) +
     w.distance * distanceScore(entry.distance) +
     w.quality * (entry.quality / 6) +
-    w.plan * (entry.planRank / 4)
+    w.plan * (entry.discoverBoost ? entry.planRank / 4 : 0)
   );
 }
 
@@ -392,6 +392,9 @@ function compareRanked(a, b) {
   // Inside one freshness class the viewer's radius preference decides, so the
   // rotation never promotes someone 80 km away over an equally fresh neighbour.
   if (a.ring !== b.ring) return a.ring - b.ring;
+  // Active Platinum / Black "Discover boost" — same ring only, so a far
+  // subscriber never jumps a nearer free profile.
+  if (a.discoverBoost !== b.discoverBoost) return a.discoverBoost ? -1 : 1;
   if (a.tier !== b.tier) return a.tier - b.tier;
   return compareWithinTier(a, b);
 }
@@ -468,11 +471,12 @@ function selectDiscoveryBatch({
       bucket,
       unseen,
       topSpot: !!candidate.topSpot,
+      discoverBoost: !!candidate.discoverBoost,
       // Unseen sorts before everything previously shown.
       lastShownAt: lastShownAt == null ? Number.NEGATIVE_INFINITY : lastShownAt,
       impressionCount: Number(impression?.impressionCount) || 0,
       exposureCount: Math.max(0, Number(candidate.exposureCount) || 0),
-      planRank: planRankOf(candidate.plan),
+      planRank: candidate.discoverBoost ? planRankOf(candidate.plan) : 0,
       isOnline: !!candidate.isOnline,
       lastSeen,
       distance,
