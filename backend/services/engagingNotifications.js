@@ -90,7 +90,9 @@ async function sendNearbyNotification(io, userId, candidateId, context = {}) {
       body,
       actorId: candidateId,
       imageUrl: candidate.photo,
-      deepLink: `/profile/${candidate.publicId || candidateId}`,
+      deepLink: candidate.publicId
+        ? `/u/${String(candidate.publicId).toUpperCase()}`
+        : `/profile/${candidateId}`,
       groupKey: `nearby:${userId}`,
       priority: 'high',
       data: {
@@ -152,7 +154,9 @@ async function sendActiveNowNotification(io, userId, activeUserId) {
       body,
       actorId: activeUserId,
       imageUrl: activeUser.photo,
-      deepLink: `/profile/${activeUser.publicId || activeUserId}`,
+      deepLink: activeUser.publicId
+        ? `/u/${String(activeUser.publicId).toUpperCase()}`
+        : `/profile/${activeUserId}`,
       groupKey: `active:${userId}`,
       priority: 'high',
       data: {
@@ -191,7 +195,9 @@ async function sendPopularNearbyNotification(io, userId, popularUserId, stats = 
       body,
       actorId: popularUserId,
       imageUrl: popularUser.photo,
-      deepLink: `/profile/${popularUser.publicId || popularUserId}`,
+      deepLink: popularUser.publicId
+        ? `/u/${String(popularUser.publicId).toUpperCase()}`
+        : `/profile/${popularUserId}`,
       groupKey: `popular:${userId}`,
       priority: 'normal',
       data: {
@@ -475,7 +481,9 @@ async function sendMutualInterestNotification(io, userId, targetUserId, mutualTo
       body,
       actorId: targetUserId,
       imageUrl: targetUser.photo,
-      deepLink: `/profile/${targetUser.publicId || targetUserId}`,
+      deepLink: targetUser.publicId
+        ? `/u/${String(targetUser.publicId).toUpperCase()}`
+        : `/profile/${targetUserId}`,
       groupKey: `mutual:${userId}`,
       priority: 'high',
       data: {

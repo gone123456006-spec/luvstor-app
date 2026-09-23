@@ -176,14 +176,17 @@ export async function buildProfileSnapshot(
             : [],
         }
       : {}),
-    name: me?.name || profile?.name,
+    name: me?.name != null && String(me.name).trim() ? me.name : profile?.name,
     age: me?.age ?? profile?.age,
-    gender: me?.gender || profile?.gender,
-    showMe: me?.showMe || profile?.showMe,
-    bio: me?.bio || profile?.bio,
-    interests: me?.interests || profile?.interests,
-    relationshipGoal: me?.relationshipGoal || profile?.relationshipGoal,
-    height: me?.height ?? profile?.height,
+    gender: me?.gender != null && String(me.gender) ? me.gender : profile?.gender,
+    showMe: me?.showMe != null && String(me.showMe) ? me.showMe : profile?.showMe,
+    bio: me?.bio != null ? me.bio : profile?.bio,
+    interests: Array.isArray(me?.interests) ? me.interests : profile?.interests,
+    relationshipGoal:
+      me?.relationshipGoal != null
+        ? me.relationshipGoal
+        : profile?.relationshipGoal,
+    height: me?.height !== undefined ? me.height : profile?.height,
     // Store relative /uploads paths (or remote absolutes) — never device URIs
     photo: preferPersistent(me?.photo, profile?.photo),
     coverPhoto: preferPersistent(me?.coverPhoto, profile?.coverPhoto),

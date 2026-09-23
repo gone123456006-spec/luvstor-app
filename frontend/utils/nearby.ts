@@ -2,6 +2,7 @@ import * as Location from 'expo-location';
 import { apiRequest } from './api';
 import { resolveShowMe } from './showMe';
 import { isLiveSubscriptionBadge } from './subscriptions';
+import { userFacingMessage } from './userFacingError';
 
 /**
  * Profiles per discovery batch. The backend runs its 7-day fresh rotation over
@@ -46,18 +47,100 @@ export interface NearbyUser {
   photoVerified?: boolean;
   matchScore?: number;
   matchReasons?: string[];
+  nearbyLowPriority?: boolean;
+  nearbyLane?: 'incoming' | 'fresh' | 'friends' | 'passed' | 'waiting';
+}
+
+export type NearbyLane = NonNullable<NearbyUser['nearbyLane']>;
+
+const LANE_ORDER: Record<NearbyLane, number> = {
+  incoming: 0,
+  friends: 1,
+  fresh: 2,
+  passed: 3,
+  waiting: 4,
+};
+
+export function nearbyLaneForUser(
+  user: NearbyUser,
+  rel?: {
+    status?: string;
+    iLiked?: boolean;
+    theyLiked?: boolean;
+    areFriends?: boolean;
+  } | null,
+): NearbyLane {
+  const friends = rel ? !!rel.areFriends : !!user.areFriends;
+  const iLiked = rel ? !!rel.iLiked : !!user.iLiked;
+  const theyLiked = rel ? !!rel.theyLiked : !!user.theyLiked;
+  const status = rel?.status || user.friendshipStatus || 'stranger';
+  if (friends || status === 'friends' || status === 'mutual_match') return 'friends';
+  if (theyLiked && !iLiked) return 'incoming';
+  if (iLiked) return 'waiting';
+  if (status === 'declined' || !!user.nearbyLowPriority) return 'passed';
+  return 'fresh';
+}
+
+function sortMetres(u: NearbyUser): number {
+  const metres = Number(u.distance);
+  if (Number.isFinite(metres) && metres >= 0) return metres;
+  const km = Number(String(u.distanceKm || '').replace(/\s*km$/i, ''));
+  if (Number.isFinite(km) && km >= 0) return km * 1000;
+  return Number.POSITIVE_INFINITY;
+}
+
+/** Nearby first; closest km at the top; liked / passed rows sink. */
+export function sortNearbyByLane<T extends NearbyUser>(
+  users: T[],
+  relById?: Record<string, { status?: string; iLiked?: boolean; theyLiked?: boolean; areFriends?: boolean }>,
+): T[] {
+  return users
+    .map((user, index) => ({ user, index }))
+    .sort((a, b) => {
+      const ra = a.user.source === 'random' ? 1 : 0;
+      const rb = b.user.source === 'random' ? 1 : 0;
+      if (ra !== rb) return ra - rb;
+      const laneA =
+        LANE_ORDER[nearbyLaneForUser(a.user, relById?.[a.user.id])] ??
+        LANE_ORDER.fresh;
+      const laneB =
+        LANE_ORDER[nearbyLaneForUser(b.user, relById?.[b.user.id])] ??
+        LANE_ORDER.fresh;
+      if (laneA !== laneB) return laneA - laneB;
+      const da = sortMetres(a.user);
+      const db = sortMetres(b.user);
+      if (da !== db) return da - db;
+      return a.index - b.index;
+    })
+    .map((row) => row.user);
 }
 
 /** Nearby list shows 1–100 km only (in-radius profiles). */
-export const NEARBY_DISTANCE_MIN_KM = 1;
+export const NEARBY_DISTANCE_MIN_KM = 0.1;
 export const NEARBY_DISTANCE_MAX_KM = 100;
+export const NEARBY_RANGE_LABEL = `${NEARBY_DISTANCE_MIN_KM}–${NEARBY_DISTANCE_MAX_KM} km`;
+
+/** True when this card belongs in the Nearby tab (1–100 km). */
+export function isNearbySectionUser(u: NearbyUser): boolean {
+  if (u.source === 'random' || u.source === 'for_you') return false;
+  const km = parseDistanceKm(u);
+  if (km == null) return u.source !== 'random';
+  return km <= NEARBY_DISTANCE_MAX_KM;
+}
+
+export function filterNearbySection<T extends NearbyUser>(users: T[]): T[] {
+  return (users || []).filter(isNearbySectionUser);
+}
 
 function parseDistanceKm(u: any): number | undefined {
   const rawKm = u?.distanceKm;
   if (rawKm != null && String(rawKm).trim() !== '' && String(rawKm).trim() !== '?') {
     const cleaned = String(rawKm).replace(/\s*km$/i, '').trim();
     const n = Number(cleaned);
-    if (Number.isFinite(n) && n >= 0) return n;
+    if (Number.isFinite(n) && n >= 0) {
+      // Metres accidentally labeled as km (Nearby is 1–100; Earth max ~20015).
+      return n > 20_015 ? n / 1000 : n;
+    }
   }
   const metres = Number(u?.distance);
   if (Number.isFinite(metres) && metres >= 0) {
@@ -67,32 +150,29 @@ function parseDistanceKm(u: any): number | undefined {
 }
 
 /**
- * Format km for Discover Nearby cards.
- * - Only in-radius (`source: nearby`) profiles show a distance.
- * - Display is clamped to 1–100 km (closest → at least 1, farthest → at most 100).
+ * Real GPS km: 0.1–100. Never "0". Does not flatten everyone to 1 km.
  */
+export function nearbyKmLabel(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const cleaned = String(raw).replace(/\s*km$/i, '').trim();
+  if (!cleaned || cleaned === '?') return undefined;
+  let km = Number(cleaned);
+  if (!Number.isFinite(km)) return undefined;
+  if (km > 20_015) km = km / 1000;
+  if (km > NEARBY_DISTANCE_MAX_KM) return undefined;
+  if (km <= 0.1) return '1';
+  if (km < 1) return km.toFixed(1);
+  if (Math.abs(km - Math.round(km)) < 0.05) return String(Math.round(km));
+  return km.toFixed(1);
+}
+
 function formatDistanceKm(u: any): string | undefined {
-  const source =
-    u?.source === 'for_you'
-      ? 'for_you'
-      : u?.source === 'random'
-        ? 'random'
-        : 'nearby';
-  // Expanded / global fills are not "nearby" — hide km.
-  if (source !== 'nearby') return undefined;
-
-  const km = parseDistanceKm(u);
-  if (km == null) return undefined;
-
-  const clamped = Math.min(
-    NEARBY_DISTANCE_MAX_KM,
-    Math.max(NEARBY_DISTANCE_MIN_KM, km),
-  );
-  // Whole kilometres read cleaner at the 1 / 100 ends of the range.
-  if (Math.abs(clamped - Math.round(clamped)) < 0.05) {
-    return String(Math.round(clamped));
-  }
-  return clamped.toFixed(1);
+  if (u?.source === 'for_you') return undefined;
+  const fromKm = nearbyKmLabel(u?.distanceKm);
+  if (fromKm) return fromKm;
+  const metres = Number(u?.distance);
+  if (!Number.isFinite(metres) || metres < 0) return undefined;
+  return nearbyKmLabel(metres / 1000);
 }
 
 export function mapNearbyUser(u: any): NearbyUser {
@@ -126,9 +206,7 @@ export function mapNearbyUser(u: any): NearbyUser {
     showMe: u.showMe || '',
     isOnline: !!u.isOnline,
     distance:
-      source === 'nearby' &&
-      u.distance != null &&
-      Number.isFinite(Number(u.distance))
+      u.distance != null && Number.isFinite(Number(u.distance))
         ? Number(u.distance)
         : undefined,
     distanceKm,
@@ -136,6 +214,8 @@ export function mapNearbyUser(u: any): NearbyUser {
     areFriends: !!u.areFriends,
     iLiked: !!u.iLiked,
     theyLiked: !!u.theyLiked,
+    nearbyLowPriority: !!u.nearbyLowPriority,
+    nearbyLane: u.nearbyLane,
     source,
     subscriptionBadge: live ? rawBadge : null,
     subscriptionExpiresAt: live ? rawExpiresAt : null,
@@ -160,14 +240,31 @@ function normalizeNearbyResponse(data: any): {
   return { users, hasMore };
 }
 
-/** Upload GPS once — call before fetching nearby list. */
+let locInflight: Promise<{ error?: string }> | null = null;
+let lastLocOkAt = 0;
+
+/** Upload GPS once — never block the Nearby list on a fix. */
 export async function uploadMyLocation(
   token: string,
   options: { preferCached?: boolean; timeoutMs?: number } = {},
 ): Promise<{ error?: string }> {
+  if (locInflight) return locInflight;
   const preferCached = !!options.preferCached;
+  if (preferCached && lastLocOkAt && Date.now() - lastLocOkAt < 45_000) {
+    return {};
+  }
   const timeoutMs = options.timeoutMs ?? (preferCached ? 5000 : 12000);
+  locInflight = uploadMyLocationNow(token, preferCached, timeoutMs).finally(() => {
+    locInflight = null;
+  });
+  return locInflight;
+}
 
+async function uploadMyLocationNow(
+  token: string,
+  preferCached: boolean,
+  timeoutMs: number,
+): Promise<{ error?: string }> {
   try {
     const services = await Location.hasServicesEnabledAsync();
     if (!services) {
@@ -229,14 +326,19 @@ export async function uploadMyLocation(
       method: 'PUT',
       body: JSON.stringify({ latitude, longitude }),
     });
+    lastLocOkAt = Date.now();
 
-    // Refresh GPS in background after a cached refresh (non-blocking)
     if (preferCached && last) {
       void (async () => {
         try {
-          const fresh = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-          });
+          const fresh = await Promise.race([
+            Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Location timeout')), 4000),
+            ),
+          ]);
           await apiRequest('/api/users/location', token, {
             method: 'PUT',
             body: JSON.stringify({
@@ -244,8 +346,9 @@ export async function uploadMyLocation(
               longitude: fresh.coords.longitude,
             }),
           });
+          lastLocOkAt = Date.now();
         } catch {
-          /* ignore */
+          /* keep last-known; Nearby already painted */
         }
       })();
     }
@@ -358,7 +461,7 @@ export async function fetchNearbyUsersPage(
     return {
       users: [],
       hasMore: false,
-      error: err?.message || 'Failed to load nearby people.',
+      error: userFacingMessage(err, "Couldn't load people nearby. Try again."),
     };
   }
 }
@@ -376,55 +479,60 @@ export async function loadNearbyFeed(
   hasMore: boolean;
   error?: string;
   locationWarning?: string;
+  /** True only when the backend answered (including a genuine 0-user list). */
+  ok: boolean;
 }> {
-  const { preferCachedLocation, refreshFast, ...fetchOptions } = options;
+  const { preferCachedLocation, refreshFast = true, ...fetchOptions } = options;
 
-  // WhatsApp technique: never wait on GPS before painting the list.
-  // Use last saved server location for the feed; update GPS in parallel.
-  if (refreshFast) {
-    const locPromise = uploadMyLocation(token, {
-      preferCached: true,
-      timeoutMs: 3500,
-    });
-    const feed = await fetchNearbyUsersPage(token, fetchOptions);
+  // Never block the feed on GPS. Server last-known location is enough to
+  // rank Nearby; a short cached/current fix runs in parallel.
+  const locPromise = uploadMyLocation(token, {
+    preferCached: refreshFast || !!preferCachedLocation,
+    timeoutMs: refreshFast || preferCachedLocation ? 3500 : 12000,
+  });
 
-    if (feed.error && /location/i.test(feed.error || '')) {
-      const loc = await locPromise;
-      const retry = await fetchNearbyUsersPage(token, fetchOptions);
-      return {
-        users: retry.users,
-        hasMore: retry.hasMore,
-        error: retry.error || loc.error || feed.error,
-        locationWarning: loc.error,
-      };
-    }
+  const feed = await fetchNearbyUsersPage(token, fetchOptions);
 
+  if (!feed.error) {
     void locPromise;
     return {
       users: feed.users,
       hasMore: feed.hasMore,
+      ok: true,
     };
   }
 
-  const loc = await uploadMyLocation(token, {
-    preferCached: !!preferCachedLocation,
-    timeoutMs: preferCachedLocation ? 4500 : 12000,
-  });
-  const feed = await fetchNearbyUsersPage(token, fetchOptions);
-
-  if (feed.error) {
-    const needsLocation = /location/i.test(feed.error);
+  if (/location/i.test(feed.error || '')) {
+    const loc = await Promise.race([
+      locPromise,
+      new Promise<{ error?: string }>((resolve) =>
+        setTimeout(() => resolve({ error: 'Location timeout' }), 4000),
+      ),
+    ]);
+    const retry = await fetchNearbyUsersPage(token, fetchOptions);
+    if (!retry.error) {
+      return {
+        users: retry.users,
+        hasMore: retry.hasMore,
+        locationWarning: loc.error,
+        ok: true,
+      };
+    }
     return {
-      users: feed.users,
-      hasMore: feed.hasMore,
-      error: needsLocation ? loc.error || feed.error : feed.error,
+      users: retry.users,
+      hasMore: retry.hasMore,
+      error: retry.error || loc.error || feed.error,
+      locationWarning: loc.error,
+      ok: false,
     };
   }
 
+  void locPromise;
   return {
     users: feed.users,
     hasMore: feed.hasMore,
-    locationWarning: loc.error,
+    error: feed.error,
+    ok: false,
   };
 }
 
@@ -445,7 +553,7 @@ export async function fetchNearbyUsers(
     return {
       users: [],
       hasMore: false,
-      error: err?.message || 'Failed to load nearby people.',
+      error: userFacingMessage(err, "Couldn't load people nearby. Try again."),
     };
   }
 }
@@ -473,14 +581,17 @@ export async function searchUserByPublicId(
     );
 
     if (!data || data.error) {
-      return { user: null, error: data?.error || 'User not found' };
+      return {
+        user: null,
+        error: userFacingMessage(data?.error, "We couldn't find that profile."),
+      };
     }
 
     return { user: mapNearbyUser(data), error: null };
   } catch (err: any) {
     return {
       user: null,
-      error: err?.message || 'Search failed',
+      error: userFacingMessage(err, "Couldn't find that person."),
     };
   }
 }
@@ -496,7 +607,10 @@ export async function fetchUserProfile(
     const data: any = await apiRequest(`/api/users/profile/${userId}`, token);
 
     if (!data || data.error) {
-      return { user: null, error: data?.error || 'User not found' };
+      return {
+        user: null,
+        error: userFacingMessage(data?.error, "We couldn't find that profile."),
+      };
     }
 
     const user: NearbyUser = {
@@ -508,7 +622,7 @@ export async function fetchUserProfile(
   } catch (err: any) {
     return {
       user: null,
-      error: err?.message || 'Failed to load profile',
+      error: userFacingMessage(err, "Couldn't load this profile. Try again."),
     };
   }
 }

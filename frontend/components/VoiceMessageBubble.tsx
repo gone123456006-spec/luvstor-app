@@ -130,6 +130,18 @@ export default function VoiceMessageBubble({
     );
     soundRef.current = s;
     setSound(s);
+    if (!s.isLoaded) {
+      await new Promise<void>((resolve) => {
+        let n = 0;
+        const wait = setInterval(() => {
+          n += 1;
+          if (s.isLoaded || n > 25) {
+            clearInterval(wait);
+            resolve();
+          }
+        }, 40);
+      });
+    }
     (s as AudioPlayer & {
       addListener: (
         event: string,

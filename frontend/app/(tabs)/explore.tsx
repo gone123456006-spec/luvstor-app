@@ -98,8 +98,12 @@ export default function ExploreScreen() {
 
   const [prefsOpen, setPrefsOpen] = useState(false);
 
+  const findingNext = status === "searching" || status === "cooldown";
   const inExploreCall =
-    call.isExplore && call.phase !== "idle" && call.phase !== "ended";
+    !findingNext &&
+    call.isExplore &&
+    call.phase !== "idle" &&
+    call.phase !== "ended";
 
   const startExplore = useCallback(
     (nextMode: "video" | "voice") => {
@@ -248,18 +252,11 @@ export default function ExploreScreen() {
             />
           ) : null}
 
-          {status === "searching" ? (
+          {status === "searching" || status === "cooldown" ? (
             <SearchingState
               mode={mode}
+              cooldownSec={status === "cooldown" ? cooldownSec : 0}
               onSkip={skipWithCooldown}
-              onLeave={leaveQueue}
-            />
-          ) : null}
-
-          {status === "cooldown" ? (
-            <CooldownState
-              seconds={cooldownSec}
-              mode={mode}
               onLeave={leaveQueue}
             />
           ) : null}
@@ -678,10 +675,12 @@ function ExplorePrefsSheet({
 
 function SearchingState({
   mode,
+  cooldownSec = 0,
   onSkip,
   onLeave,
 }: {
   mode: "video" | "voice";
+  cooldownSec?: number;
   onSkip: () => void;
   onLeave: () => void;
 }) {
@@ -764,8 +763,11 @@ function SearchingState({
         </View>
         <Text style={styles.stateTitle}>Finding someone</Text>
         <Text style={styles.stateSub}>
-          Matching you with an anonymous{" "}
-          {mode === "video" ? "video" : "voice"} partner…
+          {cooldownSec > 0
+            ? `Next ${mode === "video" ? "video" : "voice"} match in ${cooldownSec}s`
+            : `Matching you with an anonymous ${
+                mode === "video" ? "video" : "voice"
+              } partner…`}
         </Text>
       </View>
 
@@ -773,73 +775,14 @@ function SearchingState({
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={onSkip}
-          style={styles.ghostBtn}
+          style={[styles.ghostBtn, cooldownSec > 0 && { opacity: 0.4 }]}
+          disabled={cooldownSec > 0}
         >
           <Ionicons name="play-skip-forward" size={18} color={T.text} />
-          <Text style={styles.ghostBtnText}>Skip</Text>
+          <Text style={styles.ghostBtnText}>
+            {cooldownSec > 0 ? `${cooldownSec}s` : "Skip"}
+          </Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={onLeave}
-          style={styles.textBtn}
-        >
-          <Text style={styles.textBtnLabel}>Leave queue</Text>
-        </TouchableOpacity>
-      </View>
-    </TabPadded>
-  );
-}
-
-function CooldownState({
-  seconds,
-  mode,
-  onLeave,
-}: {
-  seconds: number;
-  mode: "video" | "voice";
-  onLeave: () => void;
-}) {
-  const pulse = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.06,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [pulse]);
-
-  return (
-    <TabPadded style={styles.stateScreen}>
-      <View style={styles.stateCenter}>
-        <Animated.View
-          style={[styles.countdown, { transform: [{ scale: pulse }] }]}
-        >
-          <LinearGradient
-            colors={[T.primarySoft, T.roseSoft]}
-            style={styles.countdownInner}
-          >
-            <Text style={styles.countdownNum}>{seconds}</Text>
-          </LinearGradient>
-        </Animated.View>
-        <Text style={styles.stateTitle}>Next match soon</Text>
-        <Text style={styles.stateSub}>
-          Looking for another anonymous {mode === "video" ? "video" : "voice"}{" "}
-          partner
-        </Text>
-      </View>
-      <View style={styles.stateActions}>
         <TouchableOpacity
           activeOpacity={0.8}
           onPress={onLeave}

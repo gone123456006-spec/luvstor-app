@@ -428,7 +428,8 @@ test('integration: distance fields are populated for the served batch', async (t
         `unexpected distanceKm: ${u.distanceKm}`,
       );
       const km = Number(u.distanceKm);
-      assert.ok(km >= 1 && km <= 100, `distanceKm out of 1–100 range: ${u.distanceKm}`);
+      assert.ok(km >= 0.1 && km <= 100, `distanceKm out of 0.1–100 range: ${u.distanceKm}`);
+      assert.notEqual(String(u.distanceKm), '0');
     } else {
       assert.equal(u.distanceKm, null, 'non-nearby profiles must not show km');
       assert.equal(u.distance, null, 'non-nearby profiles must not show distance');
@@ -464,4 +465,10 @@ test('integration: friendship state is hydrated in one pass', async (t) => {
   assert.equal(byId.get(String(friend._id)).areFriends, true);
   assert.equal(byId.get(String(liked._id)).iLiked, true);
   assert.equal(byId.get(String(liked._id)).theyLiked, false);
+  assert.equal(byId.get(String(liked._id)).nearbyLane, 'waiting');
+  const likedIdx = users.findIndex((u) => String(u.id) === String(liked._id));
+  const freshIdx = users.findIndex((u) => String(u.id) === String(people[2]._id));
+  if (likedIdx >= 0 && freshIdx >= 0) {
+    assert.ok(likedIdx > freshIdx, 'outgoing likes sink below fresh Nearby rows');
+  }
 });

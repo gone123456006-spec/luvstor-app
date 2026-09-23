@@ -294,7 +294,18 @@ async function hydrateUsers(viewer, rankedSlice, now) {
         relationshipGoal: doc.relationshipGoal || "",
         isOnline: onlineMap.get(id) === true,
         distance: metres,
-        distanceKm: metres != null ? (metres / 1000).toFixed(1) : null,
+        distanceKm:
+          metres != null && metres >= 0 && metres <= 100_000
+            ? (() => {
+                const km = Math.min(100, Math.max(0.1, metres / 1000));
+                if (km <= 0.1) return '1';
+                return km < 1
+                  ? km.toFixed(1)
+                  : Math.abs(km - Math.round(km)) < 0.05
+                    ? String(Math.round(km))
+                    : km.toFixed(1);
+              })()
+            : null,
         friendshipStatus: friendship?.status || "stranger",
         areFriends: !!areFriends,
         iLiked: !!iLiked,

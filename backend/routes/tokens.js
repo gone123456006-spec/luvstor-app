@@ -14,8 +14,6 @@ const {
   getPlanConfig,
   serializeSubscription,
   syncExpiredSubscription,
-  getPlanEntitlements,
-  applyTokenBonus,
   SPIN_WINDOW_MS,
   resolveSpinWindowStart,
   isSpinWindowActive,

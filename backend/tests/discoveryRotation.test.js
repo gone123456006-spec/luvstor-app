@@ -705,11 +705,9 @@ test('scenario 14: eligibility filter keeps gender, activity, verification and v
   assert.deepEqual(filter.isDeactivated, { $ne: true });
   assert.equal(filter.deletionScheduledAt, null);
   assert.deepEqual(filter.name, { $nin: [null, ''] });
-  assert.ok(filter.gender instanceof RegExp);
-  assert.ok(filter.gender.test('Woman'));
-  assert.ok(!filter.gender.test('Man'));
-  assert.ok(Array.isArray(filter.$or));
-  assert.equal(filter.$or.length, 2);
+  assert.deepEqual(filter.gender, { $in: ['woman', 'Woman'] });
+  assert.equal(filter.isOnline, true);
+  assert.ok(filter.lastSeen && filter.lastSeen.$gte instanceof Date);
 });
 
 test('gender filter is omitted when the viewer selects "all"', () => {
@@ -1197,4 +1195,46 @@ test('feature 12: reserved slots never break session memory or introduce duplica
     }
   }
   assert.equal(seen.size, 100);
+});
+
+test('active platinum/black discoverBoost ranks above free in the same ring', () => {
+  const [freeUser, boosted] = twinsInBucket(0, { plan: 'free' }, {
+    plan: 'platinum',
+    discoverBoost: true,
+    distance: 2400,
+  });
+  const { selected } = runBatch([freeUser, boosted]);
+  assert.equal(selected[0].id, boosted.id);
+  assert.equal(selected[1].id, freeUser.id);
+});
+
+test('gold without discoverBoost does not jump a free neighbour', () => {
+  const [freeUser, gold] = twinsInBucket(
+    0,
+    { plan: 'free', distance: 400 },
+    { plan: 'gold', discoverBoost: false, distance: 2400 },
+  );
+  const { selected } = runBatch([freeUser, gold]);
+  assert.equal(selected[0].id, freeUser.id);
+  assert.equal(selected[1].id, gold.id);
+});
+
+test('discoverBoost does not beat a nearer unseen neighbour in a closer ring', () => {
+  const nearFree = {
+    ...makeCandidates(1)[0],
+    id: idInBucket(VIEWER, 'near-free', 0),
+    ring: 0,
+    distance: 400,
+    plan: 'free',
+  };
+  const farBoost = {
+    ...makeCandidates(1)[0],
+    id: idInBucket(VIEWER, 'far-boost', 0),
+    ring: 1,
+    distance: 18000,
+    plan: 'platinum',
+    discoverBoost: true,
+  };
+  const { selected } = runBatch([farBoost, nearFree]);
+  assert.equal(selected[0].id, nearFree.id);
 });

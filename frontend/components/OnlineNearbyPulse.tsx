@@ -134,9 +134,14 @@ export function OnlineNearbyPulse({ token, onUserPress, refreshTrigger }: Props)
             <Text style={styles.userName} numberOfLines={1}>
               {user.name}, {user.age}
             </Text>
-            <Text style={styles.distance} numberOfLines={1}>
-              {user.distanceKm} km
-            </Text>
+            {user.distanceKm &&
+            user.distanceKm !== "?" &&
+            user.distanceKm !== "0" &&
+            user.distanceKm !== "0.0" ? (
+              <Text style={styles.distance} numberOfLines={1}>
+                {user.distanceKm} km
+              </Text>
+            ) : null}
           </TouchableOpacity>
         ))}
       </ScrollView>

@@ -25,6 +25,8 @@ const discoveryImpressionSchema = new mongoose.Schema(
     },
     firstShownAt: { type: Date, default: Date.now },
     lastShownAt: { type: Date, default: Date.now },
+    /** Nearby 1–25 rotation cycle when last shown. Random 26–50 does not set this. */
+    nearbyCycle: { type: Number, default: null, min: 1 },
     impressionCount: { type: Number, default: 0, min: 0 },
     /** Rotation bucket (0–6) this candidate occupied at the last impression. */
     lastBucket: { type: Number, default: null, min: 0, max: 6 },
@@ -43,6 +45,8 @@ discoveryImpressionSchema.index({ viewerId: 1, candidateId: 1 }, { unique: true 
 
 /** Feed queries load a viewer's history ordered by recency / frequency. */
 discoveryImpressionSchema.index({ viewerId: 1, lastShownAt: 1 });
+discoveryImpressionSchema.index({ viewerId: 1, lastSource: 1, lastShownAt: 1 });
+discoveryImpressionSchema.index({ viewerId: 1, nearbyCycle: 1 });
 discoveryImpressionSchema.index({ viewerId: 1, impressionCount: 1 });
 
 /**

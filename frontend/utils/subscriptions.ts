@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiRequest, fetchWithTimeout, getApiBase } from "./api";
+import { userFacingMessage } from "./userFacingError";
 import {
   RazorpayCheckout,
   isRazorpayAvailable,
@@ -71,11 +72,9 @@ export type SubscriptionPlan = {
 };
 
 function apiErrorMessage(error: any, fallback: string) {
-  return (
-    error?.message ||
-    error?.description ||
-    error?.data?.error ||
-    fallback
+  return userFacingMessage(
+    error?.message || error?.description || error?.data?.error || error,
+    fallback,
   );
 }
 

@@ -26,6 +26,9 @@ interface PaymentVerificationResponse {
   success: boolean;
   verified: boolean;
   credited: number;
+  baseTokens?: number;
+  bonusTokens?: number;
+  tokenBonusPercent?: number;
   tokenBalance: number;
   paymentId: string;
   orderId: string;
@@ -39,7 +42,13 @@ export async function initiateTokenPurchase(
   packId: string,
   userName: string,
   userEmail: string
-): Promise<{ success: boolean; tokenBalance?: number; error?: string }> {
+): Promise<{
+  success: boolean;
+  tokenBalance?: number;
+  credited?: number;
+  bonusTokens?: number;
+  error?: string;
+}> {
   try {
     // Check if Razorpay is available (requires development build)
     if (!isRazorpayAvailable || !RazorpayCheckout) {
@@ -111,6 +120,8 @@ export async function initiateTokenPurchase(
       return {
         success: true,
         tokenBalance: verificationData.tokenBalance,
+        credited: verificationData.credited,
+        bonusTokens: verificationData.bonusTokens || 0,
       };
     } else {
       return {

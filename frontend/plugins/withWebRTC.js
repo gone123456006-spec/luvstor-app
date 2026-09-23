@@ -60,6 +60,7 @@ function withWebRTC(config) {
       force('android.permission.RECORD_AUDIO');
       force('android.permission.CAMERA');
       force('android.permission.MODIFY_AUDIO_SETTINGS');
+      force('android.permission.BLUETOOTH_CONNECT');
       app['uses-permission'] = list;
       if (!app.$) app.$ = {};
       if (!app.$['xmlns:tools']) {

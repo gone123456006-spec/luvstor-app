@@ -31,6 +31,7 @@ import WhatsAppAvatar, {
 } from "../../components/WhatsAppAvatar";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
+import { useNearbyFeed } from "../../hooks/useNearbyFeed";
 import { useStableBottomInset } from "../../hooks/useStableBottomInset";
 import { durableMediaPathFromUrl, mediaIdentity } from "../../utils/media";
 import {
@@ -46,15 +47,20 @@ import {
     unlikeUser,
 } from "../../utils/friends";
 import {
-    fetchNearbyUsersPage,
     fetchSavedDiscoveryPrefs,
     fetchUserProfile,
-    loadNearbyFeed,
-    NEARBY_PAGE_SIZE,
     NearbyUser,
+    nearbyKmLabel,
     searchUserByPublicId,
     uploadMyLocation,
 } from "../../utils/nearby";
+import { NEARBY_REFRESH_HINT } from "../../utils/nearbyFeedCache";
+import {
+    loadMore as loadMoreNearbyFeed,
+    patchUsers as patchNearbyUsers,
+    refresh as refreshNearbyFeed,
+    removeUser as removeNearbyUser,
+} from "../../utils/nearbyStore";
 import {
     addRecentSearch,
     clearRecentSearches,
@@ -131,7 +137,26 @@ function applyRelationships(
   users: NearbyUser[],
 ) {
   const next = relationshipsFromUsers(users);
-  setRelationshipById((prev) => ({ ...prev, ...next }));
+  setRelationshipById((prev) => {
+    let changed = false;
+    const out = { ...prev };
+    for (const id of Object.keys(next)) {
+      const rel = next[id];
+      const cur = prev[id];
+      if (
+        cur &&
+        cur.status === rel.status &&
+        cur.iLiked === rel.iLiked &&
+        cur.theyLiked === rel.theyLiked &&
+        cur.areFriends === rel.areFriends
+      ) {
+        continue;
+      }
+      out[id] = rel;
+      changed = true;
+    }
+    return changed ? out : prev;
+  });
 }
 
 /** Append only — never remove, refresh, or reorder existing rows. */
@@ -154,6 +179,8 @@ function NearbyListRowBase({
   index,
   stagger,
   liked,
+  areFriends,
+  theyLiked,
   liking,
   feedTab,
   onOpenChat,
@@ -164,6 +191,8 @@ function NearbyListRowBase({
   index: number;
   stagger: boolean;
   liked: boolean;
+  areFriends: boolean;
+  theyLiked: boolean;
   liking: boolean;
   feedTab: "nearby" | "for_you";
   onOpenChat: () => void;
@@ -188,6 +217,10 @@ function NearbyListRowBase({
     }, delay);
     return () => clearTimeout(t);
   }, [stagger, index, item.id, anim]);
+
+  const kmLabel = nearbyKmLabel(item.distanceKm) || nearbyKmLabel(
+    item.distance != null ? Number(item.distance) / 1000 : undefined,
+  );
 
   return (
     <Animated.View
@@ -240,26 +273,38 @@ function NearbyListRowBase({
                 style={{ marginLeft: 4 }}
               />
             ) : null}
-            <Text style={styles.metaText}>
-              {item.distanceKm && item.distanceKm !== "?"
-                ? `${item.distanceKm} km`
-                : ""}
-            </Text>
+            {feedTab === "nearby" && kmLabel ? (
+              <Text style={styles.metaText}>{kmLabel} km</Text>
+            ) : null}
           </View>
           <Text style={styles.subtitleText} numberOfLines={1}>
-            {item.isOnline
-              ? "Active now"
-              : feedTab === "for_you"
-                ? "Suggested for you"
-                : "Nearby"}
-            {(item as any).photoVerified ? " · Photo verified" : ""}
-            {item.relationshipGoal ? ` · ${item.relationshipGoal}` : ""}
+            {feedTab === "nearby" && areFriends
+              ? "Friends"
+              : feedTab === "nearby" && liked
+                ? "Waiting for them"
+                : feedTab === "nearby" && theyLiked
+                  ? "Liked you"
+                  : item.isOnline
+                    ? "Active now"
+                    : feedTab === "for_you"
+                      ? "Suggested for you"
+                      : "Nearby"}
+            {feedTab !== "nearby" || (!liked && !areFriends && !theyLiked)
+              ? `${(item as any).photoVerified ? " · Photo verified" : ""}${
+                  item.relationshipGoal ? ` · ${item.relationshipGoal}` : ""
+                }`
+              : ""}
           </Text>
         </View>
 
         <TouchableOpacity
-          style={[styles.matchBtn, liked && styles.matchBtnLiked]}
-          onPress={onToggleLike}
+          style={[
+            styles.matchBtn,
+            areFriends
+              ? styles.matchBtnFriends
+              : liked && styles.matchBtnLiked,
+          ]}
+          onPress={areFriends ? onOpenChat : onToggleLike}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           activeOpacity={0.7}
           disabled={liking}
@@ -268,9 +313,12 @@ function NearbyListRowBase({
             <ActivityIndicator size="small" color={liked ? D.black : "#fff"} />
           ) : (
             <Text
-              style={[styles.matchBtnText, liked && styles.matchBtnTextLiked]}
+              style={[
+                styles.matchBtnText,
+                (liked || areFriends) && styles.matchBtnTextLiked,
+              ]}
             >
-              {liked ? "Liked" : "Like"}
+              {areFriends ? "Say hi" : liked ? "Liked" : "Like"}
             </Text>
           )}
         </TouchableOpacity>
@@ -307,14 +355,15 @@ export default function DiscoverScreen() {
     if (!t || t.startsWith("file://") || t.startsWith("content://")) return null;
     return t;
   });
-  const [nearbyUsers, setNearbyUsers] = React.useState<NearbyUser[]>([]);
+  const nearbyFeed = useNearbyFeed(user?.email);
+  const nearbyUsers = nearbyFeed.users;
+  const freshEmpty = nearbyFeed.freshEmpty;
   const [forYouUsers, setForYouUsers] = React.useState<NearbyUser[]>([]);
   const [feedTab, setFeedTab] = React.useState<"nearby" | "for_you">("nearby");
   const [forYouPage, setForYouPage] = React.useState(1);
   const [forYouHasMore, setForYouHasMore] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [loadingMore, setLoadingMore] = React.useState(false);
-  const [hasMore, setHasMore] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [staggerReveal, setStaggerReveal] = React.useState(false);
   const [locationError, setLocationError] = React.useState<string | null>(null);
@@ -377,33 +426,47 @@ export default function DiscoverScreen() {
     null,
   );
   const fetchLockRef = React.useRef(false);
-  const nearbyUsersRef = React.useRef<NearbyUser[]>([]);
   const forYouUsersRef = React.useRef<NearbyUser[]>([]);
   const prefsKeyRef = React.useRef("");
-  const initialLoadedRef = React.useRef(false);
-
-  React.useEffect(() => {
-    nearbyUsersRef.current = nearbyUsers;
-  }, [nearbyUsers]);
 
   React.useEffect(() => {
     forYouUsersRef.current = forYouUsers;
   }, [forYouUsers]);
 
-  const prefsKey = `${prefs.gender}|${prefs.radiusKm}|${prefs.activeWithinMinutes}`;
+  React.useEffect(() => {
+    if (nearbyUsers.length) applyRelationships(setRelationshipById, nearbyUsers);
+  }, [nearbyUsers]);
 
-  // Restore the filters this account last browsed with.
+  const prefsKey = `${prefs.gender}|${prefs.radiusKm}|${prefs.activeWithinMinutes}`;
+  const lastAccountEmailRef = React.useRef("");
+
+  // Restore filters. Only wipe For You when the account actually changes —
+  // Nearby cache/account lives in nearbyStore.
   React.useEffect(() => {
     let cancelled = false;
-    // On an account switch, hold the feed until the new account's filters land.
+    const email = String(user?.email || "");
+    if (!email) {
+      fetchLockRef.current = false;
+      setPrefsHydrated(false);
+      forYouUsersRef.current = [];
+      setForYouUsers([]);
+      setRelationshipById({});
+      setLocationError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const previousEmail = lastAccountEmailRef.current;
+    const switched = previousEmail !== "" && previousEmail !== email;
+    lastAccountEmailRef.current = email;
     setPrefsHydrated(false);
-    // Also drop the previous account's feed, otherwise the focus effect sees a
-    // non-empty list and skips reloading for the new account.
-    initialLoadedRef.current = false;
-    nearbyUsersRef.current = [];
-    forYouUsersRef.current = [];
-    setNearbyUsers([]);
-    setForYouUsers([]);
+    if (switched) {
+      fetchLockRef.current = false;
+      forYouUsersRef.current = [];
+      setForYouUsers([]);
+      setRelationshipById({});
+      setLocationError(null);
+    }
     (async () => {
       try {
         const token = await getAuthToken();
@@ -428,7 +491,7 @@ export default function DiscoverScreen() {
     return () => {
       cancelled = true;
     };
-  }, [sessionVersion]);
+  }, [sessionVersion, user?.email]);
 
   // Debounced search for better performance
   React.useEffect(() => {
@@ -661,135 +724,15 @@ export default function DiscoverScreen() {
     }
   }, [forYouHasMore, loadingMore, forYouPage]);
 
-  const reloadNearby = React.useCallback(async (opts?: { pull?: boolean }) => {
-    if (fetchLockRef.current) return;
-    fetchLockRef.current = true;
-    const hadRows = nearbyUsersRef.current.length > 0;
-    // WhatsApp: keep list on screen — spinner only when empty or user pulled
-    if (!hadRows) setLoading(true);
-    else if (opts?.pull) setRefreshing(true);
-    setLocationError(null);
-    setHasMore(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        setLocationError("Please sign in to see nearby people.");
-        return;
-      }
-
-      const {
-        users,
-        hasMore: more,
-        error,
-      } = await loadNearbyFeed(token, {
-        radiusKm: prefs.radiusKm,
-        gender: prefs.gender,
-        activeWithinMinutes: prefs.activeWithinMinutes,
-        mode: "initial",
-        preferCachedLocation: true,
-        refreshFast: true,
-      });
-
-      if (error) {
-        setLocationError(error);
-        if (!users.length && !hadRows) setNearbyUsers([]);
-        return;
-      }
-
-      setLocationError(null);
-      // Instant in-place update (no clear / no stagger on refresh)
-      setStaggerReveal(false);
-      setNearbyUsers(users);
-      setHasMore(more && users.length > 0);
-      initialLoadedRef.current = true;
-      applyRelationships(setRelationshipById, users);
-    } catch (e: any) {
-      setLocationError(e?.message || "Could not load nearby people.");
-    } finally {
-      fetchLockRef.current = false;
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [prefs]);
-
-  // ── Initial load: 25 nearby. Never reload already-shown list. ──
-  useFocusEffect(
-    React.useCallback(() => {
-      let cancelled = false;
-      if (!prefsHydrated) {
-        return () => {
-          cancelled = true;
-        };
-      }
-
-      const prefsChanged = prefsKeyRef.current !== prefsKey;
-      prefsKeyRef.current = prefsKey;
-
-      if (
-        initialLoadedRef.current &&
-        !prefsChanged &&
-        nearbyUsersRef.current.length > 0
-      ) {
-        return () => {
-          cancelled = true;
-        };
-      }
-
-      const load = async () => {
-        if (fetchLockRef.current) return;
-        fetchLockRef.current = true;
-        const hadRows = nearbyUsersRef.current.length > 0;
-        // Skeleton only when nothing to show — never flash over cached rows
-        if (!hadRows) {
-          setLoading(true);
-        }
-        setHasMore(true);
-        setLocationError(null);
-        try {
-          const token = await getAuthToken();
-          if (!token) {
-            setLocationError("Please sign in to see nearby people.");
-            return;
-          }
-
-          const {
-            users,
-            hasMore: more,
-            error,
-          } = await loadNearbyFeed(token, {
-            radiusKm: prefs.radiusKm,
-            gender: prefs.gender,
-            activeWithinMinutes: prefs.activeWithinMinutes,
-            mode: "initial",
-            // Paint from the last saved location and refresh GPS in parallel
-            // instead of blocking first render on a GPS fix.
-            refreshFast: true,
-          });
-
-          if (cancelled) return;
-          if (error) {
-            setLocationError(error);
-            return;
-          }
-          setNearbyUsers(users);
-          setHasMore(more && users.length > 0);
-          initialLoadedRef.current = true;
-          applyRelationships(setRelationshipById, users);
-        } catch (e: any) {
-          if (!cancelled)
-            setLocationError(e?.message || "Could not load nearby people.");
-        } finally {
-          fetchLockRef.current = false;
-          if (!cancelled) setLoading(false);
-        }
-      };
-
-      load();
-      return () => {
-        cancelled = true;
-      };
-    }, [sessionVersion, prefsKey, prefs, prefsHydrated]),
-  );
+  React.useEffect(() => {
+    if (!prefsHydrated || !user?.email) return;
+    const changed = prefsKeyRef.current !== "" && prefsKeyRef.current !== prefsKey;
+    prefsKeyRef.current = prefsKey;
+    void refreshNearbyFeed({
+      prefs,
+      reason: changed ? "prefs" : "start",
+    });
+  }, [prefsHydrated, prefsKey, prefs, user?.email]);
 
   // Instantly apply name / bio / photo changes (in-place only — no reorder)
   React.useEffect(() => {
@@ -838,7 +781,7 @@ export default function DiscoverScreen() {
         publicId: u.publicId || user.publicId,
       };
     };
-    setNearbyUsers((prev) => prev.map(patch));
+    patchNearbyUsers(patch, { persist: true });
     setSearchedUser((prev) => (prev ? patch(prev) : prev));
     setSelectedUser((prev) => (prev ? patch(prev) : prev));
   }, [profileTick, lastProfileUpdate]);
@@ -850,15 +793,10 @@ export default function DiscoverScreen() {
     const online = !!lastPresence.isOnline;
     const patch = (user: NearbyUser): NearbyUser =>
       user.id === uid ? { ...user, isOnline: online } : user;
-    setNearbyUsers((prev) => {
-      let changed = false;
-      const next = prev.map((u) => {
-        if (u.id !== uid || !!u.isOnline === online) return u;
-        changed = true;
-        return patch(u);
-      });
-      return changed ? next : prev;
-    });
+    patchNearbyUsers((u) => {
+      if (u.id !== uid || !!u.isOnline === online) return u;
+      return patch(u);
+    }, { persist: false });
     setSearchedUser((prev) =>
       prev && prev.id === uid && !!prev.isOnline !== online ? patch(prev) : prev,
     );
@@ -923,9 +861,29 @@ export default function DiscoverScreen() {
           theyLiked: false,
         };
       }
+      if (payload.action === "decline" || payload.status === "declined") {
+        return {
+          status: "declined",
+          areFriends: false,
+          canSendMedia: false,
+          canCall: false,
+          iLiked: false,
+          theyLiked: false,
+        };
+      }
       if (payload.action === "sync") {
         if (payload.status === "pending_like") {
           return { ...base, status: "pending_like", iLiked: true };
+        }
+        if (payload.status === "declined") {
+          return {
+            status: "declined",
+            areFriends: false,
+            canSendMedia: false,
+            canCall: false,
+            iLiked: false,
+            theyLiked: false,
+          };
         }
         if (payload.status === "friends") {
           return {
@@ -963,59 +921,19 @@ export default function DiscoverScreen() {
         theyLiked: !!rel.theyLiked,
         areFriends: !!rel.areFriends,
         friendshipStatus: rel.status,
+        nearbyLowPriority: rel.status === "declined",
+        nearbyLane: undefined,
       };
     };
-    setNearbyUsers((users) => users.map(applyUser));
+    patchNearbyUsers(applyUser, { resort: true, persist: true });
     setSearchedUser((u) => (u ? applyUser(u) : u));
     setSelectedUser((u) => (u ? applyUser(u) : u));
   }, [friendTick, lastFriendUpdate]);
 
   // ── Infinite scroll: append below existing list only ────────────
-  const loadMoreNearby = React.useCallback(async () => {
-    if (
-      fetchLockRef.current ||
-      loadingMore ||
-      loading ||
-      !hasMore ||
-      nearbyUsersRef.current.length === 0
-    ) {
-      return;
-    }
-    fetchLockRef.current = true;
-    setLoadingMore(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) return;
-
-      const excludeIds = nearbyUsersRef.current.map((u) => u.id);
-      const {
-        users,
-        hasMore: more,
-        error,
-      } = await fetchNearbyUsersPage(token, {
-        radiusKm: prefs.radiusKm,
-        gender: prefs.gender,
-        activeWithinMinutes: prefs.activeWithinMinutes,
-        mode: "more",
-        limit: NEARBY_PAGE_SIZE,
-        excludeIds,
-      });
-
-      if (error || !users.length) {
-        setHasMore(false);
-        return;
-      }
-
-      setNearbyUsers((prev) => appendNewUsers(prev, users));
-      setHasMore(more);
-      applyRelationships(setRelationshipById, users);
-    } catch {
-      /* ignore */
-    } finally {
-      fetchLockRef.current = false;
-      setLoadingMore(false);
-    }
-  }, [loadingMore, loading, hasMore, prefs]);
+  const loadMoreNearby = React.useCallback(() => {
+    void loadMoreNearbyFeed(prefs);
+  }, [prefs]);
 
   // ── Toggle like / unlike (server-backed) ───────────────────────
   const toggleLike = async (id: string) => {
@@ -1060,6 +978,21 @@ export default function DiscoverScreen() {
               friendshipStatus: next.status || prev.friendshipStatus,
             }
           : prev,
+      );
+      patchNearbyUsers(
+        (u) =>
+          u.id === id
+            ? {
+                ...u,
+                iLiked: !!next.iLiked,
+                areFriends: !!next.areFriends,
+                theyLiked: next.theyLiked ?? u.theyLiked,
+                friendshipStatus: next.status || u.friendshipStatus,
+                nearbyLowPriority: next.status === "declined",
+                nearbyLane: undefined,
+              }
+            : u,
+        { resort: true, persist: true },
       );
     };
 
@@ -1132,18 +1065,14 @@ export default function DiscoverScreen() {
       if (!token) return;
       const result = await sendLike(token, id);
       const status = await getFriendshipStatus(token, id);
-      setRelationshipById((prev) => ({ ...prev, [id]: status }));
-      setSelectedUser((prev) =>
-        prev && prev.id === id
-          ? {
-              ...prev,
-              iLiked: !!status.iLiked,
-              areFriends: !!status.areFriends,
-              theyLiked: !!status.theyLiked,
-              friendshipStatus: status.status,
-            }
-          : prev,
-      );
+      applyLocal({
+        status: status.status,
+        areFriends: !!status.areFriends,
+        canSendMedia: !!status.canSendMedia,
+        canCall: !!status.canCall,
+        iLiked: !!status.iLiked,
+        theyLiked: !!status.theyLiked,
+      });
       if (result.status === "friends") {
         showAlert({
           title: "You're friends!",
@@ -1173,18 +1102,17 @@ export default function DiscoverScreen() {
 
   // ── Pull to refresh — WhatsApp same technique ───────────────────
   const onRefresh = React.useCallback(async () => {
-    // Spinner only; list stays mounted with previous data
-    setRefreshing(true);
-    try {
-      if (feedTab === "for_you") {
+    if (feedTab === "for_you") {
+      setRefreshing(true);
+      try {
         await reloadForYou(true);
-      } else {
-        await reloadNearby({ pull: true });
+      } finally {
+        setRefreshing(false);
       }
-    } finally {
-      setRefreshing(false);
+      return;
     }
-  }, [feedTab, reloadNearby, reloadForYou]);
+    await refreshNearbyFeed({ prefs, reason: "pull" });
+  }, [feedTab, prefs, reloadForYou]);
 
   // ── Open profile modal ─────────────────────────────────────────
   const openProfile = async (user: NearbyUser) => {
@@ -1312,15 +1240,18 @@ export default function DiscoverScreen() {
   // ── Render horizontal WhatsApp-style row ───────────────────────
   const renderItem = React.useCallback(
     ({ item, index }: { item: NearbyUser; index: number }) => {
-    const liked =
-      relationshipById[item.id]?.iLiked ||
-      relationshipById[item.id]?.areFriends;
+    const rel = relationshipById[item.id];
+    const liked = !!(rel?.iLiked || rel?.areFriends || item.iLiked || item.areFriends);
+    const areFriends = !!(rel?.areFriends || item.areFriends);
+    const theyLiked = !!(rel?.theyLiked || item.theyLiked);
     return (
       <NearbyListRow
         item={item}
         index={index}
         stagger={staggerReveal}
         liked={!!liked}
+        areFriends={areFriends}
+        theyLiked={theyLiked}
         liking={likingId === item.id}
         feedTab={feedTab}
         onOpenChat={() => {
@@ -1376,9 +1307,16 @@ export default function DiscoverScreen() {
 
   /** Stable identity so the list doesn't repaint on every parent render */
   const listExtraData = React.useMemo(
-    () => `${feedTab}:${likingId ?? ""}:${staggerReveal}:${relationshipById}`,
-    [feedTab, likingId, staggerReveal, relationshipById],
+    () => `${feedTab}:${likingId ?? ""}:${staggerReveal}:${nearbyFeed.revision}`,
+    [feedTab, likingId, staggerReveal, nearbyFeed.revision],
   );
+
+  const listLoading = feedTab === "nearby" ? nearbyFeed.loading : loading;
+  const listRefreshing =
+    feedTab === "nearby" ? nearbyFeed.refreshing : refreshing;
+  const listLoadingMore =
+    feedTab === "nearby" ? nearbyFeed.loadingMore : loadingMore;
+  const listHint = feedTab === "nearby" ? nearbyFeed.hint : locationError;
 
   const activeUsers = feedTab === "for_you" ? forYouUsers : nearbyUsers;
 
@@ -1414,7 +1352,7 @@ export default function DiscoverScreen() {
   }, [searchedUser, filteredUsers]);
 
   const ListEmpty = () => {
-    if (loading && activeUsers.length === 0) {
+    if ((listLoading || !prefsHydrated) && activeUsers.length === 0) {
       return <ListRowSkeleton count={8} />;
     }
     if (searchByIdLoading) {
@@ -1437,7 +1375,34 @@ export default function DiscoverScreen() {
         </View>
       );
     }
-    if (locationError) {
+    if (feedTab === "nearby" && nearbyFeed.hint) {
+      const isRefreshHint = nearbyFeed.hint === NEARBY_REFRESH_HINT;
+      const isLocation =
+        !isRefreshHint && /location|gps|permission/i.test(nearbyFeed.hint);
+      return (
+        <View style={styles.emptyContainer}>
+          <Ionicons
+            name={isLocation ? "location-outline" : "refresh"}
+            size={48}
+            color={D.muted}
+          />
+          <Text style={styles.emptyTitle}>
+            {isLocation ? "Location Needed" : "Couldn't refresh"}
+          </Text>
+          <Text style={styles.emptyText}>{nearbyFeed.hint}</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => {
+              void refreshNearbyFeed({ prefs, reason: "pull" });
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.retryBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    if (feedTab === "for_you" && locationError) {
       return (
         <View style={styles.emptyContainer}>
           <Ionicons name="location-outline" size={48} color={D.muted} />
@@ -1446,9 +1411,7 @@ export default function DiscoverScreen() {
           <TouchableOpacity
             style={styles.retryBtn}
             onPress={() => {
-              initialLoadedRef.current = false;
-              if (feedTab === "for_you") void reloadForYou(true);
-              else void reloadNearby();
+              void reloadForYou(true);
             }}
             activeOpacity={0.85}
           >
@@ -1468,27 +1431,29 @@ export default function DiscoverScreen() {
         </View>
       );
     }
+    if (feedTab === "nearby" && !freshEmpty) {
+      return <ListRowSkeleton count={8} />;
+    }
     return (
       <View style={styles.emptyContainer}>
         <Ionicons name="people-outline" size={48} color={D.muted} />
         <Text style={styles.emptyTitle}>
-          {feedTab === "for_you" ? "No suggestions yet" : "No One Nearby"}
+          {feedTab === "for_you" ? "No suggestions yet" : "No one nearby"}
         </Text>
         <Text style={styles.emptyText}>
           {feedTab === "for_you"
-            ? "Add interests on your profile and pull to refresh for personalized matches."
+            ? "Add interests on your profile and pull to refresh."
             : prefs.gender !== "All"
-              ? `No ${prefs.gender === "Man" ? "men" : prefs.gender === "Woman" ? "women" : prefs.gender.toLowerCase()} found with your current filters. Try Show me: Everyone or widen distance.`
+              ? `No ${prefs.gender === "Man" ? "men" : prefs.gender === "Woman" ? "women" : prefs.gender.toLowerCase()} match your filters. Try Show me: Everyone or a wider distance.`
               : prefs.activeWithinMinutes > 0
-                ? "No one matches your activity filter. Try Last active: All in preferences."
-                : `No verified users found within ${prefs.radiusKm < 1 ? `${prefs.radiusKm * 1000}m` : `${prefs.radiusKm} km`}. Pull down to refresh.`}
+                ? "No one matches Last active. Try All in preferences."
+                : "Turn on location and pull to refresh. People show up when they also share their location nearby."}
         </Text>
         {prefs.gender !== "All" ? (
           <TouchableOpacity
             style={styles.retryBtn}
             activeOpacity={0.85}
             onPress={() => {
-              initialLoadedRef.current = false;
               setPrefs((p) => ({ ...p, gender: "All" }));
             }}
           >
@@ -1499,9 +1464,8 @@ export default function DiscoverScreen() {
             style={styles.retryBtn}
             activeOpacity={0.85}
             onPress={() => {
-              initialLoadedRef.current = false;
               if (feedTab === "for_you") void reloadForYou(true);
-              else void reloadNearby();
+              else void refreshNearbyFeed({ prefs, reason: "pull" });
             }}
           >
             <Text style={styles.retryBtnText}>Refresh</Text>
@@ -1718,7 +1682,7 @@ export default function DiscoverScreen() {
         </View>
 
         {/* ── List / horizontal loading rows ── */}
-        {loading && displayUsers.length === 0 ? (
+        {(listLoading || !prefsHydrated) && displayUsers.length === 0 ? (
           <TouchableWithoutFeedback onPress={dismissSearchKeyboard}>
             <View style={{ flex: 1 }}>
               <ListRowSkeleton count={8} />
@@ -1745,18 +1709,32 @@ export default function DiscoverScreen() {
             initialNumToRender={8}
             refreshControl={
               <RefreshControl
-                refreshing={refreshing}
+                refreshing={listRefreshing}
                 onRefresh={onRefresh}
                 colors={[D.purple]}
                 tintColor={D.purple}
               />
+            }
+            ListHeaderComponent={
+              listHint && displayUsers.length > 0 ? (
+                <Pressable
+                  onPress={() => {
+                    if (feedTab === "for_you") void reloadForYou(true);
+                    else void refreshNearbyFeed({ prefs, reason: "pull" });
+                  }}
+                  style={styles.refreshHint}
+                >
+                  <Ionicons name="refresh" size={14} color={D.purple} />
+                  <Text style={styles.refreshHintText}>{listHint}</Text>
+                </Pressable>
+              ) : null
             }
             ItemSeparatorComponent={ItemSeparator}
             ListEmptyComponent={ListEmpty}
             ListFooterComponent={
               displayUsers.length ? (
                 <>
-                  {loadingMore ? (
+                  {listLoadingMore ? (
                     <View style={styles.loadMoreFooter}>
                       <ActivityIndicator size="small" color={D.purple} />
                       <Text style={styles.loadMoreText}>Loading more…</Text>
@@ -1780,7 +1758,6 @@ export default function DiscoverScreen() {
         initial={prefs}
         onClose={() => setPrefsVisible(false)}
         onSearch={(next) => {
-          initialLoadedRef.current = false;
           setPrefs(next);
           setPrefsVisible(false);
         }}
@@ -1795,7 +1772,7 @@ export default function DiscoverScreen() {
         onMessage={handleProfileMessage}
         likingInProgress={likingId === selectedUser?.id}
         onBlocked={(userId) => {
-          setNearbyUsers((prev) => prev.filter((u) => u.id !== userId));
+          removeNearbyUser(userId);
           setForYouUsers((prev) => prev.filter((u) => u.id !== userId));
           setSearchedUser((prev) => (prev?.id === userId ? null : prev));
           setSelectedUser((prev) => (prev?.id === userId ? null : prev));
@@ -2277,6 +2254,24 @@ const styles = StyleSheet.create({
   feedTabTextActive: {
     color: D.purple,
   },
+  refreshHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: D.purpleSoft,
+  },
+  refreshHintText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: D.purple,
+  },
   sectionLeft: {
     flexDirection: "row",
     alignItems: "center",
@@ -2343,7 +2338,8 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 12,
     color: D.muted,
-    fontWeight: "500",
+    fontWeight: "600",
+    flexShrink: 0,
   },
   subtitleRow: {
     flexDirection: "row",
@@ -2371,6 +2367,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   matchBtnLiked: {
+    backgroundColor: D.purpleSoft,
+  },
+  matchBtnFriends: {
     backgroundColor: D.purpleSoft,
   },
   matchBtnText: {

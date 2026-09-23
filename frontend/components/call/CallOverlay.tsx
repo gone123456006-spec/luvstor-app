@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   Easing,
@@ -24,6 +25,7 @@ import Reanimated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCall } from '../../contexts/CallContext';
 import { useExplore } from '../../contexts/ExploreContext';
+import type { CallAudioRoute } from '../../utils/callAudio';
 import { getRTCView } from '../../services/webrtc';
 import { resolveMediaUrl } from '../../utils/media';
 import WhatsAppAvatar, {
@@ -263,10 +265,56 @@ function statusLabel(
   }
 }
 
+const AUDIO_ROUTE_LABEL: Record<CallAudioRoute, string> = {
+  bluetooth: 'Bluetooth',
+  wired: 'Headset',
+  earpiece: 'Phone',
+  speaker: 'Speaker',
+};
+
+function speakerIcon(
+  route: CallAudioRoute,
+  speakerOn: boolean,
+): keyof typeof Ionicons.glyphMap {
+  if (speakerOn || route === 'speaker') return 'volume-high';
+  if (route === 'bluetooth') return 'bluetooth';
+  if (route === 'wired') return 'headset';
+  return 'volume-mute';
+}
+
+function speakerLabel(route: CallAudioRoute, speakerOn: boolean) {
+  if (speakerOn || route === 'speaker') return 'Speaker';
+  return AUDIO_ROUTE_LABEL[route] || 'Speaker';
+}
+
+function openAudioRoutePicker(call: {
+  audioRoute: CallAudioRoute;
+  availableAudioRoutes: CallAudioRoute[];
+  setAudioRoute: (route: CallAudioRoute) => Promise<void>;
+}) {
+  const routes = call.availableAudioRoutes.length
+    ? call.availableAudioRoutes
+    : (['earpiece', 'speaker'] as CallAudioRoute[]);
+  Alert.alert(
+    'Call audio',
+    'Choose where you hear this call',
+    [
+      ...routes.map((route) => ({
+        text: `${route === call.audioRoute ? '✓  ' : ''}${AUDIO_ROUTE_LABEL[route]}`,
+        onPress: () => {
+          void call.setAudioRoute(route);
+        },
+      })),
+      { text: 'Cancel', style: 'cancel' as const },
+    ],
+  );
+}
+
 /** WhatsApp-style dark circle control */
 function WaCircle({
   icon,
   onPress,
+  onLongPress,
   size = 46,
   bg = 'rgba(30,30,30,0.55)',
   color = '#fff',
@@ -275,6 +323,7 @@ function WaCircle({
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
+  onLongPress?: () => void;
   size?: number;
   bg?: string;
   color?: string;
@@ -284,6 +333,8 @@ function WaCircle({
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
       disabled={disabled}
       style={({ pressed }) => [
         {
@@ -313,6 +364,7 @@ function CircleBtn({
   icon,
   label,
   onPress,
+  onLongPress,
   color = T.text,
   bg = T.control,
   size = 52,
@@ -322,6 +374,7 @@ function CircleBtn({
   icon: keyof typeof Ionicons.glyphMap;
   label?: string;
   onPress: () => void;
+  onLongPress?: () => void;
   color?: string;
   bg?: string;
   size?: number;
@@ -331,6 +384,8 @@ function CircleBtn({
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
       disabled={disabled}
       style={({ pressed }) => [
         styles.circleBtn,
@@ -359,6 +414,7 @@ function ActionCell({
   icon,
   label,
   onPress,
+  onLongPress,
   color,
   bg,
   size = 52,
@@ -368,6 +424,7 @@ function ActionCell({
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
+  onLongPress?: () => void;
   color?: string;
   bg?: string;
   size?: number;
@@ -379,6 +436,7 @@ function ActionCell({
       icon={icon}
       label={label}
       onPress={onPress}
+      onLongPress={onLongPress}
       color={color}
       bg={bg}
       size={size}
@@ -469,8 +527,15 @@ export default function CallOverlay() {
   const RTCView = useMemo(() => getRTCView(), []);
 
   const isExplore = !!call.isExplore;
-  // Keep overlay up through brief "ended" so Busy / error / duration screen is visible
-  const visible = call.phase !== 'idle';
+  const exploreFindingNext =
+    isExplore &&
+    (explore.status === 'cooldown' || explore.status === 'searching');
+  // Friend calls keep a brief ended screen. Explore skip hides immediately
+  // so the Explore tab can show "Finding someone".
+  const visible =
+    call.phase !== 'idle' &&
+    !exploreFindingNext &&
+    !(isExplore && call.phase === 'ended');
   const isVideo = call.callType === 'video';
   const isVoice = call.callType === 'voice';
   const panelBottomRef = React.useRef<number | null>(null);
@@ -692,8 +757,12 @@ export default function CallOverlay() {
       : call.endCall;
 
   if (call.minimized && call.phase !== 'incoming' && call.phase !== 'ended') {
+    // Not a Modal — a RN Modal steals focus and blocks the chat keyboard.
     return (
-      <Modal visible transparent animationType="none" statusBarTranslucent>
+      <View
+        pointerEvents="box-none"
+        style={[StyleSheet.absoluteFill, styles.miniHost]}
+      >
         <Pressable
           style={[styles.miniBar, { top: insets.top + 8 }]}
           onPress={() => call.setMinimized(false)}
@@ -730,7 +799,7 @@ export default function CallOverlay() {
             />
           </LinearGradient>
         </Pressable>
-      </Modal>
+      </View>
     );
   }
 
@@ -826,13 +895,22 @@ export default function CallOverlay() {
           />
         ) : null}
         {isExplore ? (
-          <WaCircle
-            icon="play-skip-forward"
-            size={44}
-            bg="rgba(103, 80, 164, 0.75)"
-            onPress={onSkip}
-            disabled={skipDisabled}
-          />
+          <View style={styles.exploreSkipRail}>
+            <WaCircle
+              icon="play-skip-forward"
+              size={44}
+              bg={
+                skipDisabled
+                  ? 'rgba(55,55,55,0.55)'
+                  : 'rgba(103, 80, 164, 0.92)'
+              }
+              onPress={onSkip}
+              disabled={skipDisabled}
+            />
+            <Text style={styles.exploreSkipLabel}>
+              {skipDisabled ? `${explore.cooldownSec}s` : 'Skip'}
+            </Text>
+          </View>
         ) : (
           <WaCircle
             icon="chatbubble"
@@ -904,11 +982,12 @@ export default function CallOverlay() {
               />
             ) : (
               <ActionCell
-                icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
-                label="Speaker"
+                icon={speakerIcon(call.audioRoute, call.speakerOn)}
+                label={speakerLabel(call.audioRoute, call.speakerOn)}
                 bg={call.speakerOn ? T.controlOn : T.control}
                 color={call.speakerOn ? T.controlOnInk : T.text}
                 onPress={call.toggleSpeaker}
+                onLongPress={() => openAudioRoutePicker(call)}
               />
             )}
             <ActionCell
@@ -920,11 +999,12 @@ export default function CallOverlay() {
             />
             {isExplore ? (
               <ActionCell
-                icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
-                label="Speaker"
+                icon={speakerIcon(call.audioRoute, call.speakerOn)}
+                label={speakerLabel(call.audioRoute, call.speakerOn)}
                 bg={call.speakerOn ? T.controlOn : T.control}
                 color={call.speakerOn ? T.controlOnInk : T.text}
                 onPress={call.toggleSpeaker}
+                onLongPress={() => openAudioRoutePicker(call)}
               />
             ) : null}
             <ActionCell
@@ -972,16 +1052,6 @@ export default function CallOverlay() {
         </View>
       ) : showActiveControls ? (
         <View style={styles.waPill}>
-          {isExplore ? (
-            <WaCircle
-              icon="play-skip-forward"
-              size={52}
-              bg={skipDisabled ? 'rgba(55,55,55,0.5)' : 'rgba(103, 80, 164, 0.9)'}
-              color="#fff"
-              onPress={onSkip}
-              disabled={skipDisabled}
-            />
-          ) : null}
           <WaCircle
             icon={call.cameraOff ? 'videocam-off' : 'videocam'}
             size={52}
@@ -990,13 +1060,14 @@ export default function CallOverlay() {
             onPress={() => call.toggleCamera()}
           />
           <WaCircle
-            icon={call.speakerOn ? 'volume-high' : 'volume-mute'}
+            icon={speakerIcon(call.audioRoute, call.speakerOn)}
             size={52}
             bg={call.speakerOn ? '#fff' : 'rgba(55,55,55,0.85)'}
             color={call.speakerOn ? '#111' : '#fff'}
             onPress={() => {
               void call.toggleSpeaker();
             }}
+            onLongPress={() => openAudioRoutePicker(call)}
           />
           <WaCircle
             icon={call.muted ? 'mic-off' : 'mic'}
@@ -1291,6 +1362,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 9,
   },
+  exploreSkipRail: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  exploreSkipLabel: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
   waPanelFixed: {
     position: 'absolute',
     left: 20,
@@ -1441,6 +1525,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textAlign: 'center',
     paddingHorizontal: 4,
+  },
+  miniHost: {
+    backgroundColor: 'transparent',
+    zIndex: 9999,
+    elevation: 9999,
   },
   miniBar: {
     position: 'absolute',

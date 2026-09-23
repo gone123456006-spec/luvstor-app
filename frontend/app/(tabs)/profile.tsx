@@ -58,6 +58,7 @@ import {
 } from "../../utils/showMe";
 import { useLiveSubscriptionBadge } from "../../utils/subscriptions";
 import { useTabBarOverlayInset } from "../../hooks/useTabBarOverlayInset";
+import { openPlayStoreToRate } from "../../utils/rateApp";
 
 // ── Luvstor theme + WhatsApp-style layout ───────────────────
 const WA = {
@@ -129,7 +130,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const tabClearance = useTabBarOverlayInset();
-  const { sessionVersion, refreshSession } = useAuth();
+  const { sessionVersion } = useAuth();
   const { bumpProfileLocal } = useSocket();
   const initialSnapshot = React.useMemo(() => getCachedProfile(), []);
   const [profile, setProfile] = useState<any>(initialSnapshot?.profile ?? null);
@@ -183,6 +184,8 @@ export default function ProfileScreen() {
   coverPhotoRef.current = coverPhoto;
   /** After a successful cover save, ignore empty server snapshots briefly */
   const coverStickyUntilRef = useRef(0);
+  /** After Edit → Done, ignore older cache/API snapshots so fields don't snap back */
+  const profileWriteAtRef = useRef(0);
   const [coverOptionsVisible, setCoverOptionsVisible] = useState(false);
   const [gallerySlotBusy, setGallerySlotBusy] = useState<number | null>(null);
   const [gallerySlot, setGallerySlot] = useState<number>(0);
@@ -1059,12 +1062,7 @@ export default function ProfileScreen() {
       };
       if (ageNum != null) payload.age = ageNum;
 
-      await apiRequest("/api/users/me", token, {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
-
-      const authUser = await getCurrentAuthUser();
+      const previous = profile;
       const next = {
         ...(profile || {}),
         name,
@@ -1077,7 +1075,37 @@ export default function ProfileScreen() {
         interests,
         distance,
       };
+
+      // Paint the profile page immediately, then persist — never wait on session refresh
+      const writeAt = Date.now();
+      profileWriteAtRef.current = writeAt;
       setProfile(next);
+      const prevSnap = getCachedProfile();
+      updateCachedProfile({
+        profile: {
+          ...(prevSnap?.profile || profile || {}),
+          ...next,
+        } as any,
+      });
+      setEditPhotoUri(null);
+      setEditVisible(false);
+
+      try {
+        await apiRequest("/api/users/me", token, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+      } catch (saveErr) {
+        profileWriteAtRef.current = 0;
+        setProfile(previous);
+        if (prevSnap) {
+          updateCachedProfile({ profile: prevSnap.profile as any });
+        }
+        setEditVisible(true);
+        throw saveErr;
+      }
+
+      const authUser = await getCurrentAuthUser();
       if (authUser?.email) {
         const current = (await getLocalProfile(authUser.email)) || {};
         await saveLocalProfile(authUser.email, {
@@ -1107,10 +1135,6 @@ export default function ProfileScreen() {
         interests,
         relationshipGoal,
       });
-      await refreshSession();
-
-      setEditPhotoUri(null);
-      setEditVisible(false);
     } catch (e: any) {
       Alert.alert("Could not save", e?.message || "Please try again.");
     } finally {
@@ -1121,7 +1145,27 @@ export default function ProfileScreen() {
   const applyProfileSnapshot = useCallback(
     (snapshot: ProfileScreenSnapshot) => {
       if (coverBusyRef.current) return;
-      setProfile(snapshot.profile);
+      const incomingAt = snapshot.at || 0;
+      if (incomingAt && incomingAt < profileWriteAtRef.current) {
+        setProfile((prev: any) => {
+          if (!prev) return snapshot.profile;
+          if (!snapshot.profile) return prev;
+          return {
+            ...snapshot.profile,
+            name: prev.name,
+            bio: prev.bio,
+            age: prev.age,
+            gender: prev.gender,
+            showMe: prev.showMe,
+            height: prev.height,
+            relationshipGoal: prev.relationshipGoal,
+            interests: prev.interests,
+            distance: prev.distance,
+          };
+        });
+      } else {
+        setProfile(snapshot.profile);
+      }
       setGallery(snapshot.gallery);
       const raw = snapshot.coverPhoto || snapshot.profile?.coverPhoto || "";
       const next = displayCoverUrl(raw);
@@ -1150,7 +1194,7 @@ export default function ProfileScreen() {
     useCallback(() => {
       if (coverBusyRef.current) return;
       const cached = getCachedProfile();
-      if (cached) {
+      if (cached && (cached.at || 0) >= profileWriteAtRef.current) {
         applyProfileSnapshot(cached);
       }
 
@@ -1232,6 +1276,12 @@ export default function ProfileScreen() {
       label: "Help & Support",
       color: "#2196F3",
       route: "/help-support",
+    },
+    {
+      icon: "star",
+      label: "Rate us",
+      color: "#F59E0B",
+      action: "rate-play-store",
     },
   ];
 
@@ -1394,6 +1444,11 @@ export default function ProfileScreen() {
                     router.push("/safety-center" as any);
                   } else if (item.label === "Help & Support") {
                     router.push("/help-support" as any);
+                  } else if (
+                    item.label === "Rate us" ||
+                    (item as any).action === "rate-play-store"
+                  ) {
+                    void openPlayStoreToRate();
                   } else if (item.label === "Subscription") {
                     router.push("/subscription" as any);
                   } else if ((item as any).route) {

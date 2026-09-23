@@ -715,6 +715,60 @@ export async function dismissCallNotifications(callId?: string | null): Promise<
   }
 }
 
+function profileRouteFromData(data: Record<string, any> = {}) {
+  const publicId = String(data.publicId || data.actorPublicId || '').trim();
+  if (/^[A-Za-z]{4}\d{4}$/.test(publicId)) {
+    return `/u/${publicId.toUpperCase()}`;
+  }
+  const userId = data.userId || data.actorId;
+  return userId ? `/profile/${userId}` : '/notifications';
+}
+
+/**
+ * Turn FCM / history deep links into Expo Router paths.
+ * Empty `luvstor:///` and missing `/profile` used to open Unmatched Route.
+ */
+export function hrefToAppRoute(
+  raw?: string | null,
+  data: Record<string, any> = {},
+): string {
+  const href = String(raw || '').trim();
+  if (!href || /^luvstor:\/{0,3}$/i.test(href)) {
+    return '';
+  }
+
+  let path = href;
+  if (/^luvstor:/i.test(path)) {
+    path = path.replace(/^luvstor:\/+/i, '/');
+    if (!path.startsWith('/')) path = `/${path}`;
+  }
+
+  const q = path.indexOf('?');
+  const pathOnly = (q >= 0 ? path.slice(0, q) : path).replace(/\/+$/, '') || '/';
+  if (pathOnly === '/') return '';
+
+  if (/^\/profile\/edit$/i.test(pathOnly)) return '/(tabs)/profile';
+
+  const profileSeg = pathOnly.match(/^\/profile\/([^/]+)$/i);
+  if (profileSeg) {
+    const id = decodeURIComponent(profileSeg[1]);
+    if (/^[A-Za-z]{4}\d{4}$/.test(id)) return `/u/${id.toUpperCase()}`;
+    if (id && id !== 'undefined') return `/profile/${id}`;
+    return profileRouteFromData(data);
+  }
+
+  const uSeg = pathOnly.match(/^\/u\/([^/]+)$/i);
+  if (uSeg && /^[A-Za-z]{4}\d{4}$/.test(uSeg[1])) {
+    return `/u/${uSeg[1].toUpperCase()}`;
+  }
+
+  if (pathOnly.startsWith('/(tabs)/discover') || pathOnly === '/discover') {
+    return '/(tabs)';
+  }
+
+  return pathOnly;
+}
+
 /** Resolve the in-app route for a notification payload. */
 export function routeForData(data: Record<string, any> = {}) {
   if (
@@ -733,9 +787,8 @@ export function routeForData(data: Record<string, any> = {}) {
     return userId ? `/messages/${userId}` : '/(tabs)/chat';
   }
 
-  if (data.deepLink && typeof data.deepLink === 'string') {
-    return data.deepLink;
-  }
+  const fromLink = hrefToAppRoute(data.deepLink, data);
+  if (fromLink) return fromLink;
 
   const userId = data.userId || data.actorId;
   switch (data.type) {
@@ -747,7 +800,8 @@ export function routeForData(data: Record<string, any> = {}) {
     case 'friend_request':
     case 'like':
     case 'profile_view':
-      return userId ? '/(tabs)' : '/notifications';
+    case 'suggestion':
+      return profileRouteFromData(data);
     case 'token':
     case 'token_purchase':
     case 'token_low':
@@ -756,8 +810,6 @@ export function routeForData(data: Record<string, any> = {}) {
       return '/(tabs)/token';
     case 'security':
       return '/settings/account';
-    case 'suggestion':
-      return '/(tabs)';
     default:
       return '/notifications';
   }

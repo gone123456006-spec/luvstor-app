@@ -2,12 +2,21 @@
  * Durable image upload — stores bytes in MongoDB via the API and returns
  * `/api/media/{id}` (or legacy `/uploads/...`) that works after reinstall.
  */
+import { Platform } from 'react-native';
 import {
   fetchWithTimeout,
   getApiBase,
   UPLOAD_FETCH_TIMEOUT_MS,
 } from './api';
 import { PRODUCTION_MEDIA_BASE, durableMediaPathFromUrl } from './media';
+
+function pickUploadedPath(json: any): string | null {
+  return (
+    durableMediaPathFromUrl(json?.url) ||
+    durableMediaPathFromUrl(json?.absoluteUrl) ||
+    null
+  );
+}
 
 async function readAsDataUri(localUri: string): Promise<string> {
   const FileSystem = await import('expo-file-system/legacy');
@@ -49,13 +58,68 @@ async function postImage(
     json = null;
   }
   if (!res.ok) {
-    throw new Error(json?.error || `Upload failed (${res.status})`);
+    throw new Error('Couldn’t upload your photo. Please try again.');
   }
-  return (
-    durableMediaPathFromUrl(json?.url) ||
-    durableMediaPathFromUrl(json?.absoluteUrl) ||
-    null
+  return pickUploadedPath(json);
+}
+
+/** Raw JPEG/PNG — ~30% smaller and faster than JSON base64 on Render. */
+async function postImageBinary(
+  apiBase: string,
+  token: string,
+  localUri: string,
+): Promise<string | null> {
+  const url = `${apiBase.replace(/\/$/, '')}/api/upload/image-bin`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'image/jpeg',
+  };
+
+  if (Platform.OS !== 'web') {
+    const FileSystem = await import('expo-file-system/legacy');
+    if (FileSystem.uploadAsync) {
+      const result = await Promise.race([
+        FileSystem.uploadAsync(url, localUri, {
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          headers,
+          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        }),
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error('Upload timed out')),
+            UPLOAD_FETCH_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      if (result.status >= 200 && result.status < 300 && result.body) {
+        try {
+          return pickUploadedPath(JSON.parse(result.body));
+        } catch {
+          return null;
+        }
+      }
+      throw new Error('Couldn’t upload your photo. Please try again.');
+    }
+  }
+
+  const blobRes = await fetch(localUri);
+  const blob = await blobRes.blob();
+  const res = await fetchWithTimeout(
+    url,
+    { method: 'POST', headers, body: blob },
+    UPLOAD_FETCH_TIMEOUT_MS,
   );
+  let json: any = null;
+  try {
+    json = await res.json();
+  } catch {
+    json = null;
+  }
+  if (!res.ok) {
+    throw new Error('Couldn’t upload your photo. Please try again.');
+  }
+  return pickUploadedPath(json);
 }
 
 /** Confirm the file is reachable from at least one durable public host. */
@@ -103,9 +167,17 @@ export async function uploadImageDurable(
     return null;
   }
 
-  const dataUri = await readAsDataUri(uri);
   const primaryBase = getApiBase();
-  const path = await postImage(primaryBase, token, dataUri);
+  let path: string | null = null;
+  try {
+    path = await postImageBinary(primaryBase, token, uri);
+  } catch {
+    path = null;
+  }
+  if (!path) {
+    const dataUri = await readAsDataUri(uri);
+    path = await postImage(primaryBase, token, dataUri);
+  }
   if (!path) return null;
 
   // Best-effort reachability check (same Atlas DB → any API host can serve it)

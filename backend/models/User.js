@@ -154,6 +154,8 @@ const userSchema = new mongoose.Schema({
     radiusKm: { type: Number, default: null },
     activeWithinMinutes: { type: Number, default: 0 },
     updatedAt: { type: Date, default: null },
+    nearbyCycle: { type: Number, default: 1, min: 1 },
+    nearbyCycleAt: { type: Date, default: null },
   },
   /**
    * Explore (random video/voice) match preferences.
@@ -195,8 +197,8 @@ const userSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
-// Geospatial index for nearby queries
-userSchema.index({ location: '2dsphere' });
+// Nearby $near + eligibility in one compound 2dsphere index
+userSchema.index({ location: '2dsphere', isVerified: 1, isDeactivated: 1, deletionScheduledAt: 1 });
 
 // Discovery eligibility — narrows the candidate pool alongside the $near scan
 userSchema.index({ isVerified: 1, isDeactivated: 1, deletionScheduledAt: 1 });

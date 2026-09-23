@@ -29,8 +29,9 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 enableFreeze(true);
 
 function RootLayoutContent() {
+  const scheme = useColorScheme();
   return (
-    <ThemeProvider value={useColorScheme() === 'dark' ? DarkTheme : DefaultTheme}>
+    <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack screenOptions={stackScreenOptions}>
         <Stack.Screen name="index" options={instantScreenOptions} />
         <Stack.Screen
@@ -71,6 +72,14 @@ function RootLayoutContent() {
         <Stack.Screen name="subscription-terms" options={stackScreenOptions} />
         <Stack.Screen
           name="u/[publicId]"
+          options={{
+            ...fadeScreenOptions,
+            presentation: 'transparentModal',
+            animation: 'fade',
+          }}
+        />
+        <Stack.Screen
+          name="profile/[id]"
           options={{
             ...fadeScreenOptions,
             presentation: 'transparentModal',

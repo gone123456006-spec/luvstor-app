@@ -1,21 +1,15 @@
 import { ApiError } from './api';
+import { userFacingMessage } from './userFacingError';
 
-const GOOGLE_HINT =
-  'Please try Log in with Google.';
+const GOOGLE_HINT = 'You can also try Log in with Google.';
 
 /**
- * Maps email/OTP login failures to a clear message.
- * Server overload / network / 5xx / 429 → suggest Google login.
- * Validation / wrong OTP / device conflicts keep their own message.
+ * Maps email/OTP login failures to short, production-safe copy.
  */
 export function emailLoginErrorMessage(err: unknown, fallback?: string): string {
   const apiErr = err instanceof ApiError ? err : null;
   const status = apiErr?.status ?? 0;
   const code = String(apiErr?.code || '');
-  const raw =
-    (err instanceof Error && err.message) ||
-    fallback ||
-    'Something went wrong.';
 
   if (
     code === 'DEVICE_IN_USE' ||
@@ -24,40 +18,25 @@ export function emailLoginErrorMessage(err: unknown, fallback?: string): string 
     code === 'OTP_EXPIRED' ||
     code === 'OTP_MAX_ATTEMPTS'
   ) {
-    return raw;
+    return userFacingMessage(err);
   }
 
-  // Client validation / bad request — keep server text
+  const safe = userFacingMessage(err, fallback || 'Something went wrong. Please try again.');
+
   if (status === 400 || status === 401 || status === 403 || status === 404) {
-    return raw;
+    return safe;
   }
 
-  const lower = raw.toLowerCase();
-
-  // Email transport misconfig on Render — don't hide behind "high demand"
   if (
-    /brevo|smtp|email blocked|email is not configured|cannot reach smtp|verification email/i.test(
-      lower,
-    )
-  ) {
-    return (
-      'Email OTP is not available right now (mail service not configured on the server). ' +
-      GOOGLE_HINT
-    );
-  }
-
-  const looksLikeServerOrNetwork =
     status >= 500 ||
     status === 429 ||
     status === 408 ||
-    /network|timeout|timed out|failed to fetch|fetch failed|econnrefused|unavailable|high demand|too many|server error|overload|gateway|bad gateway|service unavailable|internal server|connection|took too long/i.test(
-      lower,
-    ) ||
-    status === 0;
-
-  if (looksLikeServerOrNetwork) {
-    return `Email login is temporarily unavailable due to high demand or a server issue. ${GOOGLE_HINT}`;
+    status === 0 ||
+    /connect|internet|busy|code|google/i.test(safe)
+  ) {
+    if (/google/i.test(safe)) return safe;
+    return `${safe} ${GOOGLE_HINT}`;
   }
 
-  return `${raw} ${GOOGLE_HINT}`;
+  return `${safe} ${GOOGLE_HINT}`;
 }
