@@ -50,8 +50,9 @@ import {
     fetchSavedDiscoveryPrefs,
     fetchUserProfile,
     NearbyUser,
-    nearbyKmLabel,
+    nearbyListKm,
     searchUserByPublicId,
+    sortNearbyByLane,
     uploadMyLocation,
 } from "../../utils/nearby";
 import { NEARBY_REFRESH_HINT } from "../../utils/nearbyFeedCache";
@@ -218,9 +219,7 @@ function NearbyListRowBase({
     return () => clearTimeout(t);
   }, [stagger, index, item.id, anim]);
 
-  const kmLabel = nearbyKmLabel(item.distanceKm) || nearbyKmLabel(
-    item.distance != null ? Number(item.distance) / 1000 : undefined,
-  );
+  const kmLabel = nearbyListKm(item);
 
   return (
     <Animated.View
@@ -273,9 +272,6 @@ function NearbyListRowBase({
                 style={{ marginLeft: 4 }}
               />
             ) : null}
-            {feedTab === "nearby" && kmLabel ? (
-              <Text style={styles.metaText}>{kmLabel} km</Text>
-            ) : null}
           </View>
           <Text style={styles.subtitleText} numberOfLines={1}>
             {feedTab === "nearby" && areFriends
@@ -297,6 +293,10 @@ function NearbyListRowBase({
           </Text>
         </View>
 
+        {feedTab === "nearby" && kmLabel ? (
+          <Text style={styles.metaText}>{kmLabel} km</Text>
+        ) : null}
+
         <TouchableOpacity
           style={[
             styles.matchBtn,
@@ -317,6 +317,7 @@ function NearbyListRowBase({
                 styles.matchBtnText,
                 (liked || areFriends) && styles.matchBtnTextLiked,
               ]}
+              numberOfLines={1}
             >
               {areFriends ? "Say hi" : liked ? "Liked" : "Like"}
             </Text>
@@ -1345,11 +1346,15 @@ export default function DiscoverScreen() {
 
   // Combine searched user with filtered users
   const displayUsers = React.useMemo(() => {
+    const list =
+      feedTab === "nearby"
+        ? sortNearbyByLane(filteredUsers, relationshipById)
+        : filteredUsers;
     if (searchedUser) {
-      return [searchedUser, ...filteredUsers];
+      return [searchedUser, ...list];
     }
-    return filteredUsers;
-  }, [searchedUser, filteredUsers]);
+    return list;
+  }, [searchedUser, filteredUsers, feedTab, relationshipById]);
 
   const ListEmpty = () => {
     if ((listLoading || !prefsHydrated) && activeUsers.length === 0) {
@@ -2340,6 +2345,7 @@ const styles = StyleSheet.create({
     color: D.muted,
     fontWeight: "600",
     flexShrink: 0,
+    marginRight: 8,
   },
   subtitleRow: {
     flexDirection: "row",
@@ -2358,13 +2364,15 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   matchBtn: {
-    minWidth: 48,
+    minWidth: 58,
     height: 28,
-    paddingHorizontal: 7,
+    paddingHorizontal: 10,
     borderRadius: 7,
     backgroundColor: D.purple,
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
+    alignSelf: "center",
   },
   matchBtnLiked: {
     backgroundColor: D.purpleSoft,

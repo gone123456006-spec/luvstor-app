@@ -1008,10 +1008,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     });
     const callId = stateRef.current.callId;
     if (callId) socket?.emit('call:media-state', { callId, speaker: route === 'speaker' });
-    // WebRTC can overwrite route — reinforce current (BT if speaker off)
-    setTimeout(() => {
-      void reinforceCallAudio(route === 'speaker');
-    }, 200);
   }, [patch, socket]);
 
   const chooseAudioRoute = useCallback(
@@ -1028,9 +1024,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           speaker: applied === 'speaker',
         });
       }
-      setTimeout(() => {
-        void reinforceCallAudio(applied === 'speaker');
-      }, 200);
     },
     [patch, socket],
   );
@@ -1801,6 +1794,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       disposePeer();
       Vibration.cancel();
       void stopOngoingCall();
+      void stopCallAudio();
       if (endClearTimer.current) clearTimeout(endClearTimer.current);
     };
   }, [clearExploreRecover, disposePeer, stopHeartbeat]);

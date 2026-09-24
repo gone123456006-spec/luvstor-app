@@ -228,6 +228,12 @@ export async function ensureCallPermissions(
         /* ignore */
       }
     }
+    try {
+      const { requestBluetoothConnect } = require('../utils/appPermissions');
+      await requestBluetoothConnect();
+    } catch {
+      /* optional — built-in routes still work */
+    }
   } catch {
     /* never block the call UI on permission helpers */
   }
@@ -446,19 +452,23 @@ export class CallPeer {
     // Request at the moment hardware is needed (not on login / chat open)
     await ensureCallPermissions(this.callType);
 
-    // Ensure recording-capable audio session before getUserMedia (avoids
-    // false "permission denied" when chat voice-note mode left mic locked)
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { setAudioModeAsync } = require('expo-audio');
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-        shouldPlayInBackground: true,
-        interruptionMode: 'doNotMix',
-      });
-    } catch {
-      /* optional */
+    // iOS only: unlock the session after chat voice notes.
+    // Android expo-audio maps non-earpiece → MODE_NORMAL + speaker ON and
+    // would fight LuvstorCallAudio / Bluetooth SCO.
+    if (Platform.OS !== 'android') {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { setAudioModeAsync } = require('expo-audio');
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          shouldPlayInBackground: true,
+          interruptionMode: 'doNotMix',
+          shouldRouteThroughEarpiece: false,
+        });
+      } catch {
+        /* optional */
+      }
     }
 
     const openMedia = async (videoEnabled: boolean) =>

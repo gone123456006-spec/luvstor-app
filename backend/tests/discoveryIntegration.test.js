@@ -430,6 +430,9 @@ test('integration: distance fields are populated for the served batch', async (t
       const km = Number(u.distanceKm);
       assert.ok(km >= 0.1 && km <= 100, `distanceKm out of 0.1–100 range: ${u.distanceKm}`);
       assert.notEqual(String(u.distanceKm), '0');
+      if (u.distance < 500) {
+        assert.notEqual(String(u.distanceKm), '1', 'must not fake 1 km for close users');
+      }
     } else {
       assert.equal(u.distanceKm, null, 'non-nearby profiles must not show km');
       assert.equal(u.distance, null, 'non-nearby profiles must not show distance');
@@ -466,9 +469,17 @@ test('integration: friendship state is hydrated in one pass', async (t) => {
   assert.equal(byId.get(String(liked._id)).iLiked, true);
   assert.equal(byId.get(String(liked._id)).theyLiked, false);
   assert.equal(byId.get(String(liked._id)).nearbyLane, 'waiting');
+  assert.equal(byId.get(String(friend._id)).nearbyLane, 'friends');
   const likedIdx = users.findIndex((u) => String(u.id) === String(liked._id));
+  const friendIdx = users.findIndex((u) => String(u.id) === String(friend._id));
   const freshIdx = users.findIndex((u) => String(u.id) === String(people[2]._id));
   if (likedIdx >= 0 && freshIdx >= 0) {
     assert.ok(likedIdx > freshIdx, 'outgoing likes sink below fresh Nearby rows');
+  }
+  if (friendIdx >= 0 && likedIdx >= 0) {
+    assert.ok(friendIdx > likedIdx, 'already-friends sink below liked Nearby rows');
+  }
+  if (friendIdx >= 0 && freshIdx >= 0) {
+    assert.ok(friendIdx > freshIdx, 'already-friends sink below fresh Nearby rows');
   }
 });

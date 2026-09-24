@@ -114,36 +114,45 @@ function normalisePrefs(prefs) {
   };
 }
 
+/** Format a real haversine km. Never invent 1 km. */
+function formatActualKm(km) {
+  if (!Number.isFinite(km) || km < 0) return null;
+  if (km < 1) {
+    const tenths = Math.round(km * 10) / 10;
+    return (tenths < 0.1 ? 0.1 : tenths).toFixed(1);
+  }
+  if (Math.abs(km - Math.round(km)) < 0.05) return String(Math.round(km));
+  return km.toFixed(1);
+}
+
 /**
- * Real GPS km from the viewer to this person. 0.1–100 only; never "0".
+ * Nearby 1–25 only: actual GPS km within 100 km.
+ * Random / 26–50 / missing GPS → no km (never a fake 1 km).
  */
-function publicNearbyDistance(metres, _source) {
+function publicNearbyDistance(metres, source) {
+  if (source !== 'nearby') {
+    return { distanceKm: null, distanceM: null };
+  }
   if (!Number.isFinite(metres) || metres < 0) {
     return { distanceKm: null, distanceM: null };
   }
-  let km = metres / 1000;
+  const km = metres / 1000;
   if (km > NEARBY_DISTANCE_MAX_KM) {
     return { distanceKm: null, distanceM: null };
   }
-  // 0.1 km (or closer) displays as 1 km; everything else stays real.
-  if (km <= 0.1) {
-    return { distanceKm: '1', distanceM: Math.round(metres) };
-  }
-  const distanceKm =
-    km < 1
-      ? km.toFixed(1)
-      : Math.abs(km - Math.round(km)) < 0.05
-        ? String(Math.round(km))
-        : km.toFixed(1);
-  if (distanceKm === '0' || distanceKm === '0.0' || distanceKm === '0.1') {
-    return { distanceKm: '1', distanceM: Math.round(metres) };
-  }
+  const distanceKm = formatActualKm(km);
+  if (!distanceKm) return { distanceKm: null, distanceM: null };
   return { distanceKm, distanceM: Math.round(metres) };
 }
 
-/** Haversine from viewer GPS → profile GPS. Never use the saved preference field. */
+/** Haversine from viewer GPS → profile GPS. Invalid / [0,0] coords → NaN. */
 function metresFromViewer(lat, lng, doc) {
-  const [uLng, uLat] = (doc?.location?.coordinates || []).map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) {
+    return NaN;
+  }
+  const coords = doc?.location?.coordinates;
+  if (!hasRealLocation(coords)) return NaN;
+  const [uLng, uLat] = coords.map(Number);
   return distanceMetres(lat, lng, uLat, uLng);
 }
 
@@ -198,23 +207,26 @@ async function getBlockedUserIds(viewerId) {
   return list;
 }
 
-/** Nearby lanes: incoming, friends, fresh, passed, waiting. */
+/** Nearby lanes: incoming, fresh, passed, waiting, friends.
+ *  Already-friends (Say hi) sink last — they are not new people. */
+const NEARBY_LANE_NAMES = ['incoming', 'fresh', 'passed', 'waiting', 'friends'];
+
 function nearbyLaneRank(friendship, viewerId, candidateId) {
-  if (!friendship) return 2;
+  if (!friendship) return 1;
   const initiatedBy = friendship.initiatedBy
     ? String(friendship.initiatedBy)
     : '';
   if (friendship.status === 'friends' || friendship.status === 'mutual_match') {
-    return 1;
+    return 4;
   }
   if (friendship.status === 'pending_like') {
     if (initiatedBy === String(candidateId)) return 0;
-    if (initiatedBy === String(viewerId)) return 4;
+    if (initiatedBy === String(viewerId)) return 3;
   }
   if (friendship.status === 'declined' && initiatedBy === String(viewerId)) {
-    return 3;
+    return 2;
   }
-  return 2;
+  return 1;
 }
 
 async function getFriendshipMap(viewerId, candidateIds) {
@@ -1031,7 +1043,7 @@ async function buildNearbyBatch({
       theyLiked: !!theyLiked,
       nearbyLowPriority:
         friendship?.status === 'declined' && initiatedBy === String(viewer._id),
-      nearbyLane: ['incoming', 'friends', 'fresh', 'passed', 'waiting'][
+      nearbyLane: NEARBY_LANE_NAMES[
         nearbyLaneRank(friendship, viewer._id, candidate.id)
       ],
       // Frontend only distinguishes in-radius from further-away profiles.
@@ -1123,7 +1135,7 @@ function toPublicNearbyUser(candidate, { friendships, onlineMap, viewerId, now, 
     theyLiked: !!theyLiked,
     nearbyLowPriority:
       friendship?.status === 'declined' && initiatedBy === String(viewerId),
-    nearbyLane: ['incoming', 'friends', 'fresh', 'passed', 'waiting'][
+    nearbyLane: NEARBY_LANE_NAMES[
       nearbyLaneRank(friendship, viewerId, id)
     ],
     source: isNearby ? 'nearby' : 'random',

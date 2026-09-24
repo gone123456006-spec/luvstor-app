@@ -350,22 +350,46 @@ describe('Nearby 1–25 / 26–50 assembly', () => {
     assert.equal(new Set(mixed.map((x) => String(x.doc._id))).size, 50);
   });
 
-  test('public km is 1–100 for Nearby and hidden for random', () => {
-    assert.deepEqual(publicNearbyDistance(0, 'nearby'), {
-      distanceKm: '1',
-      distanceM: 0,
+  test('public km is actual GPS for Nearby 1–25 and hidden for random', () => {
+    assert.deepEqual(publicNearbyDistance(NaN, 'nearby'), {
+      distanceKm: null,
+      distanceM: null,
     });
     assert.deepEqual(publicNearbyDistance(80, 'nearby'), {
-      distanceKm: '1',
+      distanceKm: '0.1',
       distanceM: 80,
-    });
-    assert.deepEqual(publicNearbyDistance(100, 'nearby'), {
-      distanceKm: '1',
-      distanceM: 100,
     });
     assert.deepEqual(publicNearbyDistance(400, 'nearby'), {
       distanceKm: '0.4',
       distanceM: 400,
+    });
+    assert.deepEqual(publicNearbyDistance(1_400, 'nearby'), {
+      distanceKm: '1.4',
+      distanceM: 1400,
+    });
+    assert.deepEqual(publicNearbyDistance(7_800, 'nearby'), {
+      distanceKm: '7.8',
+      distanceM: 7800,
+    });
+    assert.deepEqual(publicNearbyDistance(32_000, 'nearby'), {
+      distanceKm: '32',
+      distanceM: 32000,
+    });
+    assert.deepEqual(publicNearbyDistance(96_000, 'nearby'), {
+      distanceKm: '96',
+      distanceM: 96000,
+    });
+    assert.deepEqual(publicNearbyDistance(1_200, 'nearby'), {
+      distanceKm: '1.2',
+      distanceM: 1200,
+    });
+    assert.deepEqual(publicNearbyDistance(8_000, 'nearby'), {
+      distanceKm: '8',
+      distanceM: 8000,
+    });
+    assert.deepEqual(publicNearbyDistance(47_000, 'nearby'), {
+      distanceKm: '47',
+      distanceM: 47000,
     });
     assert.deepEqual(publicNearbyDistance(12_400, 'nearby'), {
       distanceKm: '12.4',
@@ -379,11 +403,12 @@ describe('Nearby 1–25 / 26–50 assembly', () => {
       distanceKm: null,
       distanceM: null,
     });
+    assert.notEqual(publicNearbyDistance(80, 'nearby').distanceKm, '1');
     assert.deepEqual(publicNearbyDistance(80_000, 'random'), {
-      distanceKm: '80',
-      distanceM: 80000,
+      distanceKm: null,
+      distanceM: null,
     });
-    assert.deepEqual(publicNearbyDistance(124_449_700, 'random'), {
+    assert.deepEqual(publicNearbyDistance(8_000, 'random'), {
       distanceKm: null,
       distanceM: null,
     });

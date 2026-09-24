@@ -297,13 +297,14 @@ async function hydrateUsers(viewer, rankedSlice, now) {
         distanceKm:
           metres != null && metres >= 0 && metres <= 100_000
             ? (() => {
-                const km = Math.min(100, Math.max(0.1, metres / 1000));
-                if (km <= 0.1) return '1';
-                return km < 1
-                  ? km.toFixed(1)
-                  : Math.abs(km - Math.round(km)) < 0.05
-                    ? String(Math.round(km))
-                    : km.toFixed(1);
+                const km = metres / 1000;
+                if (km < 1) {
+                  const tenths = Math.round(km * 10) / 10;
+                  return (tenths < 0.1 ? 0.1 : tenths).toFixed(1);
+                }
+                return Math.abs(km - Math.round(km)) < 0.05
+                  ? String(Math.round(km))
+                  : km.toFixed(1);
               })()
             : null,
         friendshipStatus: friendship?.status || "stranger",

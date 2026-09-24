@@ -75,7 +75,7 @@ function DraggablePip({
 }) {
   const win = Dimensions.get('window');
   const initial = computePipBounds(win.width, win.height, insetsTop, insetsBottom);
-  const startX = Math.max(initial.minX, initial.maxX); // default top-right
+  const startX = initial.minX; // default top-left
   const startY = initial.minY;
 
   const translateX = useSharedValue(startX);

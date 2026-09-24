@@ -211,7 +211,21 @@ export async function requestNotifications(): Promise<boolean> {
   }
 }
 
-/** Voice & video calls = microphone + camera */
+/** Android 12+ — required for Bluetooth SCO / communication-device routing. */
+export async function requestBluetoothConnect(): Promise<boolean> {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 31) return true;
+  const perm = (PermissionsAndroid.PERMISSIONS as { BLUETOOTH_CONNECT?: string })
+    .BLUETOOTH_CONNECT;
+  if (!perm) return true;
+  try {
+    if (await androidCheck(perm)) return true;
+    return androidRequest(perm);
+  } catch {
+    return false;
+  }
+}
+
+/** Voice & video calls = microphone + camera (+ Bluetooth connect on Android 12+) */
 export async function getCallsStatus(): Promise<PermStatus> {
   const mic = await getMicrophoneStatus();
   const cam = await getCameraStatus();
@@ -223,6 +237,7 @@ export async function getCallsStatus(): Promise<PermStatus> {
 export async function requestCalls(): Promise<boolean> {
   const mic = await requestMicrophone();
   const cam = await requestCamera();
+  await requestBluetoothConnect();
   return mic && cam;
 }
 
@@ -269,6 +284,7 @@ export async function requestEssentialPermissions(): Promise<void> {
   await requestPhotos();
   if (Platform.OS === 'android') {
     await requestMusic();
+    await requestBluetoothConnect();
   }
   await requestNotifications();
 }

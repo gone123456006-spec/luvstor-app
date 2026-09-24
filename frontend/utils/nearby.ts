@@ -55,10 +55,10 @@ export type NearbyLane = NonNullable<NearbyUser['nearbyLane']>;
 
 const LANE_ORDER: Record<NearbyLane, number> = {
   incoming: 0,
-  friends: 1,
-  fresh: 2,
-  passed: 3,
-  waiting: 4,
+  fresh: 1,
+  passed: 2,
+  waiting: 3,
+  friends: 4,
 };
 
 export function nearbyLaneForUser(
@@ -89,7 +89,7 @@ function sortMetres(u: NearbyUser): number {
   return Number.POSITIVE_INFINITY;
 }
 
-/** Nearby first; closest km at the top; liked / passed rows sink. */
+/** Nearby first; closest km at the top; liked then friends sink. */
 export function sortNearbyByLane<T extends NearbyUser>(
   users: T[],
   relById?: Record<string, { status?: string; iLiked?: boolean; theyLiked?: boolean; areFriends?: boolean }>,
@@ -150,29 +150,37 @@ function parseDistanceKm(u: any): number | undefined {
 }
 
 /**
- * Real GPS km: 0.1–100. Never "0". Does not flatten everyone to 1 km.
+ * Display the API's actual km. No default/fallback 1 km.
+ * Hide when missing, invalid, or outside the 100 km Nearby cap.
  */
 export function nearbyKmLabel(raw: unknown): string | undefined {
   if (raw == null) return undefined;
   const cleaned = String(raw).replace(/\s*km$/i, '').trim();
-  if (!cleaned || cleaned === '?') return undefined;
-  let km = Number(cleaned);
-  if (!Number.isFinite(km)) return undefined;
-  if (km > 20_015) km = km / 1000;
+  if (!cleaned || cleaned === '?' ) return undefined;
+  const km = Number(cleaned);
+  if (!Number.isFinite(km) || km < 0) return undefined;
   if (km > NEARBY_DISTANCE_MAX_KM) return undefined;
-  if (km <= 0.1) return '1';
-  if (km < 1) return km.toFixed(1);
+  if (km < 1) {
+    const tenths = Math.round(km * 10) / 10;
+    return (tenths < 0.1 ? 0.1 : tenths).toFixed(1);
+  }
   if (Math.abs(km - Math.round(km)) < 0.05) return String(Math.round(km));
   return km.toFixed(1);
 }
 
 function formatDistanceKm(u: any): string | undefined {
-  if (u?.source === 'for_you') return undefined;
-  const fromKm = nearbyKmLabel(u?.distanceKm);
-  if (fromKm) return fromKm;
-  const metres = Number(u?.distance);
-  if (!Number.isFinite(metres) || metres < 0) return undefined;
-  return nearbyKmLabel(metres / 1000);
+  if (u?.source !== 'nearby') return undefined;
+  if (u?.distanceKm == null || String(u.distanceKm).trim() === '') return undefined;
+  return nearbyKmLabel(u.distanceKm);
+}
+
+/** Nearby 1–25 only. Discovery / random rows never get a km label. */
+export function nearbyListKm(user: {
+  source?: NearbyUser['source'];
+  distanceKm?: string | null;
+}): string | undefined {
+  if (!user || user.source !== 'nearby') return undefined;
+  return nearbyKmLabel(user.distanceKm);
 }
 
 export function mapNearbyUser(u: any): NearbyUser {
@@ -206,7 +214,9 @@ export function mapNearbyUser(u: any): NearbyUser {
     showMe: u.showMe || '',
     isOnline: !!u.isOnline,
     distance:
-      u.distance != null && Number.isFinite(Number(u.distance))
+      source === 'nearby' &&
+      u.distance != null &&
+      Number.isFinite(Number(u.distance))
         ? Number(u.distance)
         : undefined,
     distanceKm,

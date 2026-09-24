@@ -84,6 +84,9 @@ check(androidPerms.includes('android.permission.CAMERA'), 'Android CAMERA permis
 check(androidPerms.includes('android.permission.RECORD_AUDIO'), 'Android RECORD_AUDIO permission');
 check(androidPerms.includes('android.permission.MODIFY_AUDIO_SETTINGS'), 'Android MODIFY_AUDIO_SETTINGS permission');
 check(androidPerms.includes('android.permission.BLUETOOTH'), 'Android BLUETOOTH permission');
+check(androidPerms.includes('android.permission.BLUETOOTH_CONNECT'), 'Android BLUETOOTH_CONNECT permission');
+check(fileExists('plugins/withCallAudio.js'), 'Call audio native plugin exists');
+check(fileExists('plugins/call-audio/CallAudioModule.kt'), 'CallAudioModule.kt exists');
 
 const iosInfo = appConfig?.expo?.ios?.infoPlist || {};
 check(iosInfo.NSCameraUsageDescription, 'iOS NSCameraUsageDescription');
@@ -100,6 +103,13 @@ check(
     (Array.isArray(p) && p[0]?.includes('withWebRTC'))
   ),
   'WebRTC plugin registered in app.json'
+);
+check(
+  plugins.some(p =>
+    (typeof p === 'string' && p.includes('withCallAudio')) ||
+    (Array.isArray(p) && p[0]?.includes('withCallAudio'))
+  ),
+  'Call audio plugin registered in app.json'
 );
 
 // 4. Check CallContext integration

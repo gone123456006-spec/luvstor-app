@@ -4,7 +4,6 @@ import { useFocusEffect, useRouter } from "expo-router";
 import React from "react";
 import {
     Alert,
-    Animated,
     Dimensions,
     Modal,
     Platform,
@@ -14,6 +13,14 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import Reanimated, {
+    cancelAnimation,
+    Easing,
+    runOnJS,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
+} from "react-native-reanimated";
 import {
     SafeAreaView,
     useSafeAreaInsets,
@@ -99,9 +106,7 @@ function formatInr(n: number) {
   return `₹${Number(n).toLocaleString("en-IN")}`;
 }
 
-function easeOut(t: number) {
-  return 1 - Math.pow(1 - t, 4);
-}
+const SPIN_EASE = Easing.bezier(0.08, 0.82, 0.12, 1);
 
 const POPUP_BG = "#E5D39A";
 const POPUP_HEADER = "#E8D48A";
@@ -243,7 +248,12 @@ function SpinWheelFace({
   const labelH = 34;
 
   return (
-    <View style={{ width: size, height: size }}>
+    <View
+      style={{ width: size, height: size }}
+      collapsable={false}
+      shouldRasterizeIOS
+      renderToHardwareTextureAndroid
+    >
       <LinearGradient
         colors={[
           "#F0D56A",
@@ -407,8 +417,11 @@ function SpinModal({
   const segments = React.useMemo(() => segmentsFromCycle(FREE_SPIN_CYCLE), []);
   const n = segments.length;
   const arc = TWO_PI / n;
-  const rotAnim = React.useRef(new Animated.Value(0)).current;
+  const rotationDeg = useSharedValue(0);
   const currentRot = React.useRef(0);
+  const wheelStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotationDeg.value}deg` }],
+  }));
   const [isSpinning, setIsSpinning] = React.useState(false);
   const [spinsLeft, setSpinsLeft] = React.useState(spinsRemaining);
   const [result, setResult] = React.useState<(typeof segments)[0] | null>(null);
@@ -431,11 +444,12 @@ function SpinModal({
     if (!visible) {
       setWaitOpen(false);
       setResult(null);
-      rotAnim.setValue(0);
+      cancelAnimation(rotationDeg);
+      rotationDeg.value = 0;
       currentRot.current = 0;
       setIsSpinning(false);
     }
-  }, [visible, rotAnim]);
+  }, [visible, rotationDeg]);
 
   async function doSpin() {
     if (isSpinning) return;
@@ -493,36 +507,32 @@ function SpinModal({
 
       let delta = normalised - currentNorm;
       if (delta <= 0) delta += TWO_PI;
-      const extraRot = (6 + Math.floor(Math.random() * 3)) * TWO_PI;
+      const extraRot = (8 + Math.floor(Math.random() * 3)) * TWO_PI;
       const totalRad = extraRot + delta;
       const totalDeg = (totalRad * 180) / Math.PI;
       const startDeg = (currentRot.current * 180) / Math.PI;
 
-      rotAnim.setValue(startDeg % 360);
-
-      Animated.timing(rotAnim, {
-        toValue: startDeg + totalDeg,
-        duration: 4500,
-        easing: easeOut,
-        // Keep JS driver — LinearGradient slices can blank with native driver
-        useNativeDriver: false,
-      }).start(() => {
+      const finishSpin = () => {
         currentRot.current = (currentRot.current + totalRad) % TWO_PI;
         setIsSpinning(false);
         const won = segments[winIdx];
         setResult(won);
         onBalanceChange(claim.tokenBalance);
-      });
+      };
+
+      rotationDeg.value = startDeg;
+      rotationDeg.value = withTiming(
+        startDeg + totalDeg,
+        { duration: 5600, easing: SPIN_EASE },
+        (finished) => {
+          if (finished) runOnJS(finishSpin)();
+        },
+      );
     } catch {
       setIsSpinning(false);
       nativeAlert("Spin failed", "Could not claim spin. Try again.");
     }
   }
-
-  const spinDeg = rotAnim.interpolate({
-    inputRange: [0, 360],
-    outputRange: ["0deg", "360deg"],
-  });
 
   return (
     <Modal
@@ -558,15 +568,17 @@ function SpinModal({
             </View>
 
             <View style={styles.wheelWrap}>
-              <Animated.View
-                style={{
-                  transform: [{ rotate: spinDeg }],
-                  width: WHEEL_SIZE,
-                  height: WHEEL_SIZE,
-                }}
+              <Reanimated.View
+                style={[
+                  {
+                    width: WHEEL_SIZE,
+                    height: WHEEL_SIZE,
+                  },
+                  wheelStyle,
+                ]}
               >
                 <SpinWheelFace segments={segments} size={WHEEL_SIZE} />
-              </Animated.View>
+              </Reanimated.View>
 
               <View style={styles.goHub} pointerEvents="box-none">
                 <View style={styles.goPointer} pointerEvents="none" />
