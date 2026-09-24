@@ -318,12 +318,7 @@ function UserProfileModal({
     resolveMediaUrl(displayUser.coverPhoto) || displayUser.coverPhoto || null;
   const coverHeight = 148 + Math.max(insets.top, 0);
   const avatarPhoto = displayUser.photo || "";
-  const kmValue =
-    nearbyKmLabel(displayUser.distanceKm) ||
-    nearbyKmLabel(
-      displayUser.distance != null ? Number(displayUser.distance) / 1000 : undefined,
-    ) ||
-    "";
+  const kmValue = nearbyKmLabel(displayUser.distanceKm) || "";
 
   const profileInfoRows = [
     {

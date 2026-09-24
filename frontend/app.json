@@ -102,6 +102,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -171,6 +172,7 @@
       ],
       "./plugins/withWebRTC",
       "./plugins/withCallForegroundService",
+      "./plugins/withCallAudio",
       [
         "expo-notifications",
         {

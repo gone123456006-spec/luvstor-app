@@ -184,7 +184,7 @@ export function bindAccount(email?: string | null) {
     setState({ ...EMPTY, revision: state.revision });
     return;
   }
-  const cached = getNearbyFeedCache(next);
+  const cached = sortNearbyByLane(getNearbyFeedCache(next));
   setState({
     email: next,
     users: cached,
@@ -206,7 +206,7 @@ export async function hydrateAccount(email?: string | null) {
   const cached = await hydrateNearbyFeedCache(e);
   if (normalizeEmail(state.email) !== e || !cached.length) return;
   if (state.users.length) return;
-  applyUsers(cached, { loading: false, freshEmpty: false }, false);
+  applyUsers(sortNearbyByLane(cached), { loading: false, freshEmpty: false }, false);
 }
 
 function shouldSkip(reason: RefreshReason, prefs: NearbyPrefs) {
