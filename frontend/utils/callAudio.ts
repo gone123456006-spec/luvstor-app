@@ -1,18 +1,15 @@
 /**
- * WhatsApp-like call audio routing.
- *
- * Priority when the user has not forced a route:
- *   Bluetooth (headset mic + speakers) → wired headset →
- *   video: loudspeaker / voice: earpiece
- *
- * Speaker ON  → force loudspeaker
- * Speaker OFF → release force (mode 0) and re-select Bluetooth if present
- *
- * Uses react-native-incall-manager communication-audio APIs
- * (chooseAudioRoute / SCO). No Bluetooth scanning.
+ * Call audio: Android uses the native LuvstorCallAudio module
+ * (AudioManager MODE_IN_COMMUNICATION + setCommunicationDevice / SCO).
+ * iOS uses InCallManager. JS never invents routes or fights those managers.
  */
 
-import { DeviceEventEmitter, NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import {
+  DeviceEventEmitter,
+  NativeEventEmitter,
+  NativeModules,
+  Platform,
+} from 'react-native';
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
 
 export type CallAudioRoute = 'bluetooth' | 'wired' | 'earpiece' | 'speaker';
@@ -22,12 +19,26 @@ export type CallAudioSnapshot = {
   selected: CallAudioRoute;
 };
 
+type NativeCallAudio = {
+  start: (
+    callType: string,
+    preferSpeaker: boolean,
+  ) => Promise<{ available: string[]; selected: string }>;
+  stop: () => Promise<boolean>;
+  setSpeaker: (on: boolean) => Promise<{ available: string[]; selected: string }>;
+  setRoute: (route: string) => Promise<{ available: string[]; selected: string }>;
+  setMuted: (muted: boolean) => Promise<boolean>;
+  reassert: () => Promise<{ available: string[]; selected: string }>;
+  getSnapshot: () => Promise<{ available: string[]; selected: string }>;
+  addListener: (eventName: string) => void;
+  removeListeners: (count: number) => void;
+};
+
 type InCallManagerModule = {
   start: (opts?: { media?: string; auto?: boolean; ringback?: string }) => void;
   stop: (opts?: { busytone?: string }) => void;
   setForceSpeakerphoneOn: (flag: boolean | null) => void;
   setSpeakerphoneOn: (enable: boolean) => void;
-  setMicrophoneMute: (enable: boolean) => void;
   chooseAudioRoute?: (route: string) => void;
   startProximitySensor?: () => void;
   stopProximitySensor?: () => void;
@@ -47,14 +58,13 @@ let inCallTried = false;
 let ringbackPlayer: AudioPlayer | null = null;
 let ringtonePlayer: AudioPlayer | null = null;
 let deviceSub: { remove: () => void } | null = null;
-let wiredSub: { remove: () => void } | null = null;
+let nativeSub: { remove: () => void } | null = null;
 
 type Session = {
   active: boolean;
   callType: 'voice' | 'video';
   available: CallAudioRoute[];
   selected: CallAudioRoute;
-  /** Explicit user pick — respected until the device disappears or they change it. */
   manual: CallAudioRoute | null;
 };
 
@@ -96,7 +106,15 @@ export function getCallAudioSnapshot(): CallAudioSnapshot {
   return { available: [...session.available], selected: session.selected };
 }
 
+function getNativeCallAudio(): NativeCallAudio | null {
+  if (Platform.OS !== 'android') return null;
+  const mod = NativeModules.LuvstorCallAudio as NativeCallAudio | undefined;
+  return mod && typeof mod.start === 'function' ? mod : null;
+}
+
 function getInCallManager(): InCallManagerModule | null {
+  // Android: native LuvstorCallAudio is the only manager when present.
+  if (getNativeCallAudio()) return null;
   if (inCallTried) return InCall;
   inCallTried = true;
   try {
@@ -109,111 +127,11 @@ function getInCallManager(): InCallManagerModule | null {
       typeof candidate.stop === 'function'
     ) {
       InCall = candidate;
-    } else {
-      InCall = null;
     }
   } catch {
     InCall = null;
   }
   return InCall;
-}
-
-/** Drop broken native bridge after a failed call so we stay on expo-audio. */
-function markInCallBroken() {
-  InCall = null;
-}
-
-/**
- * InCallManager maps:
- *   true  →  1  force speaker
- *   false → -1  force speaker OFF (earpiece) — this kills Bluetooth SCO
- *   null  →  0  auto (system / Bluetooth / wired)
- */
-function setSpeakerForce(mgr: InCallManagerModule, mode: 'on' | 'off' | 'auto') {
-  try {
-    if (mode === 'on') mgr.setForceSpeakerphoneOn(true);
-    else if (mode === 'off') mgr.setForceSpeakerphoneOn(false);
-    else mgr.setForceSpeakerphoneOn(null);
-  } catch (err) {
-    console.warn('[CallAudio] speaker force:', (err as Error).message);
-  }
-}
-
-function chooseNativeRoute(mgr: InCallManagerModule, route: CallAudioRoute) {
-  try {
-    mgr.chooseAudioRoute?.(NATIVE_ROUTE[route]);
-  } catch (err) {
-    console.warn('[CallAudio] chooseAudioRoute:', (err as Error).message);
-  }
-}
-
-function applyExpoForRoute(route: CallAudioRoute) {
-  const throughEarpiece = route === 'earpiece';
-  return setAudioModeAsync({
-    allowsRecording: true,
-    playsInSilentMode: true,
-    shouldPlayInBackground: true,
-    interruptionMode: 'doNotMix',
-    // Only pin earpiece when that is the real destination.
-    // true here after Speaker-off was blocking Bluetooth SCO restore.
-    shouldRouteThroughEarpiece: throughEarpiece,
-  }).catch((err) => {
-    console.warn('[CallAudio] expo mode:', (err as Error).message);
-  });
-}
-
-function applyNativeRoute(route: CallAudioRoute) {
-  const mgr = getInCallManager();
-  if (mgr) {
-    try {
-      if (route === 'speaker') {
-        setSpeakerForce(mgr, 'on');
-        chooseNativeRoute(mgr, 'speaker');
-        mgr.setSpeakerphoneOn?.(true);
-        mgr.stopProximitySensor?.();
-      } else if (route === 'bluetooth') {
-        // Release force so SCO can attach; then pick Bluetooth explicitly
-        setSpeakerForce(mgr, 'auto');
-        mgr.setSpeakerphoneOn?.(false);
-        chooseNativeRoute(mgr, 'bluetooth');
-        mgr.stopProximitySensor?.();
-      } else if (route === 'wired') {
-        setSpeakerForce(mgr, 'auto');
-        mgr.setSpeakerphoneOn?.(false);
-        chooseNativeRoute(mgr, 'wired');
-        mgr.stopProximitySensor?.();
-      } else {
-        setSpeakerForce(mgr, 'off');
-        chooseNativeRoute(mgr, 'earpiece');
-        mgr.setSpeakerphoneOn?.(false);
-        if (session.callType === 'voice') mgr.startProximitySensor?.();
-        else mgr.stopProximitySensor?.();
-      }
-    } catch (err) {
-      console.warn('[CallAudio] apply route:', (err as Error).message);
-    }
-  }
-  void applyExpoForRoute(route);
-}
-
-function defaultRoute(
-  available: CallAudioRoute[],
-  callType: 'voice' | 'video',
-): CallAudioRoute {
-  if (available.includes('bluetooth')) return 'bluetooth';
-  if (available.includes('wired')) return 'wired';
-  return callType === 'video' ? 'speaker' : 'earpiece';
-}
-
-function uniqRoutes(list: CallAudioRoute[]): CallAudioRoute[] {
-  const seen = new Set<CallAudioRoute>();
-  const out: CallAudioRoute[] = [];
-  for (const r of list) {
-    if (seen.has(r)) continue;
-    seen.add(r);
-    out.push(r);
-  }
-  return out;
 }
 
 function parseDeviceName(raw: unknown): CallAudioRoute | null {
@@ -230,94 +148,128 @@ function parseDeviceName(raw: unknown): CallAudioRoute | null {
   return null;
 }
 
-function parseAvailable(list: unknown): CallAudioRoute[] {
-  const raw = Array.isArray(list) ? list : [];
-  const parsed = raw
-    .map(parseDeviceName)
-    .filter((r): r is CallAudioRoute => !!r);
-  // Phone speaker is always a real output
-  if (!parsed.includes('speaker')) parsed.push('speaker');
-  // Earpiece is available unless a wired headset owns the receiver
-  if (!parsed.includes('wired') && !parsed.includes('earpiece')) {
-    parsed.push('earpiece');
+function uniqRoutes(list: CallAudioRoute[]): CallAudioRoute[] {
+  const seen = new Set<CallAudioRoute>();
+  const out: CallAudioRoute[] = [];
+  for (const r of list) {
+    if (seen.has(r)) continue;
+    seen.add(r);
+    out.push(r);
   }
-  return uniqRoutes(parsed);
+  return out;
 }
 
-function onDevicesChanged(available: CallAudioRoute[], selectedHint?: CallAudioRoute | null) {
-  session.available = available.length ? available : ['earpiece', 'speaker'];
-
-  if (session.manual && !session.available.includes(session.manual)) {
-    session.manual = null;
-  }
-
-  if (!session.active) {
-    emitAudio();
-    return;
-  }
-
-  const wanted = session.manual || defaultRoute(session.available, session.callType);
-  if (wanted !== session.selected) {
-    session.selected = wanted;
-    applyNativeRoute(wanted);
-  } else if (selectedHint && selectedHint !== session.selected && !session.manual) {
-    // Native already switched (BT connected mid-call) — follow it
-    session.selected = selectedHint;
-    applyNativeRoute(selectedHint);
+function applyNativeSnapshot(raw: { available?: string[]; selected?: string } | null) {
+  if (!raw) return;
+  const available = uniqRoutes(
+    (raw.available || [])
+      .map(parseDeviceName)
+      .filter((r): r is CallAudioRoute => !!r),
+  );
+  const selected = parseDeviceName(raw.selected);
+  if (available.length) session.available = available;
+  if (selected && (!available.length || available.includes(selected))) {
+    session.selected = selected;
+    if (selected === 'speaker') session.manual = 'speaker';
+    else if (session.manual === 'speaker' && selected !== 'speaker') {
+      session.manual = null;
+    }
   }
   emitAudio();
 }
 
-function bindDeviceListeners() {
+async function requestBluetoothConnect() {
+  try {
+    const { requestBluetoothConnect: request } = require('./appPermissions');
+    await request();
+  } catch {
+    /* listing devices may still work for built-in routes */
+  }
+}
+
+function applyIosRoute(route: CallAudioRoute) {
+  const mgr = getInCallManager();
+  if (!mgr) return;
+  try {
+    if (route === 'speaker') {
+      mgr.setForceSpeakerphoneOn(true);
+      mgr.chooseAudioRoute?.(NATIVE_ROUTE.speaker);
+      mgr.stopProximitySensor?.();
+      return;
+    }
+    // null = auto. false would force earpiece and drop Bluetooth.
+    mgr.setForceSpeakerphoneOn(null);
+    mgr.chooseAudioRoute?.(NATIVE_ROUTE[route]);
+    if (route === 'earpiece' && session.callType === 'voice') {
+      mgr.startProximitySensor?.();
+    } else {
+      mgr.stopProximitySensor?.();
+    }
+  } catch (err) {
+    console.warn('[CallAudio] iOS route:', (err as Error).message);
+  }
+}
+
+function bindNativeEvents() {
   unbindDeviceListeners();
+  const native = getNativeCallAudio();
+  if (native) {
+    const onNative = (event: any) => applyNativeSnapshot(event);
+    const jsSub = DeviceEventEmitter.addListener('luvstor_call_audio', onNative);
+    let emitterSub: { remove: () => void } | null = null;
+    try {
+      const emitter = new NativeEventEmitter(native as any);
+      emitterSub = emitter.addListener('luvstor_call_audio', onNative);
+    } catch {
+      emitterSub = null;
+    }
+    nativeSub = {
+      remove: () => {
+        jsSub.remove();
+        emitterSub?.remove();
+      },
+    };
+    return;
+  }
 
+  if (Platform.OS !== 'ios') return;
   const onAudioDevice = (event: any) => {
-    const available = parseAvailable(event?.availableAudioDeviceList);
+    const raw = Array.isArray(event?.availableAudioDeviceList)
+      ? event.availableAudioDeviceList
+      : [];
+    const available = uniqRoutes(
+      raw.map(parseDeviceName).filter((r): r is CallAudioRoute => !!r),
+    );
+    if (!available.includes('speaker')) available.push('speaker');
+    if (!available.includes('wired') && !available.includes('earpiece')) {
+      available.push('earpiece');
+    }
+    session.available = available;
     const selected = parseDeviceName(event?.selectedAudioDevice);
-    onDevicesChanged(available, selected);
+    if (selected && available.includes(selected) && session.manual !== 'speaker') {
+      session.selected = selected;
+    } else if (session.manual && !available.includes(session.manual)) {
+      session.manual = null;
+      const next = available.includes('bluetooth')
+        ? 'bluetooth'
+        : available.includes('wired')
+          ? 'wired'
+          : session.callType === 'video'
+            ? 'speaker'
+            : 'earpiece';
+      session.selected = next;
+      applyIosRoute(next);
+    }
+    emitAudio();
   };
-  const onWired = (event: any) => {
-    const plugged = !!(event?.isPlugged ?? event?.plugged);
-    const next = session.available.filter((r) => r !== 'wired');
-    if (plugged) next.unshift('wired');
-    onDevicesChanged(uniqRoutes(next));
-  };
-
   try {
-    deviceSub = DeviceEventEmitter.addListener('onAudioDeviceChanged', onAudioDevice);
-  } catch {
-    deviceSub = null;
-  }
-  try {
-    wiredSub = DeviceEventEmitter.addListener('WiredHeadset', onWired);
-  } catch {
-    wiredSub = null;
-  }
-
-  // Some ICM builds emit via NativeEventEmitter only
-  try {
-    const native = NativeModules.InCallManager;
-    if (native) {
-      const emitter = new NativeEventEmitter(native);
-      const a = emitter.addListener('onAudioDeviceChanged', onAudioDevice);
-      const b = emitter.addListener('WiredHeadset', onWired);
-      const prevDevice = deviceSub;
-      const prevWired = wiredSub;
-      deviceSub = {
-        remove: () => {
-          prevDevice?.remove();
-          a.remove();
-        },
-      };
-      wiredSub = {
-        remove: () => {
-          prevWired?.remove();
-          b.remove();
-        },
-      };
+    const nativeIcm = NativeModules.InCallManager;
+    if (nativeIcm) {
+      const emitter = new NativeEventEmitter(nativeIcm);
+      deviceSub = emitter.addListener('onAudioDeviceChanged', onAudioDevice);
     }
   } catch {
-    /* DeviceEventEmitter is enough */
+    deviceSub = null;
   }
 }
 
@@ -328,123 +280,134 @@ function unbindDeviceListeners() {
     /* ignore */
   }
   try {
-    wiredSub?.remove();
+    nativeSub?.remove();
   } catch {
     /* ignore */
   }
   deviceSub = null;
-  wiredSub = null;
+  nativeSub = null;
 }
 
-/**
- * Start the native call audio session (ringing → connected).
- * preferSpeaker is the video default and is ignored when a headset is present.
- */
+/** Start the native call audio session (ringing → connected). */
 export async function startCallAudio(opts: {
   callType: 'voice' | 'video';
   speakerOn?: boolean;
   preferSpeaker?: boolean;
 }): Promise<CallAudioRoute> {
-  session.active = true;
-  session.callType = opts.callType;
-  session.manual = null;
-
   const preferSpeaker = opts.preferSpeaker ?? opts.speakerOn ?? opts.callType === 'video';
+  session.callType = opts.callType;
 
+  const native = getNativeCallAudio();
+  if (native) {
+    await requestBluetoothConnect();
+    bindNativeEvents();
+    if (session.active) {
+      try {
+        applyNativeSnapshot(await native.reassert());
+      } catch {
+        /* keep last snapshot */
+      }
+      return session.selected;
+    }
+    session.active = true;
+    session.manual = null;
+    try {
+      applyNativeSnapshot(await native.start(opts.callType, preferSpeaker));
+    } catch (err) {
+      console.warn('[CallAudio] native start:', (err as Error).message);
+      session.selected = preferSpeaker ? 'speaker' : 'earpiece';
+    }
+    emitAudio();
+    return session.selected;
+  }
+
+  session.active = true;
+  session.manual = null;
   const mgr = getInCallManager();
   if (mgr) {
     try {
-      // auto:true — ICM communication mode + Bluetooth SCO when a headset exists
       mgr.start({
         media: opts.callType === 'video' ? 'video' : 'audio',
         auto: true,
       });
     } catch (err) {
-      markInCallBroken();
       console.warn('[CallAudio] InCall start:', (err as Error).message);
     }
   }
-
-  bindDeviceListeners();
-
-  const initial = defaultRoute(session.available, opts.callType);
-  const route =
-    initial === 'bluetooth' || initial === 'wired'
-      ? initial
-      : preferSpeaker
-        ? 'speaker'
-        : 'earpiece';
+  bindNativeEvents();
+  const route = preferSpeaker ? 'speaker' : 'earpiece';
   session.selected = route;
-  if (preferSpeaker && route === 'speaker') session.manual = 'speaker';
-  applyNativeRoute(route);
+  if (preferSpeaker) session.manual = 'speaker';
+  applyIosRoute(route);
   emitAudio();
   return route;
 }
 
-/** Toggle loudspeaker. Off restores Bluetooth / wired / earpiece (auto). */
+/** Toggle loudspeaker. Off restores Bluetooth / wired / earpiece. Does not unpair BT. */
 export async function setCallSpeaker(speakerOn: boolean): Promise<CallAudioRoute> {
+  const native = getNativeCallAudio();
+  if (native && session.active) {
+    session.manual = speakerOn ? 'speaker' : null;
+    try {
+      applyNativeSnapshot(await native.setSpeaker(speakerOn));
+    } catch (err) {
+      console.warn('[CallAudio] native speaker:', (err as Error).message);
+    }
+    return session.selected;
+  }
+
+  session.manual = speakerOn ? 'speaker' : null;
   if (speakerOn) {
-    session.manual = 'speaker';
     session.selected = 'speaker';
     if (!session.available.includes('speaker')) {
       session.available = uniqRoutes([...session.available, 'speaker']);
     }
-    applyNativeRoute('speaker');
-    emitAudio();
-    return 'speaker';
-  }
-
-  session.manual = null;
-  const next = defaultRoute(session.available, session.callType);
-  session.selected = next;
-  applyNativeRoute(next);
-  // Events can lag after Speaker-on tore down SCO — try Bluetooth, then
-  // fall back so we never end up with silence.
-  if (next !== 'bluetooth') {
-    const mgr = getInCallManager();
-    if (mgr) {
-      setSpeakerForce(mgr, 'auto');
-      chooseNativeRoute(mgr, 'bluetooth');
-      setTimeout(() => {
-        if (!session.active || session.manual) return;
-        if (session.available.includes('bluetooth')) {
-          session.selected = 'bluetooth';
-          applyNativeRoute('bluetooth');
-          emitAudio();
-          return;
-        }
-        applyNativeRoute(session.selected);
-      }, 350);
-    }
+    applyIosRoute('speaker');
+  } else {
+    const next = session.available.includes('bluetooth')
+      ? 'bluetooth'
+      : session.available.includes('wired')
+        ? 'wired'
+        : session.callType === 'video'
+          ? 'speaker'
+          : 'earpiece';
+    session.selected = next;
+    applyIosRoute(next);
   }
   emitAudio();
   return session.selected;
 }
 
-/** User picked a specific output from the in-call selector. */
 export async function setCallAudioRoute(route: CallAudioRoute): Promise<CallAudioRoute> {
-  session.manual = route;
+  session.manual = route === 'speaker' ? 'speaker' : route;
+  const native = getNativeCallAudio();
+  if (native && session.active) {
+    try {
+      applyNativeSnapshot(await native.setRoute(route));
+    } catch (err) {
+      console.warn('[CallAudio] native route:', (err as Error).message);
+    }
+    return session.selected;
+  }
   session.selected = route;
   if (!session.available.includes(route)) {
     session.available = uniqRoutes([...session.available, route]);
   }
-  applyNativeRoute(route);
+  applyIosRoute(route);
   emitAudio();
   return route;
 }
 
-/** Hardware / InCall mute (in addition to WebRTC track.enabled). */
+/** Mute is WebRTC-track + hardware flag only. Never changes Bluetooth routing. */
 export function setCallMicMuted(muted: boolean) {
-  const mgr = getInCallManager();
-  if (!mgr) return;
-  try {
-    mgr.setMicrophoneMute?.(muted);
-  } catch (err) {
-    console.warn('[CallAudio] mic mute:', (err as Error).message);
+  const native = getNativeCallAudio();
+  if (native) {
+    native.setMuted(muted).catch((err) => {
+      console.warn('[CallAudio] native mute:', (err as Error).message);
+    });
   }
 }
 
-/** Tear down session when the call ends — does not disconnect the BT device. */
 export async function stopCallAudio() {
   stopCallRingback();
   stopIncomingRingtone();
@@ -452,17 +415,23 @@ export async function stopCallAudio() {
   session.active = false;
   session.manual = null;
   session.selected = 'earpiece';
-  const mgr = getInCallManager();
-  if (mgr) {
+  const native = getNativeCallAudio();
+  if (native) {
     try {
-      mgr.stopProximitySensor?.();
-      // auto — do not force earpiece (that would drop SCO mid-cleanup)
-      setSpeakerForce(mgr, 'auto');
-      mgr.setMicrophoneMute?.(false);
-      mgr.stop?.();
+      await native.stop();
     } catch (err) {
-      markInCallBroken();
-      console.warn('[CallAudio] InCall stop:', (err as Error).message);
+      console.warn('[CallAudio] native stop:', (err as Error).message);
+    }
+  } else {
+    const mgr = getInCallManager();
+    if (mgr) {
+      try {
+        mgr.stopProximitySensor?.();
+        mgr.setForceSpeakerphoneOn(null);
+        mgr.stop?.();
+      } catch (err) {
+        console.warn('[CallAudio] InCall stop:', (err as Error).message);
+      }
     }
   }
   if (Platform.OS === 'ios') {
@@ -488,14 +457,22 @@ export async function stopCallAudio() {
   emitAudio();
 }
 
-/**
- * Outbound ringback — classic dual-tone (440+480 Hz) cadence like WhatsApp/PSTN.
- */
 export async function startCallRingback(speakerOn = false) {
   stopCallRingback();
   stopIncomingRingtone();
-
-  await applyExpoForRoute(speakerOn ? 'speaker' : session.selected || 'earpiece');
+  if (Platform.OS !== 'android' || !session.active) {
+    try {
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: 'doNotMix',
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -507,19 +484,23 @@ export async function startCallRingback(speakerOn = false) {
     ringbackPlayer = player;
   } catch (err) {
     console.warn('[CallAudio] ringback asset:', (err as Error).message);
-    try {
-      getInCallManager()?.startRingback?.('_DEFAULT_');
-    } catch (e2) {
-      console.warn('[CallAudio] InCall ringback:', (e2 as Error).message);
+    if (Platform.OS !== 'android') {
+      try {
+        getInCallManager()?.startRingback?.('_DEFAULT_');
+      } catch (e2) {
+        console.warn('[CallAudio] InCall ringback:', (e2 as Error).message);
+      }
     }
   }
 }
 
 export function stopCallRingback() {
-  try {
-    getInCallManager()?.stopRingback?.();
-  } catch {
-    /* ignore */
+  if (Platform.OS !== 'android') {
+    try {
+      getInCallManager()?.stopRingback?.();
+    } catch {
+      /* ignore */
+    }
   }
   if (ringbackPlayer) {
     try {
@@ -532,12 +513,22 @@ export function stopCallRingback() {
   }
 }
 
-/** Incoming ringtone — loops on speaker while the call UI is up (WhatsApp-style). */
 export async function startIncomingRingtone() {
   stopIncomingRingtone();
   stopCallRingback();
-
-  await applyExpoForRoute('speaker');
+  if (Platform.OS !== 'android') {
+    try {
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: 'doNotMix',
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -564,18 +555,21 @@ export function stopIncomingRingtone() {
   }
 }
 
-/** Re-assert routing after WebRTC connects (it often overwrites the audio session). */
-export async function reinforceCallAudio(speakerOn?: boolean) {
+/** Re-assert native routing after WebRTC connects. Does not change speaker/mute/BT. */
+export async function reinforceCallAudio(_speakerOn?: boolean) {
   stopCallRingback();
   stopIncomingRingtone();
   if (!session.active) return;
-  if (speakerOn === true && session.manual === 'speaker') {
-    applyNativeRoute('speaker');
+  const native = getNativeCallAudio();
+  if (native) {
+    try {
+      applyNativeSnapshot(await native.reassert());
+    } catch (err) {
+      console.warn('[CallAudio] native reassert:', (err as Error).message);
+    }
     return;
   }
-  const route = session.manual || defaultRoute(session.available, session.callType);
-  session.selected = route;
-  applyNativeRoute(route);
+  applyIosRoute(session.selected);
   emitAudio();
   if (Platform.OS === 'ios') {
     try {
@@ -588,32 +582,10 @@ export async function reinforceCallAudio(speakerOn?: boolean) {
   }
 }
 
-/** Force a clean mic session for chat voice notes (after WebRTC / InCallManager). */
 export async function prepareChatRecordingAudio() {
   stopCallRingback();
   stopIncomingRingtone();
-  const mgr = getInCallManager();
-  if (mgr) {
-    try {
-      // Unmute + loosen routing only — do NOT mgr.stop() here.
-      // stop() can tear down the Android audio session and block AudioRecord.
-      mgr.setMicrophoneMute?.(false);
-      mgr.stopProximitySensor?.();
-      setSpeakerForce(mgr, 'auto');
-    } catch {
-      /* ignore */
-    }
-  }
-  if (Platform.OS === 'ios') {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { RTCAudioSession } = require('react-native-webrtc');
-      RTCAudioSession?.audioSessionDidDeactivate?.();
-    } catch {
-      /* ignore */
-    }
-  }
-  await new Promise((r) => setTimeout(r, 40));
+  if (session.active) return;
   await setAudioModeAsync({
     allowsRecording: true,
     playsInSilentMode: true,
@@ -623,16 +595,8 @@ export async function prepareChatRecordingAudio() {
   });
 }
 
-/** Restore normal chat playback after a voice note is finished. */
 export async function restoreChatPlaybackAudio() {
-  const mgr = getInCallManager();
-  if (mgr) {
-    try {
-      mgr.setMicrophoneMute?.(false);
-    } catch {
-      /* ignore */
-    }
-  }
+  if (session.active) return;
   try {
     await setAudioModeAsync({
       allowsRecording: false,
