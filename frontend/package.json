@@ -20,7 +20,7 @@
     "ios": "node ./scripts/start-expo.js --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "postinstall": "node ./scripts/patch-expo-tunnel-timeout.js && node ./scripts/patch-webrtc-bridgeless.js && node ./scripts/patch-expo-router-linking-mount.js"
+    "postinstall": "node ./scripts/patch-expo-tunnel-timeout.js && node ./scripts/patch-webrtc-bridgeless.js && node ./scripts/patch-expo-router-linking-mount.js && node ./scripts/patch-google-signin-esm.js"
   },
   "dependencies": {
     "@expo-google-fonts/dancing-script": "^0.4.2",

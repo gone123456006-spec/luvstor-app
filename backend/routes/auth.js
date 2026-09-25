@@ -37,6 +37,19 @@ const {
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEVICE_IN_USE_MESSAGE =
   'This account is already logged in on another device. Please log out from the previous device before signing in on this one.';
+const PLAY_REVIEW_LOGIN_ENABLED = process.env.PLAY_REVIEW_LOGIN_ENABLED === 'true';
+const PLAY_REVIEW_LOGIN_EMAIL = normalizeEmail(process.env.PLAY_REVIEW_LOGIN_EMAIL || '');
+const PLAY_REVIEW_LOGIN_OTP = String(process.env.PLAY_REVIEW_LOGIN_OTP || '').trim();
+
+function isPlayReviewCredential(email, otp) {
+  return (
+    PLAY_REVIEW_LOGIN_ENABLED &&
+    PLAY_REVIEW_LOGIN_EMAIL &&
+    PLAY_REVIEW_LOGIN_OTP &&
+    email === PLAY_REVIEW_LOGIN_EMAIL &&
+    otp === PLAY_REVIEW_LOGIN_OTP
+  );
+}
 
 function isValidDeviceId(deviceId) {
   return typeof deviceId === 'string' && deviceId.trim().length >= 8 && deviceId.trim().length <= 128;
@@ -284,6 +297,15 @@ router.post('/send-otp', async (req, res) => {
       });
     }
 
+    if (PLAY_REVIEW_LOGIN_ENABLED && email === PLAY_REVIEW_LOGIN_EMAIL) {
+      return res.json({
+        success: true,
+        message: `Verification code sent to ${email}`,
+        expiresInMinutes: smtpConfig.otpExpiryMinutes,
+        resendCooldownSeconds: smtpConfig.resendCooldownSeconds,
+      });
+    }
+
     await OTP.updateMany({ email, used: false }, { used: true });
 
     const otp = generateOTP();
@@ -347,19 +369,23 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ error: 'OTP must be a 6-digit number' });
     }
 
+    const isReviewCredential = isPlayReviewCredential(email, otp);
+
     const verifyLimit = checkVerifyRateLimit(email);
     if (!verifyLimit.allowed) {
       return res.status(429).json({ error: verifyLimit.error });
     }
 
-    const record = await OTP.findOne({
-      email,
-      otp,
-      used: false,
-      expiresAt: { $gt: new Date() },
-    }).sort({ createdAt: -1 });
+    const record = isReviewCredential
+      ? null
+      : await OTP.findOne({
+          email,
+          otp,
+          used: false,
+          expiresAt: { $gt: new Date() },
+        }).sort({ createdAt: -1 });
 
-    if (!record) {
+    if (!record && !isReviewCredential) {
       recordVerifyAttempt(email, false);
       return res.status(400).json({ error: 'Invalid or expired verification code' });
     }
@@ -402,8 +428,10 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    record.used = true;
-    await record.save();
+    if (record) {
+      record.used = true;
+      await record.save();
+    }
     recordVerifyAttempt(email, true);
 
     await maybeApplyReferral(req, user, deviceId, isNewUser);
