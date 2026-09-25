@@ -2,7 +2,7 @@
   "expo": {
     "name": "Luvstor",
     "slug": "luvstor",
-    "version": "1.0.0",
+      "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
     "scheme": "luvstor",
@@ -28,6 +28,7 @@
     },
     "android": {
       "package": "com.luvstor.app",
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
@@ -209,3 +210,4 @@
     }
   }
 }
+

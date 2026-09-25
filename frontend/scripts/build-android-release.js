@@ -116,6 +116,30 @@ function syncSplashAndIcons() {
   run("node", [script]);
 }
 
+/** Keep Gradle versionCode in sync with app.json (Play rejects reused codes). */
+function syncAndroidVersionFromAppJson() {
+  const gradlePath = path.join(androidDir, "app", "build.gradle");
+  const appJsonPath = path.join(root, "app.json");
+  if (!fs.existsSync(gradlePath) || !fs.existsSync(appJsonPath)) return;
+  let appJson;
+  try {
+    appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
+  } catch {
+    return;
+  }
+  const versionName = String(appJson?.expo?.version || "1.0.0");
+  const versionCode = Number(appJson?.expo?.android?.versionCode || 1);
+  if (!Number.isFinite(versionCode) || versionCode < 1) return;
+  let gradle = fs.readFileSync(gradlePath, "utf8");
+  const next = gradle
+    .replace(/versionCode\s+\d+/, `versionCode ${versionCode}`)
+    .replace(/versionName\s+"[^"]*"/, `versionName "${versionName}"`);
+  if (next !== gradle) {
+    fs.writeFileSync(gradlePath, next);
+  }
+  console.log(`✔ Android versionCode ${versionCode} (${versionName})`);
+}
+
 function ensureAndroidColors() {
   const colorsPath = path.join(
     androidDir,
@@ -597,6 +621,7 @@ function main() {
 
   ensureAndroidProject();
   syncSplashAndIcons();
+  syncAndroidVersionFromAppJson();
   ensureReleaseSigningConfig();
   assertReleaseSigningReady();
 
