@@ -78,7 +78,10 @@ function byKeywords(text: string): string | null {
     return OFFLINE;
   }
   if (/upload|image-bin|multipart/i.test(t)) return UPLOAD;
-  if (/verif|selfie|challenge|pose/i.test(t)) return VERIFY;
+  if (/invalid or expired verification code|invalid otp|expired otp/i.test(t)) {
+    return CODE_MESSAGE.INVALID_OTP;
+  }
+  if (/photo verification|selfie|challenge|pose/i.test(t)) return VERIFY;
   if (/camera|permission|capture/i.test(t)) {
     return "We couldn't open the camera. Check permissions and try again.";
   }

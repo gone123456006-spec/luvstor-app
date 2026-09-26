@@ -75,13 +75,13 @@ services:
         sync: false
       - key: SMTP_DEV_MODE
         value: "false"
-      # Optional Google Play Console review credential. Keep disabled by default.
+      # Dedicated Google Play Console review credential.
       - key: PLAY_REVIEW_LOGIN_ENABLED
-        value: "false"
+        value: "true"
       - key: PLAY_REVIEW_LOGIN_EMAIL
-        sync: false
+        value: luvstor.playreview.demo@gmail.com
       - key: PLAY_REVIEW_LOGIN_OTP
-        sync: false
+        value: "482731"
       - key: DISCOVERY_ROTATION_TZ_OFFSET_MINUTES
         value: "330"
       - key: DAILY_SUGGESTION_TZ_OFFSET_MINUTES
