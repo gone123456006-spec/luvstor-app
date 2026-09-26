@@ -1,14 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  apiLogout,
-  apiRequest,
-  AUTH_TOKEN_KEY,
-  AUTH_USER_KEY,
-} from './api';
-import {
-  clearLegacyGlobalStorage,
-  migrateAllGlobalsForAccount,
+    clearLegacyGlobalStorage,
+    migrateAllGlobalsForAccount,
 } from './accountStorage';
+import {
+    apiLogout,
+    apiRequest,
+    AUTH_TOKEN_KEY,
+    AUTH_USER_KEY,
+} from './api';
 import { durableMediaPathFromUrl } from './media';
 import { normalizeEmail } from './normalizeEmail';
 
@@ -58,6 +58,7 @@ export type AuthUser = {
   profileComplete?: boolean;
 };
 
+const PLAY_REVIEW_LOGIN_EMAIL = 'luvstor.playreview.demo@gmail.com';
 const LEGACY_PROFILE_KEY = 'user_profile';
 export const ACTIVE_ACCOUNT_EMAIL_KEY = 'active_account_email';
 
@@ -348,6 +349,11 @@ export async function resolvePostLoginRoute(
   user: AuthUser,
 ): Promise<'/(tabs)' | '/create-profile'> {
   const email = normalizeEmail(user.email);
+
+  if (email === PLAY_REVIEW_LOGIN_EMAIL) {
+    return '/(tabs)';
+  }
+
   const local = await getLocalProfile(email);
 
   // Full dating profile already on device → Discover (home tabs)

@@ -5,10 +5,10 @@
 4 silly config load:file:/Users/shyamkuamr/Documents/luvstor-app/frontend/.npmrc
 5 silly config load:file:/Users/shyamkuamr/.npmrc
 6 silly config load:file:/Users/shyamkuamr/.nvm/versions/node/v24.21.0/etc/npmrc
-7 verbose title npm run android:apk
-8 verbose argv "run" "android:apk"
-9 verbose logfile logs-max:10 dir:/Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-21T19_17_35_815Z-
-10 verbose logfile /Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-21T19_17_35_815Z-debug-0.log
+7 verbose title npm run android:bundle
+8 verbose argv "run" "android:bundle"
+9 verbose logfile logs-max:10 dir:/Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-25T12_42_21_889Z-
+10 verbose logfile /Users/shyamkuamr/Documents/luvstor-app/frontend/D:/npm-cache/_logs/2026-09-25T12_42_21_889Z-debug-0.log
 11 silly logfile start cleaning logs, removing 2 files
 12 silly logfile done cleaning log files
 13 verbose cwd /Users/shyamkuamr/Documents/luvstor-app/frontend

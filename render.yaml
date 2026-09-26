@@ -75,6 +75,13 @@ services:
         sync: false
       - key: SMTP_DEV_MODE
         value: "false"
+      # Dedicated Google Play Console review credential.
+      - key: PLAY_REVIEW_LOGIN_ENABLED
+        value: "true"
+      - key: PLAY_REVIEW_LOGIN_EMAIL
+        value: luvstor.playreview.demo@gmail.com
+      - key: PLAY_REVIEW_LOGIN_OTP
+        value: "482731"
       - key: DISCOVERY_ROTATION_TZ_OFFSET_MINUTES
         value: "330"
       - key: DAILY_SUGGESTION_TZ_OFFSET_MINUTES
@@ -97,6 +104,7 @@ services:
   # ── Keep-alive: external ping every 60s (does not run inside API) ───────
   - type: cron
     name: luvstor-heartbeat
+    runtime: node
     region: singapore
     schedule: "* * * * *"
     rootDir: backend
