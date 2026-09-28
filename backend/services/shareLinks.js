@@ -73,6 +73,28 @@ function buildBrandedShareUrl(slug) {
   return `${base}/${tpl}/${s}`;
 }
 
+function playStorePackage() {
+  return (
+    process.env.ANDROID_PACKAGE_ID ||
+    process.env.EXPO_PUBLIC_ANDROID_PACKAGE ||
+    'com.luvstor.app'
+  );
+}
+
+/** Play listing with install-referrer params (read by the app on first open). */
+function playStoreUrlWithReferrer(referrer) {
+  return `https://play.google.com/store/apps/details?id=${playStorePackage()}&referrer=${encodeURIComponent(referrer)}`;
+}
+
+/** Only a custom domain is shared publicly; the raw API host falls back to Play Store. */
+function publicShareUrl(branded, playStoreUrl) {
+  const url = String(branded || '');
+  if (!url || url.startsWith(getApiPublicBase()) || /onrender\.com/i.test(url)) {
+    return playStoreUrl;
+  }
+  return url;
+}
+
 function generateSlugCandidate(len = 8) {
   let out = '';
   for (let i = 0; i < len; i++) {
@@ -118,7 +140,10 @@ async function ensureReferralShareLink({ referralCode, ownerUserId }) {
 
   return {
     slug: row.slug,
-    shareUrl: buildBrandedShareUrl(row.slug),
+    shareUrl: publicShareUrl(
+      buildBrandedShareUrl(row.slug),
+      playStoreUrlWithReferrer(`utm_source=luvstor&utm_medium=referral&utm_campaign=${code}`),
+    ),
     resolveUrl: buildResolveUrl(row.slug),
     type: 'referral',
     referralCode: code,
@@ -152,7 +177,10 @@ async function ensureProfileShareLink({ publicId, ownerUserId }) {
 
   return {
     slug: row.slug,
-    shareUrl: buildBrandedShareUrl(row.slug),
+    shareUrl: publicShareUrl(
+      buildBrandedShareUrl(row.slug),
+      playStoreUrlWithReferrer(`utm_source=luvstor&utm_medium=profile_share&utm_content=${id}`),
+    ),
     resolveUrl: buildResolveUrl(row.slug),
     type: 'profile',
     publicId: id,
@@ -180,6 +208,8 @@ module.exports = {
   getShareBase,
   getOnelinkTemplatePath,
   getApiPublicBase,
+  playStoreUrlWithReferrer,
+  publicShareUrl,
   buildBrandedShareUrl,
   buildResolveUrl,
   ensureReferralShareLink,

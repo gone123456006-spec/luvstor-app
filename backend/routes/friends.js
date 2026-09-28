@@ -890,6 +890,37 @@ router.post('/unblock', auth, async (req, res) => {
   }
 });
 
+const REPORT_WARNING_AT = 3;
+const REPORT_WARNING_LIMIT = 5;
+
+/**
+ * Warn a user once when REPORT_WARNING_AT different people have reported them
+ * (dismissed reports don't count). The dedupe key keeps it to a single warning.
+ */
+async function sendReportWarningIfNeeded(io, Report, reportedUserId) {
+  try {
+    const reporters = await Report.distinct('reporterId', {
+      reportedUserId,
+      status: { $ne: 'dismissed' },
+    });
+    if (reporters.length < REPORT_WARNING_AT) return;
+    const remaining = REPORT_WARNING_LIMIT - REPORT_WARNING_AT;
+    await createNotification(io, {
+      userId: String(reportedUserId),
+      type: 'security',
+      title: 'Warning: your account has been reported',
+      body:
+        `Your account has been reported by ${reporters.length} people. ` +
+        `${remaining} more reports may lead to your account being permanently blocked. ` +
+        'Please be respectful and follow our Community Guidelines.',
+      dedupeKey: `report-warning-${REPORT_WARNING_AT}`,
+      priority: 'high',
+    });
+  } catch (err) {
+    console.warn('report warning failed:', err?.message || err);
+  }
+}
+
 // ─────────────────────────────────────────────
 // POST /api/friends/report
 // Body: { userId, reason, details?, alsoBlock? }
@@ -945,6 +976,7 @@ router.post('/report', auth, async (req, res) => {
       reason,
       details: String(details || '').slice(0, 1000),
     });
+    void sendReportWarningIfNeeded(req.app.get('io'), Report, targetUserId);
 
     let blocked = false;
     if (alsoBlock) {

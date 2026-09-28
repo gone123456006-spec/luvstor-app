@@ -146,6 +146,36 @@ async function grantVerificationTokens(userId, io) {
   return { amount: PHOTO_VERIFICATION_TOKENS, tokenBalance: granted.tokenBalance };
 }
 
+/** Tell the user the outcome of their photo verification (push + in-app list). */
+async function notifyVerificationResult(io, userId, { approved, reason = '', tokensGranted = 0 }) {
+  try {
+    const { createNotification } = require('../services/notifications');
+    if (approved) {
+      await createNotification(io, {
+        userId,
+        type: 'system',
+        title: 'Photo verified',
+        body: tokensGranted
+          ? `Analysis complete — you're verified. +${tokensGranted} tokens.`
+          : 'Analysis complete — your profile now shows a photo verified badge.',
+        deepLink: '/(tabs)/profile',
+        data: { screen: 'profile', code: 'PHOTO_VERIFIED' },
+      });
+    } else {
+      await createNotification(io, {
+        userId,
+        type: 'system',
+        title: 'Photo verification failed',
+        body: reason || 'Try again with a clearer live selfie.',
+        deepLink: '/photo-verify',
+        data: { screen: 'photo-verify', code: 'PHOTO_REJECTED' },
+      });
+    }
+  } catch (e) {
+    console.warn('verification result notification failed', e?.message || e);
+  }
+}
+
 /**
  * After 30 minutes: analyse DP + gallery + live selfie → approve or reject.
  */
@@ -165,14 +195,16 @@ async function finalizePendingAnalysis(userId, io, apiBase = '') {
 
   const selfieUrl = String(pv.selfieUrl || '').trim();
   if (!selfieUrl) {
+    const reason = 'Missing selfie — please try again.';
     await User.findByIdAndUpdate(userId, {
       $set: {
         'photoVerification.status': 'rejected',
         'photoVerification.reviewedAt': new Date(),
-        'photoVerification.reviewNote': 'Missing selfie — please try again.',
+        'photoVerification.reviewNote': reason,
         'photoVerification.matchScore': 0,
       },
     });
+    await notifyVerificationResult(io, userId, { approved: false, reason });
     return { ok: true, decision: 'reject' };
   }
 
@@ -213,32 +245,11 @@ async function finalizePendingAnalysis(userId, io, apiBase = '') {
     verificationTokensGranted = g.amount;
   }
 
-  try {
-    const { createNotification } = require('../services/notifications');
-    if (approved) {
-      await createNotification(io, {
-        userId,
-        type: 'system',
-        title: 'Photo verified',
-        body: verificationTokensGranted
-          ? `Analysis complete — you're verified. +${verificationTokensGranted} tokens.`
-          : "Analysis complete — your profile now shows a photo verified badge.",
-        deepLink: '/(tabs)/profile',
-        data: { screen: 'profile', code: 'PHOTO_VERIFIED' },
-      });
-    } else {
-      await createNotification(io, {
-        userId,
-        type: 'system',
-        title: 'Photo verification failed',
-        body: match.reason || 'Try again with a clearer live selfie.',
-        deepLink: '/photo-verify',
-        data: { screen: 'photo-verify', code: 'PHOTO_REJECTED' },
-      });
-    }
-  } catch (e) {
-    console.warn('verification result notification failed', e?.message || e);
-  }
+  await notifyVerificationResult(io, userId, {
+    approved,
+    reason: match.reason,
+    tokensGranted: verificationTokensGranted,
+  });
 
   console.log(
     `[verification] analysed ${userId} → ${match.decision} (score=${match.score})`,
@@ -508,6 +519,10 @@ router.patch('/admin/:userId', adminAuth, async (req, res) => {
         { returnDocument: 'after' },
       ).select('photoVerification');
       if (!user) return res.status(404).json({ error: 'User not found' });
+      await notifyVerificationResult(req.app.get('io'), req.params.userId, {
+        approved: false,
+        reason: reviewNote,
+      });
       return res.json(serializePhotoVerification(user));
     }
 
@@ -517,6 +532,10 @@ router.patch('/admin/:userId', adminAuth, async (req, res) => {
       reviewNote || 'Approved',
     );
     if (!result.ok) return res.status(404).json({ error: 'User not found' });
+    await notifyVerificationResult(req.app.get('io'), req.params.userId, {
+      approved: true,
+      tokensGranted: result.verificationTokensGranted,
+    });
 
     res.json({
       ...serializePhotoVerification(result.user),

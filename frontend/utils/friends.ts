@@ -1,4 +1,5 @@
 import { fetchWithTimeout, getApiBase } from './api';
+import { noteConnectionMade } from './inAppReview';
 
 export interface FriendshipStatus {
   status: 'stranger' | 'pending_like' | 'mutual_match' | 'friends' | 'declined' | 'blocked' | 'self';
@@ -52,8 +53,12 @@ export async function sendLike(token: string, userId: string): Promise<{ message
     const error = await res.json();
     throw new Error(error.error || 'Failed to send like');
   }
-  
-  return res.json();
+
+  const data = await res.json();
+  if (data?.status === 'friends' && data?.message === 'You are now friends!') {
+    void noteConnectionMade();
+  }
+  return data;
 }
 
 /**
@@ -154,8 +159,10 @@ export async function acceptFriendRequest(token: string, userId: string): Promis
     const error = await res.json();
     throw new Error(error.error || 'Failed to accept friend request');
   }
-  
-  return res.json();
+
+  const data = await res.json();
+  void noteConnectionMade();
+  return data;
 }
 
 /**

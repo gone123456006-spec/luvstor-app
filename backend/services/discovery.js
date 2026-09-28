@@ -340,12 +340,9 @@ function buildEligibilityFilter({
     filter.gender = { $in: [...new Set([raw, lower, titled])] };
   }
   if (activeWithinMinutes > 0) {
-    const { STALE_MS } = require('../utils/onlineStatus');
-    const onlineFresh = new Date(Date.now() - STALE_MS);
-    // Online-only discovery: require live isOnline + fresh lastSeen.
-    // Do not treat "logged in recently" as online.
-    filter.isOnline = true;
-    filter.lastSeen = { $gte: onlineFresh };
+    // "Last active" window: online users keep lastSeen fresh via presence
+    // heartbeats, so a lastSeen cutoff covers both online and recently active.
+    filter.lastSeen = { $gte: new Date(Date.now() - activeWithinMinutes * 60_000) };
   }
   return filter;
 }
@@ -758,11 +755,11 @@ async function fillRemainingRandom({
     collected.push(...items);
   };
 
+  // The viewer's Show me / Last active filters are never relaxed to fill slots.
   const passes = [
     { genderFilter, activeWithinMinutes, requireVerified: true, geo: true },
     { genderFilter, activeWithinMinutes, requireVerified: true, geo: false },
-    { genderFilter: '', activeWithinMinutes: 0, requireVerified: true, geo: false },
-    { genderFilter: '', activeWithinMinutes: 0, requireVerified: false, geo: false },
+    { genderFilter, activeWithinMinutes, requireVerified: false, geo: false },
   ];
 
   for (const pass of passes) {
@@ -1179,12 +1176,21 @@ async function buildNearbyFeed({
     NEARBY_HARD_RADIUS_M,
   );
 
+  // A distance below the 100 km Nearby ring is a hard limit: only people inside
+  // it, no wider/random section. "All" keeps the Nearby + wider mix.
+  const distanceLimited =
+    Number.isFinite(requestedRadius) &&
+    requestedRadius > 0 &&
+    requestedRadius < NEARBY_HARD_RADIUS_M;
+  const nearbyMaxM = distanceLimited ? coreMaxM : NEARBY_HARD_RADIUS_M;
+
   const already = [...excludeIds].map(String).filter(Boolean).length;
-  const wantNearby = already === 0 ? NEARBY_SECTION_SIZE : 0;
-  const wantWider = Math.min(
-    WIDER_SECTION_SIZE,
-    Math.max(0, NEARBY_MAX_RESPONSE - already),
-  );
+  const wantNearby = already === 0
+    ? (distanceLimited ? NEARBY_MAX_RESPONSE : NEARBY_SECTION_SIZE)
+    : 0;
+  const wantWider = distanceLimited
+    ? 0
+    : Math.min(WIDER_SECTION_SIZE, Math.max(0, NEARBY_MAX_RESPONSE - already));
 
   let cycle = readNearbyCycle(viewer);
   let reshuffle = false;
@@ -1195,7 +1201,7 @@ async function buildNearbyFeed({
       fetchGeoEligible({
         lng,
         lat,
-        maxDistance: NEARBY_HARD_RADIUS_M,
+        maxDistance: nearbyMaxM,
         excludeOids: toObjectIds([...excludeSet, ...skipIds]),
         genderFilter,
         activeWithinMinutes,
@@ -1211,11 +1217,11 @@ async function buildNearbyFeed({
 
     const splitPool = (docs) => {
       const { core, rest } = splitWithinHardRadius(docs, { lat, lng, coreMaxM });
-      return [...core, ...rest];
+      return distanceLimited ? core : [...core, ...rest];
     };
     pool100 = splitPool(within100);
 
-    if (pool100.length < NEARBY_SECTION_SIZE) {
+    if (pool100.length < wantNearby) {
       const extra = splitPool(await fetch100(pool100.map(candidateId)));
       pool100 = [...pool100, ...extra];
     }
@@ -1262,10 +1268,12 @@ async function buildNearbyFeed({
     reshuffle,
     size: wantNearby,
   });
-  const fillSlots = Math.max(
-    wantWider,
-    already === 0 ? NEARBY_MAX_RESPONSE - nearbyItems.length : wantWider,
-  );
+  const fillSlots = distanceLimited
+    ? 0
+    : Math.max(
+        wantWider,
+        already === 0 ? NEARBY_MAX_RESPONSE - nearbyItems.length : wantWider,
+      );
   let widerItems = pickRandom(widerPool, fillSlots);
   if (widerItems.length < fillSlots) {
     const skip = new Set([

@@ -99,6 +99,7 @@ import {
 } from "../../utils/peerProfile";
 import { getSheetBottomPadding } from "../../utils/navigation";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
+import { askReviewAfterChat, noteMessageSent } from "../../utils/inAppReview";
 import {
     ChatAccessStatus,
     ensureChatSession,
@@ -3883,6 +3884,8 @@ export default function MessageScreen() {
     }
   };
 
+  useEffect(() => () => void askReviewAfterChat(), []);
+
   const sendMessage = async () => {
     const trimmedText = inputText.trim();
     if (!trimmedText && !selectedImage) return;
@@ -3968,6 +3971,7 @@ export default function MessageScreen() {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       void deliverTextMessage(optId, trimmedText, replyTargetId(replyingTo));
+      void noteMessageSent();
     }
 
     setReplyingTo(null);

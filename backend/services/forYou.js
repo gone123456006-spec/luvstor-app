@@ -128,8 +128,9 @@ function scoreCandidate(viewer, candidate, metres) {
   return { score, reasons: reasons.slice(0, 3) };
 }
 
-function cacheKey(viewerId, dayKey) {
-  return `foryou:v1:${viewerId}:${dayKey}`;
+/** Keyed by Show me so changing it rebuilds the list instead of serving the old gender. */
+function cacheKey(viewerId, dayKey, showMe) {
+  return `foryou:v2:${viewerId}:${dayKey}:${showMe || "all"}`;
 }
 
 function readMemoryCache(key) {
@@ -153,8 +154,8 @@ function writeMemoryCache(key, ranked) {
   }
 }
 
-async function readRankedCache(viewerId) {
-  const key = cacheKey(viewerId, todayKey());
+async function readRankedCache(viewerId, showMe) {
+  const key = cacheKey(viewerId, todayKey(), showMe);
   try {
     const r = await getRedis();
     if (r) {
@@ -173,8 +174,8 @@ async function readRankedCache(viewerId) {
   return readMemoryCache(key);
 }
 
-async function writeRankedCache(viewerId, ranked) {
-  const key = cacheKey(viewerId, todayKey());
+async function writeRankedCache(viewerId, showMe, ranked) {
+  const key = cacheKey(viewerId, todayKey(), showMe);
   writeMemoryCache(key, ranked);
   try {
     const r = await getRedis();
@@ -350,12 +351,13 @@ async function buildForYouBatch({
     ...excludeIds.map(String).slice(0, MAX_EXCLUDE),
   ]);
 
-  let ranked = forceRefresh ? null : await readRankedCache(String(viewer._id));
+  const showMeFilter = toGenderFilter(resolveShowMe(viewer));
+  let ranked = forceRefresh ? null : await readRankedCache(String(viewer._id), showMeFilter);
   let cacheHit = Array.isArray(ranked);
 
   if (!ranked) {
     ranked = await buildRankedList(viewer, excludeSet);
-    await writeRankedCache(String(viewer._id), ranked);
+    await writeRankedCache(String(viewer._id), showMeFilter, ranked);
     cacheHit = false;
   } else if (excludeSet.size > 1) {
     // Drop blocked / explicit excludes from cached list without rebuilding
