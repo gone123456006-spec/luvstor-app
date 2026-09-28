@@ -706,8 +706,10 @@ test('scenario 14: eligibility filter keeps gender, activity, verification and v
   assert.equal(filter.deletionScheduledAt, null);
   assert.deepEqual(filter.name, { $nin: [null, ''] });
   assert.deepEqual(filter.gender, { $in: ['woman', 'Woman'] });
-  assert.equal(filter.isOnline, true);
+  assert.equal(filter.isOnline, undefined);
   assert.ok(filter.lastSeen && filter.lastSeen.$gte instanceof Date);
+  const windowMs = Date.now() - filter.lastSeen.$gte.getTime();
+  assert.ok(windowMs >= 59 * 60_000 && windowMs <= 61 * 60_000, `last active window was ${windowMs}ms`);
 });
 
 test('gender filter is omitted when the viewer selects "all"', () => {

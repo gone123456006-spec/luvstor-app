@@ -494,6 +494,36 @@ export default function DiscoverScreen() {
     };
   }, [sessionVersion, user?.email]);
 
+  // Show me edited on the Profile screen must win over the filter this screen
+  // still holds, otherwise the next Discover request would save the old one back.
+  const prefsRef = React.useRef(prefs);
+  prefsRef.current = prefs;
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!prefsHydrated) return;
+      let cancelled = false;
+      (async () => {
+        try {
+          const token = await getAuthToken();
+          if (!token || cancelled) return;
+          const saved = await fetchSavedDiscoveryPrefs(token);
+          if (cancelled || !saved) return;
+          const gender = GENDER_OPTIONS.find(
+            (g) => g.toLowerCase() === saved.gender.toLowerCase(),
+          );
+          if (gender && gender !== prefsRef.current.gender) {
+            setPrefs((p) => ({ ...p, gender }));
+          }
+        } catch {
+          /* keep current filters */
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [prefsHydrated]),
+  );
+
   // Debounced search for better performance
   React.useEffect(() => {
     if (searchTimeoutRef.current) {

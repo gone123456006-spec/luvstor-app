@@ -7,7 +7,8 @@
 
 const User = require('../models/User');
 const Friendship = require('../models/Friendship');
-const { hasRealLocation, distanceMetres, getBlockedUserIds, getFriendshipMap } = require('../services/discovery');
+const { hasRealLocation, distanceMetres, getBlockedUserIds, getFriendshipMap, buildEligibilityFilter } = require('../services/discovery');
+const { resolveShowMe, toGenderFilter } = require('../utils/showMe');
 const { serializeSubscription } = require('../services/subscriptions');
 
 const CONFIG = {
@@ -24,7 +25,7 @@ const CONFIG = {
 async function getOnlineNearbyPulse(viewerId, options = {}) {
   try {
     const viewer = await User.findById(viewerId)
-      .select('location discoveryPrefs')
+      .select('location gender showMe discoveryPrefs')
       .lean();
     
     if (!viewer || !hasRealLocation(viewer.location?.coordinates)) {
@@ -46,8 +47,7 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
     const { STALE_MS } = require('../utils/onlineStatus');
     const onlineFresh = new Date(Date.now() - STALE_MS);
     
-    // Gender filter from viewer prefs
-    const genderFilter = viewer.discoveryPrefs?.gender;
+    const genderFilter = toGenderFilter(resolveShowMe(viewer));
     const filter = {
       _id: { $nin: excludeIds.map(id => id) },
       isDeactivated: { $ne: true },
@@ -63,8 +63,8 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
       lastSeen: { $gte: onlineFresh },
     };
     
-    if (genderFilter && genderFilter !== 'All') {
-      filter.gender = genderFilter;
+    if (genderFilter !== 'all') {
+      filter.gender = buildEligibilityFilter({ excludeOids: [], genderFilter }).gender;
     }
     
     // Fast query: only fetch what we need

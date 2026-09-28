@@ -229,15 +229,21 @@ export async function refresh(opts: {
   const key = prefsKeyOf(prefs);
 
   if (shouldSkip(reason, prefs)) return;
-  if (inFlight && reason !== 'pull') return;
+  // New filters (or a pull) supersede any request still running with old ones.
+  const supersede = reason === 'pull' || reason === 'prefs';
+  if (inFlight && !supersede) return;
 
-  if (reason === 'pull' && inFlight) {
+  if (supersede && inFlight) {
     gen += 1;
     inFlight = false;
   }
 
   const myGen = ++gen;
   inFlight = true;
+  if (reason === 'prefs') {
+    // Rows from the old filters must not linger while the new ones load.
+    setState({ users: [], hasMore: true, loading: true, loadingMore: false, refreshing: false, hint: null, freshEmpty: false, prefsKey: key });
+  }
   const hadRows = state.users.length > 0;
   if (reason === 'pull') setState({ refreshing: true, hint: hadRows ? state.hint : null });
   else if (!hadRows) setState({ loading: true, hint: null });
