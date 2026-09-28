@@ -28,7 +28,9 @@ import {
     getAuthToken,
     getCurrentAuthUser,
     getLocalProfile,
-    isLocalProfileComplete,
+    hasFinishedProfileSetup,
+    isServerProfileComplete,
+    markAuthUserProfileComplete,
     normalizeEmail,
     saveLocalProfile,
     syncProfileToServer,
@@ -187,19 +189,25 @@ export default function CreateProfileScreen() {
         }
 
         const accountEmail = normalizeEmail(authUser.email);
-        const local = await getLocalProfile(accountEmail);
-        if (isLocalProfileComplete(local)) {
+        // Existing profile → home. Setup is first-time only; edits live in Profile.
+        if (authUser.profileComplete) {
           router.replace("/(tabs)");
           return;
         }
+        const local = await getLocalProfile(accountEmail);
 
         const token = await getAuthToken();
         if (token) {
           const { apiRequest } = await import("../utils/api");
-          const user = await apiRequest("/api/users/me", token);
-          const mapped = userToLocalProfile(user as Record<string, unknown>);
-          if (isLocalProfileComplete(mapped)) {
+          const user = (await apiRequest("/api/users/me", token)) as Record<
+            string,
+            unknown
+          >;
+          const mapped = userToLocalProfile(user);
+          if (isServerProfileComplete(user)) {
             await saveLocalProfile(accountEmail, mapped);
+            await markAuthUserProfileComplete();
+            await refreshSession();
             router.replace("/(tabs)");
             return;
           }
@@ -224,7 +232,19 @@ export default function CreateProfileScreen() {
           if (local.name) setName(String(local.name));
         }
       } catch {
-        /* new account — show create profile */
+        // Server unreachable — only skip setup if this account's cache shows it was done
+        try {
+          const authUser = await getCurrentAuthUser();
+          const local = authUser?.email
+            ? await getLocalProfile(normalizeEmail(authUser.email))
+            : null;
+          if (hasFinishedProfileSetup(local)) {
+            router.replace("/(tabs)");
+            return;
+          }
+        } catch {
+          /* show create profile */
+        }
       } finally {
         setCheckingSession(false);
       }
@@ -292,6 +312,9 @@ export default function CreateProfileScreen() {
             : profileData.photo,
           publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : "",
         });
+        if (syncRes?.profileCompleted === true || syncRes?.profileComplete === true) {
+          await markAuthUserProfileComplete();
+        }
         if (welcomeTokens > 0) {
           Alert.alert(
             "Welcome bonus!",
@@ -301,6 +324,11 @@ export default function CreateProfileScreen() {
       }
     } catch (e) {
       console.error("Failed to save profile", e);
+      Alert.alert(
+        "Could not save profile",
+        "Check your internet connection and tap Complete again.",
+      );
+      return;
     }
     try {
       await refreshSession();

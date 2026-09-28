@@ -18,7 +18,7 @@ const {
   checkVerifyRateLimit,
   recordVerifyAttempt,
 } = require('../middleware/otpRateLimit');
-const { serializeUser } = require('../utils/userHelpers');
+const { serializeUser, hasCompletedProfileSetup } = require('../utils/userHelpers');
 const { generateUniquePublicId, ensureUserPublicId } = require('../utils/publicId');
 const { checkAndRestoreOnLogin } = require('../jobs/accountDeletion');
 const { verifyFirebaseIdToken, isFirebaseAdminReady } = require('../services/firebaseAdmin');
@@ -37,9 +37,9 @@ const {
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEVICE_IN_USE_MESSAGE =
   'This account is already logged in on another device. Please log out from the previous device before signing in on this one.';
-const PLAY_REVIEW_LOGIN_ENABLED = process.env.PLAY_REVIEW_LOGIN_ENABLED === 'true';
-const PLAY_REVIEW_LOGIN_EMAIL = normalizeEmail(process.env.PLAY_REVIEW_LOGIN_EMAIL || '');
-const PLAY_REVIEW_LOGIN_OTP = String(process.env.PLAY_REVIEW_LOGIN_OTP || '').trim();
+const PLAY_REVIEW_LOGIN_ENABLED = false;
+const PLAY_REVIEW_LOGIN_EMAIL = '';
+const PLAY_REVIEW_LOGIN_OTP = '';
 
 function isPlayReviewCredential(email, otp) {
   return (
@@ -101,6 +101,10 @@ async function bindDeviceAndRespond(res, user, deviceId, io = null) {
   user.activeDeviceBoundAt = new Date();
   user.isVerified = true;
   await ensureUserPublicId(user);
+  if (user.profileCompleted !== true && hasCompletedProfileSetup(user)) {
+    user.profileCompleted = true;
+    user.profileCompletedAt = user.profileCompletedAt || new Date();
+  }
   await user.save();
 
   try {

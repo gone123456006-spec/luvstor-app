@@ -336,7 +336,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   /** Locked for the life of the call — voice and video never morph mid-call */
   const callTypeRef = useRef<CallMediaType>('voice');
   /** Auto accept/decline once from notification button */
-  const pendingNotifIntentRef = useRef<'accept' | 'decline' | null>(null);
+  const pendingNotifIntentRef = useRef<{
+    intent: 'accept' | 'decline';
+    callId: string;
+  } | null>(null);
+  /** callId currently being accepted / declined — blocks duplicate taps / tray events */
+  const answeringCallIdRef = useRef<string | null>(null);
   /** ICE restarts after the first pair fails (distant NAT / late TURN). */
   const iceRestartCountRef = useRef(0);
   const iceSentRef = useRef<Set<string>>(new Set());
@@ -860,9 +865,21 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const acceptCall = useCallback(async () => {
     const s = stateRef.current;
     if (!socket || !s.callId || s.phase !== 'incoming') return;
+    if (answeringCallIdRef.current === s.callId) return;
+    answeringCallIdRef.current = s.callId;
     void dismissCallNotifications(s.callId);
+    // Leave 'incoming' before any await so re-delivered call:incoming / a second
+    // tap can't act on this call while the socket reconnects.
+    Vibration.cancel();
+    stopIncomingRingtone();
+    const connectingPatch = { phase: 'connecting' as const, cameraOff: s.callType !== 'video' };
+    stateRef.current = { ...stateRef.current, ...connectingPatch };
+    patch(connectingPatch);
     const ready = await ensureSocketConnected(socket);
+    if (stateRef.current.callId !== s.callId) return;
     if (!ready) {
+      answeringCallIdRef.current = null;
+      patch({ phase: 'incoming' });
       Alert.alert(
         'Not connected',
         'Could not reach the call server. Check your internet and try again.',
@@ -877,10 +894,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       finishCall('error');
       return;
     }
-    Vibration.cancel();
-    stopIncomingRingtone();
-    // Accept → connecting UI, then open camera/mic before InCall audio session
-    patch({ phase: 'connecting', cameraOff: s.callType !== 'video' });
     if (isWebRTCAvailable() && !peerRef.current) {
       try {
         const preferred =
@@ -949,7 +962,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const declineCall = useCallback(() => {
     const s = stateRef.current;
-    if (!s.callId) return;
+    if (!s.callId || s.phase !== 'incoming') return;
+    if (answeringCallIdRef.current === s.callId) return;
+    answeringCallIdRef.current = s.callId;
     socket?.emit('call:decline', { callId: s.callId });
     Vibration.cancel();
     finishCall('decline');
@@ -1170,8 +1185,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     };
 
     const onIncoming = (payload: any) => {
-      // Keep Explore and friend calls from stealing each other's active session
-      if (stateRef.current.phase !== 'idle' && stateRef.current.phase !== 'ended') {
+      const cur = stateRef.current;
+      // Server re-delivers the SAME ringing call on socket reconnect / call:sync
+      // (e.g. app foregrounded from the notification). Never decline our own call.
+      if (payload?.callId && cur.callId && String(payload.callId) === String(cur.callId)) {
+        if (payload.iceServers?.length) iceServersRef.current = payload.iceServers;
+        return;
+      }
+      // A genuinely different call while busy → decline that one only
+      if (cur.phase !== 'idle' && cur.phase !== 'ended') {
         if (payload?.callId) {
           socket.emit('call:decline', { callId: payload.callId });
         }
@@ -1207,7 +1229,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      setState({
+      answeringCallIdRef.current = null;
+      const next: CallState = {
         ...initialState,
         webrtcReady: isWebRTCAvailable(),
         phase: 'incoming',
@@ -1221,23 +1244,35 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         localStream: null,
         remoteStream: null,
         minimized: false,
-      });
+      };
+      // Sync ref now — a duplicate call:incoming in the same tick must see this call
+      stateRef.current = next;
+      setState(next);
       (onIncoming as any)._ice = payload.iceServers || [];
 
       if (explore && payload.autoAccept) {
         setTimeout(() => {
           void acceptCallRef.current();
         }, 500);
-      } else if (pendingNotifIntentRef.current === 'accept') {
+      } else if (
+        pendingNotifIntentRef.current?.intent === 'accept' &&
+        pendingNotifIntentRef.current.callId === String(payload.callId)
+      ) {
         pendingNotifIntentRef.current = null;
         setTimeout(() => {
           void acceptCallRef.current();
         }, 250);
-      } else if (pendingNotifIntentRef.current === 'decline') {
+      } else if (
+        pendingNotifIntentRef.current?.intent === 'decline' &&
+        pendingNotifIntentRef.current.callId === String(payload.callId)
+      ) {
         pendingNotifIntentRef.current = null;
         setTimeout(() => {
           declineCallRef.current();
         }, 100);
+      } else {
+        // Intent belonged to another call — never apply it to this one
+        pendingNotifIntentRef.current = null;
       }
     };
 
@@ -1397,6 +1432,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         if (stateRef.current.phase !== 'idle') finishCall('cancel');
         return;
       }
+      // Duplicate accept (tray button + in-app tap) → server says INVALID_STATE
+      // for a call that is already connecting — must not tear it down.
+      const curPhase = stateRef.current.phase;
+      if (
+        payload?.code === 'INVALID_STATE' &&
+        (curPhase === 'connecting' || curPhase === 'connected' || curPhase === 'reconnecting')
+      ) {
+        return;
+      }
       pendingCancelRef.current = false;
       const code = String(payload?.code || 'error').toLowerCase();
       // WhatsApp-style: stop ringing immediately and show Busy / Offline
@@ -1491,6 +1535,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const applyPendingIntent = (pending: ReturnType<typeof getPendingIncomingCall>) => {
       if (!pending) return;
       if (pending.intent === 'decline') {
+        const cur = stateRef.current;
+        if (
+          cur.callId === pending.callId &&
+          cur.phase !== 'incoming' &&
+          cur.phase !== 'idle' &&
+          cur.phase !== 'ended'
+        ) {
+          // Already answered in-app — a late tray Decline must not end it
+          clearPendingIncomingCall(pending.callId);
+          return;
+        }
         void declineCallHttp(pending.callId);
         socket.emit('call:decline', { callId: pending.callId });
         clearPendingIncomingCall(pending.callId);
@@ -1502,7 +1557,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       if (pending.intent === 'accept') {
-        pendingNotifIntentRef.current = 'accept';
+        pendingNotifIntentRef.current = { intent: 'accept', callId: pending.callId };
       }
       const phase = stateRef.current.phase;
       if (phase === 'incoming' && stateRef.current.callId === pending.callId) {

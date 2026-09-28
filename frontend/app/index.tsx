@@ -33,7 +33,8 @@ export default function Index() {
         const route = await resolvePostLoginRoute(user);
         if (!cancelled) setHref(route);
       } catch {
-        if (!cancelled) setHref('/create-profile');
+        // Tabs gate re-verifies with the backend — never assume "new user" on error
+        if (!cancelled) setHref('/(tabs)');
       }
     })();
     return () => {

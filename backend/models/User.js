@@ -90,6 +90,12 @@ const userSchema = new mongoose.Schema({
    */
   welcomeTokensGrantedAt: { type: Date, default: null },
   /**
+   * Permanent: set once the user finishes first-time Profile Setup.
+   * Never reset — later edits (e.g. clearing bio) must not re-trigger setup.
+   */
+  profileCompleted: { type: Boolean, default: false },
+  profileCompletedAt: { type: Date, default: null },
+  /**
    * One-time tokens after photo verification is approved.
    * Null until granted — never grant again.
    */
