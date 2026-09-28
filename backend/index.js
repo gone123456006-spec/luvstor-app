@@ -1,6 +1,7 @@
 require('dotenv').config({ override: true });
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -53,6 +54,10 @@ server.headersTimeout = 66_000;
 // Probes first — no DB, no JSON body (Render /health + cron /ping)
 app.set('trust proxy', 1);
 mountHeartbeatRoutes(app);
+
+app.get('/child-safety', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'child-safety.html'));
+});
 
 const io = new Server(server, {
   cors: {
