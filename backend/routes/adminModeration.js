@@ -5,6 +5,7 @@ const adminAuth = require('../middleware/adminAuth');
 const Report = require('../models/Report');
 const User = require('../models/User');
 const Friendship = require('../models/Friendship');
+const { banUser, unbanUser } = require('../utils/accountBan');
 
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -101,7 +102,13 @@ router.patch('/reports/:id', adminAuth, adminLimiter, async (req, res) => {
     await report.save();
 
     let userAction = null;
-    if (req.body.alsoDeactivate === true || actionTaken === 'banned') {
+    if (actionTaken === 'banned') {
+      const banned = await banUser(report.reportedUserId, {
+        reason: moderatorNote || `Report: ${report.reason}`,
+        io: req.app.get('io'),
+      });
+      userAction = banned ? { banned: true, deactivated: true, userId: String(banned._id) } : null;
+    } else if (req.body.alsoDeactivate === true) {
       const updated = await User.findByIdAndUpdate(
         report.reportedUserId,
         {
@@ -153,6 +160,42 @@ router.patch('/reports/:id', adminAuth, adminLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error('admin/reports patch error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+function validUserId(id) {
+  return /^[a-f0-9]{24}$/i.test(String(id || ''));
+}
+
+/**
+ * POST /api/admin/users/:id/ban   Body: { reason }
+ * Permanent: sign-in is refused and every live session is revoked immediately.
+ */
+router.post('/users/:id/ban', adminAuth, adminLimiter, async (req, res) => {
+  try {
+    if (!validUserId(req.params.id)) return res.status(400).json({ error: 'Invalid user id' });
+    const user = await banUser(req.params.id, {
+      reason: String(req.body?.reason || '').slice(0, 500),
+      io: req.app.get('io'),
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, userId: String(user._id), isBanned: true });
+  } catch (err) {
+    console.error('admin/users ban error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** POST /api/admin/users/:id/unban */
+router.post('/users/:id/unban', adminAuth, adminLimiter, async (req, res) => {
+  try {
+    if (!validUserId(req.params.id)) return res.status(400).json({ error: 'Invalid user id' });
+    const user = await unbanUser(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, userId: String(user._id), isBanned: false });
+  } catch (err) {
+    console.error('admin/users unban error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

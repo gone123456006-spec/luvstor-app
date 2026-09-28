@@ -183,10 +183,11 @@ module.exports = function initSocket(io) {
         return next(new Error('Authentication error: Invalid token'));
       }
       const user = await User.findById(decoded.userId).select(
-        'activeDeviceId name photo gender',
+        'activeDeviceId name photo gender isBanned',
       );
       if (
         !user ||
+        user.isBanned === true ||
         !user.activeDeviceId ||
         String(user.activeDeviceId).trim() !== String(decoded.deviceId || '').trim()
       ) {
