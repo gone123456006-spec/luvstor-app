@@ -22,11 +22,12 @@ module.exports = async function authMiddleware(req, res, next) {
 
     let activeDeviceId = getCachedActiveDevice(userId);
     if (activeDeviceId === undefined) {
-      const user = await User.findById(userId).select('activeDeviceId').lean();
+      const user = await User.findById(userId).select('activeDeviceId isBanned').lean();
       if (!user) {
         return res.status(401).json({ error: 'Invalid or expired token' });
       }
-      activeDeviceId = user.activeDeviceId ? String(user.activeDeviceId).trim() : null;
+      activeDeviceId =
+        user.activeDeviceId && user.isBanned !== true ? String(user.activeDeviceId).trim() : null;
       setCachedActiveDevice(userId, activeDeviceId);
     } else if (activeDeviceId) {
       activeDeviceId = String(activeDeviceId).trim();

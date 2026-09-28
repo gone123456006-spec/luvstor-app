@@ -179,6 +179,10 @@ const userSchema = new mongoose.Schema({
   deletionReason: { type: String, default: null },
   isDeactivated: { type: Boolean, default: false, index: true },
   reminderSentAt: { type: Date, default: null },
+  /** Permanent moderation ban: sign-in is refused and live sessions are revoked */
+  isBanned: { type: Boolean, default: false },
+  bannedAt: { type: Date, default: null },
+  banReason: { type: String, default: null, maxlength: 500 },
   /**
    * Per-category push opt-outs. Security notifications are intentionally not
    * listed — account alerts are always delivered.

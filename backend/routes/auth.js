@@ -21,6 +21,7 @@ const {
 const { serializeUser, hasCompletedProfileSetup } = require('../utils/userHelpers');
 const { generateUniquePublicId, ensureUserPublicId } = require('../utils/publicId');
 const { checkAndRestoreOnLogin } = require('../jobs/accountDeletion');
+const { isUserBanned, sendBanned } = require('../utils/accountBan');
 const { verifyFirebaseIdToken, isFirebaseAdminReady } = require('../services/firebaseAdmin');
 const { verifyGoogleIdToken, isGoogleAuthConfigured, getGoogleAuthStatus } = require('../services/googleAuth');
 const {
@@ -87,6 +88,9 @@ function issueToken(user) {
 }
 
 async function bindDeviceAndRespond(res, user, deviceId, io = null) {
+  // Every sign-in path ends here, so this is the single ban gate
+  if (isUserBanned(user)) return sendBanned(res);
+
   const previousDeviceId = normalizeDeviceId(user.activeDeviceId);
   const nextDeviceId = normalizeDeviceId(deviceId);
   const upgradingLegacy =
@@ -300,6 +304,9 @@ router.post('/send-otp', async (req, res) => {
         retryAfterSeconds: rateCheck.retryAfterSeconds,
       });
     }
+
+    const existing = await User.findOne({ email }).select('isBanned').lean();
+    if (isUserBanned(existing)) return sendBanned(res);
 
     if (PLAY_REVIEW_LOGIN_ENABLED && email === PLAY_REVIEW_LOGIN_EMAIL) {
       return res.json({
