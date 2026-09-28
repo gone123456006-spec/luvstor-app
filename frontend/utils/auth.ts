@@ -58,7 +58,6 @@ export type AuthUser = {
   profileComplete?: boolean;
 };
 
-const PLAY_REVIEW_LOGIN_EMAIL = 'luvstor.playreview.demo@gmail.com';
 const LEGACY_PROFILE_KEY = 'user_profile';
 export const ACTIVE_ACCOUNT_EMAIL_KEY = 'active_account_email';
 
@@ -85,10 +84,40 @@ export function isLocalProfileComplete(profile: StoredProfile | null | undefined
   );
 }
 
-/** Server /me shape → profileComplete (same rules as backend). */
+/**
+ * Profile Setup was finished at some point (same rule as backend
+ * hasCompletedProfileSetup). Gender + age only come from Profile Setup.
+ */
+export function hasFinishedProfileSetup(profile: StoredProfile | null | undefined): boolean {
+  if (!profile) return false;
+  const name = String(profile.name || '').trim();
+  const gender = String(profile.gender || '').trim();
+  const age = Number(profile.age);
+  if (name && gender && Number.isFinite(age) && age >= 18) return true;
+  return isLocalProfileComplete(profile);
+}
+
+/** Server /me → has this account finished Profile Setup? Backend flag wins. */
 export function isServerProfileComplete(me: Record<string, unknown> | null | undefined): boolean {
   if (!me) return false;
-  return isLocalProfileComplete(userToLocalProfile(me));
+  if (me.profileCompleted === true || me.profileComplete === true) return true;
+  return hasFinishedProfileSetup(userToLocalProfile(me));
+}
+
+/** Remember the backend's profileCompleted on the stored session user. */
+export async function markAuthUserProfileComplete(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(AUTH_USER_KEY);
+    if (!raw) return;
+    const user = JSON.parse(raw) as AuthUser;
+    if (user.profileComplete === true) return;
+    await AsyncStorage.setItem(
+      AUTH_USER_KEY,
+      JSON.stringify({ ...user, profileComplete: true }),
+    );
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function getAuthToken(): Promise<string | null> {
@@ -280,9 +309,9 @@ export async function hydrateAccountFromServer(
   return {
     id: String(me._id || me.id || ''),
     email: accountEmail,
+    ...me,
     name: (me.name as string) || '',
     profileComplete: isServerProfileComplete(me),
-    ...me,
   };
 }
 
@@ -328,6 +357,7 @@ export async function completeAccountLogin(
       (await getAuthToken()) || token,
       email,
     );
+    if (hydrated.profileComplete) await markAuthUserProfileComplete();
     return {
       id: hydrated.id || user.id,
       email,
@@ -350,36 +380,34 @@ export async function resolvePostLoginRoute(
 ): Promise<'/(tabs)' | '/create-profile'> {
   const email = normalizeEmail(user.email);
 
-  if (email === PLAY_REVIEW_LOGIN_EMAIL) {
+  if (user.profileComplete) {
     return '/(tabs)';
   }
 
-  const local = await getLocalProfile(email);
-
-  // Full dating profile already on device → Discover (home tabs)
-  if (isLocalProfileComplete(local)) {
-    return '/(tabs)';
-  }
-
-  // Confirm with server (covers reinstall / another device)
-  try {
-    const token = await getAuthToken();
-    if (token) {
+  // Backend is the source of truth (covers logout/login, reinstall, other device)
+  const token = await getAuthToken();
+  if (token) {
+    try {
       const me = (await apiRequest('/api/users/me', token)) as Record<
         string,
         unknown
       >;
-      const mapped = userToLocalProfile(me);
-      await saveLocalProfile(email, mapped);
-      if (isLocalProfileComplete(mapped)) {
+      await saveLocalProfile(email, userToLocalProfile(me));
+      if (isServerProfileComplete(me)) {
+        await markAuthUserProfileComplete();
         return '/(tabs)';
       }
+      // Server reachable and says setup never finished → genuinely new user
+      return '/create-profile';
+    } catch {
+      /* offline / server error — fall back to this account's cached profile */
     }
-  } catch {
-    /* offline — fall through to create-profile */
   }
 
-  // New / incomplete user (incl. Google name+photo only) → Create profile
+  const local = await getLocalProfile(email);
+  if (hasFinishedProfileSetup(local)) {
+    return '/(tabs)';
+  }
   return '/create-profile';
 }
 

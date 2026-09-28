@@ -34,7 +34,10 @@ const {
   MAX_SESSION_EXCLUDE,
 } = require("../services/discoveryRotation");
 const { MAX_PROFILE_PHOTOS } = require("../config/profileLimits");
-const { isProfileComplete } = require("../utils/userHelpers");
+const {
+  isProfileComplete,
+  markProfileCompletedIfDone,
+} = require("../utils/userHelpers");
 const { WELCOME_PROFILE_TOKENS, GALLERY_POST_TOKENS_PER_IMAGE } = require("../services/chatTokens");
 const {
   toPersistentMediaUrl,
@@ -100,6 +103,7 @@ router.get("/me", auth, async (req, res) => {
 
     // Backfill unique public ID for older accounts
     await ensureUserPublicId(user);
+    const profileCompleted = await markProfileCompletedIfDone(user);
 
     const media = shapeOwnerMediaFields(user);
 
@@ -123,6 +127,8 @@ router.get("/me", auth, async (req, res) => {
       distance: user.distance,
       location: user.location,
       isVerified: user.isVerified,
+      profileCompleted,
+      profileComplete: profileCompleted,
       photoVerification: {
         status: user.photoVerification?.status || "none",
         photoVerified: user.photoVerification?.status === "approved",
@@ -419,6 +425,7 @@ router.put("/me", auth, async (req, res) => {
 
     if (!user) return res.status(404).json({ error: "User not found" });
     await ensureUserPublicId(user);
+    const profileCompleted = await markProfileCompletedIfDone(user);
 
     // Hard-delete gallery/DP/cover files removed from the profile (permanent delete)
     if (
@@ -637,6 +644,8 @@ router.put("/me", auth, async (req, res) => {
       photo: keepIfUploadPresent(toPersistentMediaUrl(user.photo)) || "",
       coverPhoto: keepIfUploadPresent(toPersistentMediaUrl(user.coverPhoto)) || "",
       publicId: user.publicId || "",
+      profileCompleted,
+      profileComplete: profileCompleted,
       welcomeTokensGranted,
       galleryPostTokensGranted,
       tokenBalance: user.tokenBalance ?? 0,

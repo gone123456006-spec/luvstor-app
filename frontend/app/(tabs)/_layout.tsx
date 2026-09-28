@@ -9,7 +9,7 @@ import { tabScreenOptions, getTabBarBottomInset, getTabBarHeight } from '../../u
 import {
   getAuthToken,
   getLocalProfile,
-  isLocalProfileComplete,
+  hasFinishedProfileSetup,
   normalizeEmail,
   resolvePostLoginRoute,
 } from '../../utils/auth';
@@ -91,6 +91,10 @@ export default function TabLayout() {
         return;
       }
       try {
+        if (user.profileComplete) {
+          if (!cancelled) setProfileGate('ok');
+          return;
+        }
         const route = await resolvePostLoginRoute(user);
         if (cancelled) return;
         if (route === '/create-profile') {
@@ -102,7 +106,7 @@ export default function TabLayout() {
       } catch {
         const local = await getLocalProfile(normalizeEmail(user.email));
         if (cancelled) return;
-        if (!isLocalProfileComplete(local)) {
+        if (!hasFinishedProfileSetup(local)) {
           setProfileGate('need-profile');
           router.replace('/create-profile');
           return;
