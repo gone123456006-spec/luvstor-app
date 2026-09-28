@@ -1,0 +1,29 @@
+{
+  "name": "luvstor-admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Luvstor admin dashboard — independent service (server + web)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web ci --include=dev && npm --prefix web run build",
+    "create-admin": "node server/scripts/createAdmin.js",
+    "test": "node --test \"server/tests/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^9.6.2"
+  }
+}
