@@ -1,16 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  StatusBar,
-  ScrollView,
-  Alert,
+    Alert,
+    Linking,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { PRODUCTION_API_URL } from '../utils/api';
 
 const WA = {
   bg: '#F5F5F7',
@@ -52,7 +54,7 @@ const SAFETY_RULES = [
   {
     icon: 'shield' as const,
     title: 'Block and Report Anytime',
-    desc: 'If someone makes you uncomfortable, block them instantly. Our team reviews reports 24/7.',
+    desc: 'If someone makes you uncomfortable, block them and report their profile for review.',
     color: '#EA4335',
   },
 ];
@@ -158,6 +160,22 @@ export default function SafetyCenterScreen() {
                   {i < SAFETY_RULES.length - 1 && <View style={styles.divider} />}
                 </View>
               ))}
+            </View>
+            <View style={styles.listGroup}>
+              <TouchableOpacity
+                style={styles.listRow}
+                activeOpacity={0.7}
+                onPress={() => Linking.openURL(`${PRODUCTION_API_URL}/child-safety`)}
+              >
+                <View style={[styles.iconCircle, { backgroundColor: WA.primary }]}>
+                  <Ionicons name="document-text" size={20} color="#fff" />
+                </View>
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowLabel}>Child Safety Standards</Text>
+                  <Text style={styles.rowSub}>Luvstor’s standards and reporting process</Text>
+                </View>
+                <Ionicons name="open-outline" size={18} color={WA.secondary} />
+              </TouchableOpacity>
             </View>
           </>
         ) : (
