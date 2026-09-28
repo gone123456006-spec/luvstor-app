@@ -2,6 +2,7 @@ import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
 import { getAuthToken, isValidPublicId } from './auth';
 import { fetchWithTimeout, getApiBase } from './api';
+import { playStoreWebUrl } from './rateApp';
 
 /** Custom app scheme (app.json → scheme) */
 export const APP_SCHEME = 'luvstor';
@@ -39,8 +40,32 @@ export function normalizePublicId(raw?: string | null): string | null {
 export function buildProfileHttpsUrl(publicId: string): string | null {
   const id = normalizePublicId(publicId);
   if (!id) return null;
-  // Legacy-compatible path until branded slug is fetched
-  return `${getProfileLinkBase()}/u/${id}`;
+  const share = (process.env.EXPO_PUBLIC_SHARE_BASE_URL || '').trim();
+  if (share && !/onrender\.com/i.test(share)) {
+    return `${share.replace(/\/$/, '')}/u/${id}`;
+  }
+  const referrer = encodeURIComponent(
+    `utm_source=luvstor&utm_medium=profile_share&utm_content=${id}`,
+  );
+  return `${playStoreWebUrl()}&referrer=${referrer}`;
+}
+
+function isPlayStoreLink(url: string) {
+  return /play\.google\.com\/store/i.test(url);
+}
+
+function profileShareLines(who: string, id: string, link: string | null) {
+  const lines = [`Meet ${who} on Luvstor 💜`, `ID: ${id}`];
+  if (link && isPlayStoreLink(link)) {
+    lines.push('', `Get Luvstor: ${link}`);
+    lines.push('', `Then search ID ${id} in Discover to find the profile.`);
+  } else if (link) {
+    lines.push('', link);
+    lines.push('', 'Tap the link to open their profile in Luvstor.');
+  } else {
+    lines.push('', 'Open Luvstor → Discover → search this ID to find them.');
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -98,37 +123,13 @@ export async function buildProfileShareMessageAsync(
   const who = (name || '').trim() || 'this profile';
   const link =
     (await fetchBrandedProfileShareUrl(id)) || buildProfileShareUrl(id);
-  const lines = [`Meet ${who} on Luvstor 💜`, `ID: ${id}`];
-  if (link) {
-    lines.push('', link);
-    lines.push('', 'Tap the link to open their profile in Luvstor.');
-  } else {
-    lines.push(
-      '',
-      'Open Luvstor → Discover → search this ID to find them.',
-    );
-  }
-  return lines.join('\n');
+  return profileShareLines(who, id, link);
 }
 
 export function buildProfileShareMessage(name: string, publicId: string): string {
   const id = normalizePublicId(publicId) || String(publicId || '').toUpperCase();
   const who = (name || '').trim() || 'this profile';
-  const link = buildProfileShareUrl(id);
-  const lines = [
-    `Meet ${who} on Luvstor 💜`,
-    `ID: ${id}`,
-  ];
-  if (link) {
-    lines.push('', link);
-    lines.push('', 'Tap the link to open their profile in Luvstor.');
-  } else {
-    lines.push(
-      '',
-      'Open Luvstor → Discover → search this ID to find them.',
-    );
-  }
-  return lines.join('\n');
+  return profileShareLines(who, id, buildProfileShareUrl(id));
 }
 
 /**

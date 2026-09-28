@@ -76,16 +76,17 @@ function referralHttpsUrl(code) {
 }
 
 async function referralShareUrlForUser(user) {
-  const { ensureReferralShareLink } = require('./shareLinks');
+  const { ensureReferralShareLink, publicShareUrl } = require('./shareLinks');
   const code = await ensureReferralCode(user);
   const link = await ensureReferralShareLink({
     referralCode: code,
     ownerUserId: user._id,
   });
+  const playStoreUrl = playStoreUrlForCode(code);
   return {
     referralCode: code,
-    shareUrl: link?.shareUrl || referralHttpsUrl(code),
-    playStoreUrl: playStoreUrlForCode(code),
+    shareUrl: publicShareUrl(link?.shareUrl, playStoreUrl),
+    playStoreUrl,
     slug: link?.slug || null,
   };
 }
