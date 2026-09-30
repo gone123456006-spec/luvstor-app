@@ -25,6 +25,7 @@ import { ExploreProvider } from '../contexts/ExploreContext';
 import { AppAlertProvider } from '../components/AppAlert';
 import CallOverlay from '../components/call/CallOverlay';
 import ExploreCallOverlay from '../components/call/ExploreCallOverlay';
+import ConnectionBanner from '../components/ConnectionBanner';
 import {
   fadeScreenOptions,
   instantScreenOptions,
@@ -115,6 +116,7 @@ function RootLayoutContent() {
           }}
         />
       </Stack>
+      <ConnectionBanner />
       <CallOverlay />
       <ExploreCallOverlay />
       <StatusBar style="auto" />

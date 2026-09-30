@@ -2,7 +2,7 @@
   "expo": {
     "name": "Luvstor",
     "slug": "luvstor",
-      "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
     "scheme": "luvstor",
@@ -10,7 +10,7 @@
     "splash": {
       "image": "./assets/images/spashscreen.png",
       "resizeMode": "contain",
-      "backgroundColor": "#5A2FC7"
+      "backgroundColor": "#1A0136"
     },
     "ios": {
       "supportsTablet": true,
@@ -28,7 +28,7 @@
     },
     "android": {
       "package": "com.luvstor.app",
-      "versionCode": 4,
+      "versionCode": 5,
       "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
@@ -193,9 +193,9 @@
           "image": "./assets/images/spashscreen.png",
           "imageWidth": 160,
           "resizeMode": "contain",
-          "backgroundColor": "#5A2FC7",
+          "backgroundColor": "#1A0136",
           "dark": {
-            "backgroundColor": "#5A2FC7",
+            "backgroundColor": "#1A0136",
             "image": "./assets/images/spashscreen.png"
           }
         }

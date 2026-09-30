@@ -114,19 +114,23 @@ async function bindDeviceAndRespond(res, user, deviceId, io = null) {
     /* cache is best-effort */
   }
 
-  if (isNewDevice || upgradingLegacy) {
-    // Drop push tokens for the previous installation id
+  res.json({
+    success: true,
+    token: issueToken(user),
+    user: serializeUser(user),
+  });
+
+  if (!isNewDevice && !upgradingLegacy) return;
+  // Housekeeping runs after the response so sign-in isn't kept waiting
+  setImmediate(async () => {
     try {
+      // Drop push tokens for the previous installation id
       const { removeTokensForDevice } = require('../services/deviceTokens');
       if (previousDeviceId) await removeTokensForDevice(previousDeviceId);
     } catch {
       /* ignore */
     }
-  }
-
-  if (isNewDevice) {
-    // Alert first — the old device still has a live token at this point,
-    // which is exactly who needs to hear about an unexpected sign-in
+    if (!isNewDevice) return;
     try {
       const { createNotification } = require('../services/notifications');
       await createNotification(io, {
@@ -139,12 +143,6 @@ async function bindDeviceAndRespond(res, user, deviceId, io = null) {
     } catch {
       /* ignore */
     }
-  }
-
-  res.json({
-    success: true,
-    token: issueToken(user),
-    user: serializeUser(user),
   });
 }
 
@@ -257,7 +255,7 @@ router.post('/google', async (req, res) => {
       user.authProvider = 'google';
     }
 
-    const restoreResult = await checkAndRestoreOnLogin(user._id);
+    const restoreResult = await checkAndRestoreOnLogin(user._id, user);
     if (restoreResult?.error) {
       return res.status(403).json({
         error: restoreResult.error,
@@ -301,9 +299,6 @@ router.post('/send-otp', async (req, res) => {
       });
     }
 
-    const existing = await User.findOne({ email }).select('isBanned').lean();
-    if (isUserBanned(existing)) return sendBanned(res);
-
     if (PLAY_REVIEW_LOGIN_ENABLED && email === PLAY_REVIEW_LOGIN_EMAIL) {
       return res.json({
         success: true,
@@ -313,7 +308,11 @@ router.post('/send-otp', async (req, res) => {
       });
     }
 
-    await OTP.updateMany({ email, used: false }, { used: true });
+    const [existing] = await Promise.all([
+      User.findOne({ email }).select('isBanned').lean(),
+      OTP.updateMany({ email, used: false }, { used: true }),
+    ]);
+    if (isUserBanned(existing)) return sendBanned(res);
 
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + smtpConfig.otpExpiryMinutes * 60 * 1000);
@@ -383,21 +382,24 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(429).json({ error: verifyLimit.error });
     }
 
-    const record = isReviewCredential
-      ? null
-      : await OTP.findOne({
-          email,
-          otp,
-          used: false,
-          expiresAt: { $gt: new Date() },
-        }).sort({ createdAt: -1 });
+    const [record, existingUser] = await Promise.all([
+      isReviewCredential
+        ? null
+        : OTP.findOne({
+            email,
+            otp,
+            used: false,
+            expiresAt: { $gt: new Date() },
+          }).sort({ createdAt: -1 }),
+      User.findOne({ email }),
+    ]);
 
     if (!record && !isReviewCredential) {
       recordVerifyAttempt(email, false);
       return res.status(400).json({ error: 'Invalid or expired verification code' });
     }
 
-    let user = await User.findOne({ email });
+    let user = existingUser;
     let isNewUser = false;
     if (!user) {
       const publicId = await generateUniquePublicId();
@@ -409,13 +411,10 @@ router.post('/verify-otp', async (req, res) => {
         authProvider: 'email',
       });
       isNewUser = true;
-    } else if (!user.isVerified) {
-      user.isVerified = true;
-      await user.save();
     }
 
     // Check if account is deactivated and restore if within grace period
-    const restoreResult = await checkAndRestoreOnLogin(user._id);
+    const restoreResult = await checkAndRestoreOnLogin(user._id, user);
     if (restoreResult?.error) {
       return res.status(403).json({
         error: restoreResult.error,
@@ -544,7 +543,7 @@ router.post('/transfer-device', async (req, res) => {
     }
 
     // Check if account is deactivated and restore if within grace period
-    const restoreResult = await checkAndRestoreOnLogin(user._id);
+    const restoreResult = await checkAndRestoreOnLogin(user._id, user);
     if (restoreResult?.error) {
       return res.status(403).json({
         error: restoreResult.error,

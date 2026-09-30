@@ -63,8 +63,10 @@ import {
 } from "../../utils/locationSetup";
 import {
     loadMore as loadMoreNearbyFeed,
+    NEARBY_AUTO_REFRESH_MS,
     patchUsers as patchNearbyUsers,
     refresh as refreshNearbyFeed,
+    refreshAuto as refreshNearbyAuto,
     refreshIfStale as refreshNearbyIfStale,
     removeUser as removeNearbyUser,
 } from "../../utils/nearbyStore";
@@ -377,8 +379,7 @@ export default function DiscoverScreen() {
     profileTick,
     lastProfileUpdate,
     notifUnreadCount,
-    presenceTick,
-    lastPresence,
+    subscribePresence,
     friendTick,
     lastFriendUpdate,
   } = useSocket();
@@ -557,6 +558,18 @@ export default function DiscoverScreen() {
     if (!prefsHydrated || !user?.email) return;
     void writeLocalDiscoveryPrefs(user.email, prefs);
   }, [prefsHydrated, prefs, user?.email]);
+
+  // New people appear without a pull while Discover stays open
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!prefsHydrated) return;
+      const iv = setInterval(
+        () => refreshNearbyAuto(prefsRef.current),
+        NEARBY_AUTO_REFRESH_MS,
+      );
+      return () => clearInterval(iv);
+    }, [prefsHydrated]),
+  );
 
   useFocusEffect(
     React.useCallback(() => {
@@ -882,10 +895,10 @@ export default function DiscoverScreen() {
   }, [profileTick, lastProfileUpdate]);
 
   // Instant online / offline reflection (Discover list + open profile)
-  React.useEffect(() => {
-    if (presenceTick === 0 || !lastPresence?.userId) return;
-    const uid = String(lastPresence.userId);
-    const online = !!lastPresence.isOnline;
+  React.useEffect(() => subscribePresence((presence) => {
+    if (!presence.userId) return;
+    const uid = String(presence.userId);
+    const online = !!presence.isOnline;
     const patch = (user: NearbyUser): NearbyUser =>
       user.id === uid ? { ...user, isOnline: online } : user;
     patchNearbyUsers((u) => {
@@ -901,7 +914,7 @@ export default function DiscoverScreen() {
       if (!prev || prev.id !== uid || !!prev.isOnline === online) return prev;
       return { ...prev, isOnline: online };
     });
-  }, [presenceTick, lastPresence]);
+  }), [subscribePresence]);
 
   // Realtime like / unlike / friends — update hearts without refresh
   React.useEffect(() => {
@@ -1465,7 +1478,15 @@ export default function DiscoverScreen() {
     /location|gps|permission/i.test(hint);
   const nearbyHint =
     showLocationPrompt && isLocationHint(nearbyFeed.hint) ? null : nearbyFeed.hint;
-  const listHint = feedTab === "nearby" ? nearbyHint : locationError;
+  const nearbyErrorHint =
+    nearbyHint && !isLocationHint(nearbyHint)
+      ? nearbyFeed.error === "offline"
+        ? "You're offline — showing saved people"
+        : nearbyFeed.error === "server"
+          ? "Connection problem — retrying…"
+          : nearbyHint
+      : nearbyHint;
+  const listHint = feedTab === "nearby" ? nearbyErrorHint : locationError;
 
   const activeUsers = feedTab === "for_you" ? forYouUsers : nearbyUsers;
 
@@ -1541,17 +1562,39 @@ export default function DiscoverScreen() {
     }
     if (feedTab === "nearby" && nearbyFeed.hint) {
       const isLocation = isLocationHint(nearbyFeed.hint);
+      const offline = !isLocation && nearbyFeed.error === "offline";
+      const serverDown = !isLocation && nearbyFeed.error === "server";
       return (
         <View style={styles.emptyContainer}>
           <Ionicons
-            name={isLocation ? "location-outline" : "refresh"}
+            name={
+              isLocation
+                ? "location-outline"
+                : offline
+                  ? "cloud-offline-outline"
+                  : serverDown
+                    ? "sync-outline"
+                    : "refresh"
+            }
             size={48}
             color={D.muted}
           />
           <Text style={styles.emptyTitle}>
-            {isLocation ? "Location Needed" : "Couldn't refresh"}
+            {isLocation
+              ? "Location Needed"
+              : offline
+                ? "You're offline"
+                : serverDown
+                  ? "Connection problem — retrying…"
+                  : "Couldn't refresh"}
           </Text>
-          <Text style={styles.emptyText}>{nearbyFeed.hint}</Text>
+          <Text style={styles.emptyText}>
+            {offline
+              ? "Nearby people will load automatically when you're back online."
+              : serverDown
+                ? "We'll show nearby people as soon as the server responds."
+                : nearbyFeed.hint}
+          </Text>
           <TouchableOpacity
             style={styles.retryBtn}
             onPress={() => {

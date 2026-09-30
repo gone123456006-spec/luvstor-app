@@ -9,7 +9,6 @@
  * Expo Go (SDK 53+) errors if expo-notifications is even imported on Android,
  * so that package is loaded lazily and only outside Expo Go.
  */
-import { isRunningInExpoGo } from 'expo';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import { AppState, Platform } from 'react-native';
@@ -17,11 +16,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiRequest } from './api';
 import { getOrCreateDeviceId } from './device';
+import { isExpoGo, loadNotifications } from './notificationsModule';
 import { TOKEN_PACKS_HREF } from './tokenCache';
 
-const STORED_TOKEN_KEY = 'luvstor_fcm_token';
+export { isExpoGo };
 
-export const isExpoGo = isRunningInExpoGo();
+const STORED_TOKEN_KEY = 'luvstor_fcm_token';
 
 /** True after permission + FCM token registered — FG toast can defer to system tray */
 let pushTrayReady = false;
@@ -32,24 +32,6 @@ export function setPushTrayReady(ready: boolean) {
 
 export function isPushTrayReady() {
   return pushTrayReady;
-}
-
-type NotificationsModule = typeof import('expo-notifications');
-
-let notificationsModule: NotificationsModule | null | undefined;
-
-function loadNotifications(): NotificationsModule | null {
-  if (isExpoGo) return null;
-  if (notificationsModule !== undefined) return notificationsModule;
-  try {
-    // Evaluated only in a native/dev build — Expo Go throws on import.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    notificationsModule = require('expo-notifications') as NotificationsModule;
-  } catch (err: any) {
-    console.warn('[Push] expo-notifications unavailable:', err?.message);
-    notificationsModule = null;
-  }
-  return notificationsModule;
 }
 
 const IMPORTANCE = {

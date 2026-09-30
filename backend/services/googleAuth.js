@@ -53,6 +53,14 @@ function getClient() {
   return oauthClient;
 }
 
+/** Fetch Google's signing certs at boot so the first sign-in skips that round trip. */
+function prewarmGoogleCerts() {
+  if (!getAudiences().length) return;
+  getClient()
+    .getFederatedSignonCertsAsync()
+    .catch((err) => console.warn('Google cert prewarm failed:', err.message));
+}
+
 /**
  * @returns {{ sub, email, name, picture, email_verified }}
  */
@@ -109,4 +117,5 @@ module.exports = {
   isGoogleAuthConfigured,
   getAudiences,
   getGoogleAuthStatus,
+  prewarmGoogleCerts,
 };

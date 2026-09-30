@@ -34,33 +34,19 @@ import {
 } from '../utils/chatListPreviewPatch';
 import WhatsAppAvatar from '../components/WhatsAppAvatar';
 import { isPushTrayReady, presentChatMessageNotification } from '../utils/push';
+import { refreshOnReconnect as refreshNearbyOnReconnect } from '../utils/nearbyStore';
+import {
+  loadNetwork,
+  setConnectionRetryHandler,
+  setSocketLinkState,
+  startConnectivity,
+} from '../utils/connectivity';
 
-type NetworkModule = typeof import('expo-network');
-
-/**
- * expo-network needs a native rebuild. Old APKs / Expo Go throw on import —
- * load only when ExpoNetwork is in the binary.
- */
-function loadNetwork(): NetworkModule | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const expo = require('expo') as {
-      requireOptionalNativeModule?: (name: string) => unknown;
-    };
-    const optional =
-      typeof expo.requireOptionalNativeModule === 'function'
-        ? expo.requireOptionalNativeModule
-        : // eslint-disable-next-line @typescript-eslint/no-require-imports
-          (require('expo-modules-core') as {
-            requireOptionalNativeModule: (name: string) => unknown;
-          }).requireOptionalNativeModule;
-    if (!optional('ExpoNetwork')) return null;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('expo-network') as NetworkModule;
-  } catch {
-    return null;
-  }
-}
+/** Away at least this long → verify the socket instead of trusting `connected`. */
+const RESUME_PROBE_AFTER_MS = 15_000;
+const RESUME_PROBE_TIMEOUT_MS = 4_000;
+const REJECT_RETRY_BASE_MS = 2_000;
+const REJECT_RETRY_MAX_MS = 30_000;
 
 type ToastKind = 'message' | 'like' | 'unlike' | 'friends';
 
@@ -108,7 +94,7 @@ export type FriendUpdatePayload = {
   privacyHidden?: boolean;
 };
 
-type PresenceUpdatePayload = {
+export type PresenceUpdatePayload = {
   userId: string;
   isOnline: boolean;
   lastSeen?: string | null;
@@ -146,8 +132,11 @@ type SocketContextValue = {
   lastConversationDeleted: ConversationDeletedPayload | null;
   profileTick: number;
   lastProfileUpdate: ProfileUpdatePayload | null;
-  presenceTick: number;
-  lastPresence: PresenceUpdatePayload | null;
+  /**
+   * Presence arrives for every user constantly — a subscription instead of
+   * context state, so it doesn't re-render every useSocket() consumer.
+   */
+  subscribePresence: (listener: (p: PresenceUpdatePayload) => void) => () => void;
   bumpProfileLocal: (payload: ProfileUpdatePayload) => void;
   bumpChatPreview: (payload: ChatListPreviewPayload) => void;
   /** WhatsApp: clear row + tab badge the moment a chat is opened / read */
@@ -185,10 +174,18 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   const [profileTick, setProfileTick] = useState(0);
   const [lastProfileUpdate, setLastProfileUpdate] =
     useState<ProfileUpdatePayload | null>(null);
-  const [presenceTick, setPresenceTick] = useState(0);
-  const [lastPresence, setLastPresence] =
-    useState<PresenceUpdatePayload | null>(null);
-  const lastPresenceRef = useRef<PresenceUpdatePayload | null>(null);
+  const presenceListenersRef = useRef(
+    new Set<(p: PresenceUpdatePayload) => void>(),
+  );
+  const subscribePresence = useCallback(
+    (listener: (p: PresenceUpdatePayload) => void) => {
+      presenceListenersRef.current.add(listener);
+      return () => {
+        presenceListenersRef.current.delete(listener);
+      };
+    },
+    [],
+  );
   const presenceMapRef = useRef(new Map<string, boolean>());
   const [toast, setToast] = useState<ToastPayload | null>(null);
 
@@ -341,6 +338,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   const authUserId = user?.id ? String(user.id) : null;
   const authUserIdRef = useRef<string | null>(authUserId);
   authUserIdRef.current = authUserId;
+  /** The server answers presence:ping acks — older backends don't, so no probe. */
+  const pingAckSupportedRef = useRef(false);
+
+  useEffect(() => {
+    startConnectivity();
+  }, []);
 
   // Keep global authenticated socket alive
   useEffect(() => {
@@ -351,6 +354,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       if (!authUserId) {
+        setSocketLinkState('none');
         presenceMapRef.current.clear();
         setSocket(null);
         setUnreadCount(0);
@@ -361,8 +365,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       const token = await getAuthToken();
       if (!token || cancelled) return;
 
+      setSocketLinkState('connecting');
       active = io(socketBaseUrl(), {
-        auth: { token },
+        // Read on every (re)connect — the API renews the token in the background
+        auth: (cb) => {
+          void getAuthToken().then((latest) => cb({ token: latest || token }));
+        },
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 800,
@@ -373,11 +381,50 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         autoConnect: true,
       });
 
+      // A server-side rejection stops socket.io's own reconnect loop; retry
+      // with backoff unless the session itself is bad (the API signs out).
+      let rejectAttempts = 0;
+      let rejectTimer: ReturnType<typeof setTimeout> | null = null;
+      let everConnected = false;
+      active.on('disconnect', (reason: string) => {
+        if (cancelled || reason === 'io client disconnect') return;
+        setSocketLinkState('disconnected');
+      });
+      active.on('connect_error', (err: Error) => {
+        if (!cancelled) setSocketLinkState('disconnected');
+        const s = active;
+        if (!s || s.active || cancelled) return;
+        if (/device mismatch|invalid token|no token/i.test(err?.message || '')) return;
+        if (rejectTimer) clearTimeout(rejectTimer);
+        const delay = Math.min(
+          REJECT_RETRY_MAX_MS,
+          REJECT_RETRY_BASE_MS * 2 ** Math.min(rejectAttempts, 5),
+        );
+        rejectAttempts += 1;
+        rejectTimer = setTimeout(() => {
+          rejectTimer = null;
+          if (!cancelled && !s.connected) s.connect();
+        }, delay);
+      });
       active.on('connect', () => {
+        setSocketLinkState('connected');
+        rejectAttempts = 0;
+        if (rejectTimer) {
+          clearTimeout(rejectTimer);
+          rejectTimer = null;
+        }
         refreshUnread();
         refreshNotifUnread();
+        // Server reachable again → retry a failed / stale Nearby load now
+        refreshNearbyOnReconnect();
+        // Chat events emitted while we were disconnected were lost — resync the list
+        if (everConnected) bumpChatList();
+        everConnected = true;
+        const s = active;
         try {
-          active.emit('presence:ping');
+          s?.timeout(RESUME_PROBE_TIMEOUT_MS).emit('presence:ping', (err: Error | null) => {
+            if (!err) pingAckSupportedRef.current = true;
+          });
         } catch {
           /* ignore */
         }
@@ -594,9 +641,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           isOnline: online,
           ...(lastSeen != null ? { lastSeen: String(lastSeen) } : {}),
         };
-        lastPresenceRef.current = next;
-        setLastPresence(next);
-        setPresenceTick((n) => n + 1);
+        presenceListenersRef.current.forEach((listener) => {
+          try {
+            listener(next);
+          } catch (err) {
+            console.warn('[Socket] presence listener failed:', err);
+          }
+        });
       };
 
       active.on('user:online', (payload: any) => {
@@ -696,8 +747,27 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       presenceIv = null;
     };
 
-    /** Network / app resume — reconnect + heartbeat (never marks Offline). */
-    const ensureConnected = () => {
+    /**
+     * After a background stint the socket can report `connected` over a TCP
+     * connection the OS already dropped; heartbeats would only notice ~45 s
+     * later. An unanswered ping drops the transport so socket.io reconnects now.
+     */
+    const probeConnection = (s: Socket) => {
+      try {
+        s.timeout(RESUME_PROBE_TIMEOUT_MS).emit('presence:ping', (err: Error | null) => {
+          if (!err || cancelled || !s.connected) return;
+          s.io.engine?.close();
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+
+    /**
+     * Network / app resume — reconnect + heartbeat (never marks Offline).
+     * `force` skips socket.io's pending backoff wait and dials immediately.
+     */
+    const ensureConnected = (opts: { force?: boolean; awayMs?: number } = {}) => {
       if (cancelled) return;
       refreshUnread();
       refreshNotifUnread();
@@ -705,30 +775,57 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       const s = socket;
       if (s && !s.connected) {
         try {
+          if (opts.force) s.disconnect();
           s.connect();
         } catch {
           /* ignore */
         }
+      } else if (
+        s &&
+        pingAckSupportedRef.current &&
+        (opts.awayMs ?? 0) >= RESUME_PROBE_AFTER_MS
+      ) {
+        probeConnection(s);
       }
       startPresence();
     };
 
-    const scheduleEnsureConnected = () => {
+    let pendingOpts: { force?: boolean; awayMs?: number } = {};
+    const scheduleEnsureConnected = (opts: { force?: boolean; awayMs?: number } = {}) => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      pendingOpts = {
+        force: pendingOpts.force || opts.force,
+        awayMs: Math.max(pendingOpts.awayMs ?? 0, opts.awayMs ?? 0),
+      };
       // Debounce Wi‑Fi ↔ cellular flaps so we don't thrash connect()
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
-        ensureConnected();
+        const run = pendingOpts;
+        pendingOpts = {};
+        ensureConnected(run);
       }, 400);
     };
 
-    const applyNetworkState = (state: { isConnected?: boolean | null }) => {
+    // Banner "Retry": dial now instead of waiting for the backoff timer
+    setConnectionRetryHandler(() => {
+      ensureConnected({ force: true });
+      refreshNearbyOnReconnect();
+    });
+
+    let wasOffline = false;
+    const applyNetworkState = (
+      state: { isConnected?: boolean | null },
+      opts: { force?: boolean; awayMs?: number } = {},
+    ) => {
       if (state.isConnected === false) {
         // Do not stop heartbeats or emit away — brief Wi‑Fi↔cellular flaps
         // must not flicker Offline. Server TTL / disconnect grace decide Offline.
+        wasOffline = true;
         return;
       }
-      scheduleEnsureConnected();
+      const back = wasOffline;
+      wasOffline = false;
+      scheduleEnsureConnected({ ...opts, force: opts.force || back });
     };
 
     void (async () => {
@@ -760,23 +857,28 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Foreground resume: restore Online ASAP when internet is back
+    let backgroundAt = 0;
     const appSub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
+        const awayMs = backgroundAt ? Date.now() - backgroundAt : 0;
+        backgroundAt = 0;
+        const resume = { force: true, awayMs };
         void (async () => {
           try {
             const Network = loadNetwork();
             if (!Network) {
-              ensureConnected();
+              ensureConnected(resume);
               return;
             }
             const state = await Network.getNetworkStateAsync();
-            applyNetworkState(state);
+            applyNetworkState(state, resume);
           } catch {
-            ensureConnected();
+            ensureConnected(resume);
           }
         })();
         return;
       }
+      if (next === 'background' && !backgroundAt) backgroundAt = Date.now();
       // background / inactive: keep socket + pings if the OS allows; no offline
       if (socket?.connected) startPresence();
     });
@@ -799,6 +901,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       stopPresence();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       networkSub?.remove();
+      setConnectionRetryHandler(null);
       appSub.remove();
       socket?.off('disconnect', onDisconnect);
       socket?.off('connect', onConnect);
@@ -845,8 +948,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       lastConversationDeleted,
       profileTick,
       lastProfileUpdate,
-      presenceTick,
-      lastPresence,
+      subscribePresence,
       bumpProfileLocal,
       bumpChatPreview,
       markChatAsRead,
@@ -867,8 +969,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       lastConversationDeleted,
       profileTick,
       lastProfileUpdate,
-      presenceTick,
-      lastPresence,
+      subscribePresence,
       bumpProfileLocal,
       bumpChatPreview,
       markChatAsRead,

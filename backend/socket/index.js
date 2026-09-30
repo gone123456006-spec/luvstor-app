@@ -411,7 +411,15 @@ module.exports = function initSocket(io) {
 
     // Heartbeat — refresh Redis TTL + lastSeen while the client can reach us.
     // Closing the app alone does not clear presence; TTL / presence:away does.
-    socket.on('presence:ping', async () => {
+    // Optional ack: the app uses it on resume to detect a half-open socket.
+    socket.on('presence:ping', async (ack) => {
+      if (typeof ack === 'function') {
+        try {
+          ack({ ok: true });
+        } catch {
+          /* client gone */
+        }
+      }
       try {
         const hb = await presence.heartbeat(uid);
         if (hb.ok === false) return;

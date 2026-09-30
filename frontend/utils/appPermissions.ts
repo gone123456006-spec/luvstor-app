@@ -8,7 +8,7 @@ import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
 } from 'expo-audio';
-import * as Notifications from 'expo-notifications';
+import { loadNotifications } from './notificationsModule';
 
 export type PermStatus = 'granted' | 'denied' | 'undetermined' | 'unavailable';
 
@@ -187,6 +187,8 @@ export async function requestMusic(): Promise<boolean> {
 }
 
 export async function getNotificationsStatus(): Promise<PermStatus> {
+  const Notifications = loadNotifications();
+  if (!Notifications) return 'unavailable';
   try {
     const cur = await Notifications.getPermissionsAsync();
     if (expoGranted(cur as any)) return 'granted';
@@ -204,6 +206,8 @@ export async function requestNotifications(): Promise<boolean> {
       );
       if (ok) return true;
     }
+    const Notifications = loadNotifications();
+    if (!Notifications) return false;
     const next = await Notifications.requestPermissionsAsync();
     return expoGranted(next as any);
   } catch {
