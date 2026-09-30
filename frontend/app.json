@@ -136,6 +136,9 @@
         {
           "android": {
             "usesCleartextTraffic": false,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.luvstor.app.** { *; }\n-keep class org.webrtc.** { *; }\n-keep class com.oney.WebRTCModule.** { *; }\n-dontwarn org.webrtc.**\n-keep class com.zxcpoiu.incallmanager.** { *; }\n-keep class io.invertase.notifee.** { *; }\n-keep class app.notifee.** { *; }\n-dontwarn app.notifee.**\n-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }\n-keepattributes JavascriptInterface\n-keepattributes *Annotation*\n-dontwarn com.razorpay.**\n-keep class com.razorpay.** { *; }\n-optimizations !method/inlining/*\n-keepclasseswithmembers class * { public void onPayment*(...); }\n-keepattributes SourceFile,LineNumberTable",
             "extraMavenRepos": [
               "../../node_modules/@notifee/react-native/android/libs"
             ]

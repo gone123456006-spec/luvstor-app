@@ -126,6 +126,10 @@ router.get("/me", auth, async (req, res) => {
       height: user.height,
       distance: user.distance,
       location: user.location,
+      // Accounts that saved GPS before this flag existed count as done
+      locationSetupCompleted:
+        !!user.locationSetupCompletedAt ||
+        hasRealLocation(user.location?.coordinates),
       isVerified: user.isVerified,
       profileCompleted,
       profileComplete: profileCompleted,
@@ -683,7 +687,9 @@ router.put("/location", auth, async (req, res) => {
         .json({ error: "Could not read a valid GPS fix. Try again." });
     }
 
-    const current = await User.findById(req.userId).select("location").lean();
+    const current = await User.findById(req.userId)
+      .select("location locationSetupCompletedAt")
+      .lean();
     if (!current) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -691,24 +697,33 @@ router.put("/location", auth, async (req, res) => {
       const [lng, lat] = current.location.coordinates;
       const moved = distanceMetres(lat, lng, latitude, longitude);
       if (Number.isFinite(moved) && moved < 40) {
+        if (!current.locationSetupCompletedAt) {
+          await User.updateOne(
+            { _id: req.userId, locationSetupCompletedAt: null },
+            { $set: { locationSetupCompletedAt: new Date() } },
+          );
+        }
         return res.json({
           success: true,
           location: current.location,
           unchanged: true,
+          locationSetupCompleted: true,
         });
       }
     }
 
-    const updated = await User.findByIdAndUpdate(
-      req.userId,
-      {
-        location: {
-          type: "Point",
-          coordinates: [longitude, latitude], // GeoJSON is [lng, lat]
-        },
+    const update = {
+      location: {
+        type: "Point",
+        coordinates: [longitude, latitude], // GeoJSON is [lng, lat]
       },
-      { new: true },
-    ).select("location");
+    };
+    if (!current.locationSetupCompletedAt) {
+      update.locationSetupCompletedAt = new Date();
+    }
+    const updated = await User.findByIdAndUpdate(req.userId, update, {
+      new: true,
+    }).select("location");
 
     if (!updated) {
       return res.status(404).json({ error: "User not found" });
@@ -717,6 +732,7 @@ router.put("/location", auth, async (req, res) => {
     res.json({
       success: true,
       location: updated.location,
+      locationSetupCompleted: true,
     });
   } catch (err) {
     console.error("location update error:", err);

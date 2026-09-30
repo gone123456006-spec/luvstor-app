@@ -746,7 +746,8 @@ export default function TokenScreen() {
 
   const loadBalance = React.useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
-      if (!silent) {
+      // A balance already on screen stays visible and updates in place.
+      if (!silent && !getCachedTokenBalance()) {
         setLoadingBalance(true);
       }
       try {

@@ -37,6 +37,7 @@ import {
     userToLocalProfile,
 } from "../utils/auth";
 import { useAuth } from "../contexts/AuthContext";
+import { needsLocationSetup } from "../utils/locationSetup";
 import {
     followGenderChange,
     oppositeShowMe,
@@ -178,6 +179,11 @@ export default function CreateProfileScreen() {
   const [bio, setBio] = useState("");
   const [interests, setInterests] = useState<string[]>([]);
   const [relationshipGoal, setRelationshipGoal] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [setupDone, setSetupDone] = useState<{ welcomeTokens: number } | null>(
+    null,
+  );
+  const leavingRef = React.useRef(false);
 
   React.useEffect(() => {
     (async () => {
@@ -266,6 +272,41 @@ export default function CreateProfileScreen() {
   };
 
   const handleComplete = async () => {
+    if (saving) return;
+    Keyboard.dismiss();
+    setSaving(true);
+    try {
+      await completeProfile();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const leaveSetupDone = React.useCallback(async () => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    try {
+      const [token, authUser] = await Promise.all([
+        getAuthToken(),
+        getCurrentAuthUser(),
+      ]);
+      if (token && authUser?.id && (await needsLocationSetup(token, authUser.id))) {
+        router.replace("/enable-location");
+        return;
+      }
+    } catch {
+      /* fall through to home; the tabs gate re-checks location */
+    }
+    router.replace("/(tabs)");
+  }, [router]);
+
+  React.useEffect(() => {
+    if (!setupDone) return;
+    const t = setTimeout(() => void leaveSetupDone(), 2200);
+    return () => clearTimeout(t);
+  }, [setupDone, leaveSetupDone]);
+
+  const completeProfile = async () => {
     const authUser = await getCurrentAuthUser();
     const accountEmail = authUser?.email
       ? normalizeEmail(authUser.email)
@@ -274,6 +315,7 @@ export default function CreateProfileScreen() {
       router.replace("/login");
       return;
     }
+    let welcomeTokens = 0;
 
     const profileData = {
       photo,
@@ -296,7 +338,7 @@ export default function CreateProfileScreen() {
       if (token) {
         const syncRes: any = await syncProfileToServer(token, profileData);
         const profile = syncRes?.profile || syncRes || {};
-        const welcomeTokens = Number(syncRes?.welcomeTokensGranted || 0);
+        welcomeTokens = Number(syncRes?.welcomeTokensGranted || 0);
         // Also fetch /me so we get the unique publicId (ABCD1234)
         let publicId = String(syncRes?.publicId || profile?.publicId || "");
         try {
@@ -315,12 +357,6 @@ export default function CreateProfileScreen() {
         if (syncRes?.profileCompleted === true || syncRes?.profileComplete === true) {
           await markAuthUserProfileComplete();
         }
-        if (welcomeTokens > 0) {
-          Alert.alert(
-            "Welcome bonus!",
-            `You received ${welcomeTokens} free tokens for completing your profile.`,
-          );
-        }
       }
     } catch (e) {
       console.error("Failed to save profile", e);
@@ -335,8 +371,7 @@ export default function CreateProfileScreen() {
     } catch {
       /* ignore */
     }
-    // After profile creation → Discover (home)
-    router.replace("/(tabs)");
+    setSetupDone({ welcomeTokens });
   };
 
   if (checkingSession) {
@@ -623,6 +658,44 @@ export default function CreateProfileScreen() {
     }
   };
 
+  if (setupDone) {
+    return (
+      <View style={s.doneContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <View style={s.doneIconOuter}>
+          <View style={s.doneIconInner}>
+            <Ionicons name="checkmark" size={56} color={C.white} />
+          </View>
+        </View>
+        <Text style={s.doneTitle}>Profile setup done!</Text>
+        <Text style={s.doneText}>
+          {name.trim() ? `Looking great, ${name.trim().split(/\s+/)[0]}. ` : ""}
+          Your profile is ready.
+        </Text>
+        {setupDone.welcomeTokens > 0 ? (
+          <View style={s.doneBonus}>
+            <Ionicons name="diamond" size={16} color={C.primary} />
+            <Text style={s.doneBonusText}>
+              +{setupDone.welcomeTokens} free welcome tokens added
+            </Text>
+          </View>
+        ) : null}
+        <ActivityIndicator
+          size="small"
+          color={C.primary}
+          style={{ marginTop: 32 }}
+        />
+        <TouchableOpacity
+          onPress={() => void leaveSetupDone()}
+          style={s.doneContinue}
+          activeOpacity={0.85}
+        >
+          <Text style={s.doneContinueText}>Continue</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={s.container}>
@@ -630,7 +703,11 @@ export default function CreateProfileScreen() {
 
         <SafeAreaView edges={["top"]} style={s.header}>
           <View style={s.headerRow}>
-            <TouchableOpacity onPress={handleBack} style={s.backButton}>
+            <TouchableOpacity
+              onPress={handleBack}
+              style={s.backButton}
+              disabled={saving}
+            >
               <Ionicons name="arrow-back" size={24} color={C.text} />
             </TouchableOpacity>
             <Text style={s.headerTitle}>Profile setup</Text>
@@ -649,9 +726,14 @@ export default function CreateProfileScreen() {
             contentContainerStyle={s.scroll}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
           >
-            <Text style={s.stepTitle}>{STEPS[step].title}</Text>
-            {renderCurrentStep()}
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+              <View style={s.scrollInner}>
+                <Text style={s.stepTitle}>{STEPS[step].title}</Text>
+                {renderCurrentStep()}
+              </View>
+            </TouchableWithoutFeedback>
           </ScrollView>
         </KeyboardAvoidingView>
 
@@ -661,15 +743,22 @@ export default function CreateProfileScreen() {
         >
           <TouchableOpacity
             onPress={step === STEPS.length - 1 ? handleComplete : handleNext}
-            disabled={!canNext()}
+            disabled={!canNext() || saving}
             activeOpacity={0.88}
             style={[s.primaryBtn, !canNext() && s.primaryBtnDisabled]}
           >
-            <Text
-              style={[s.primaryBtnText, !canNext() && s.primaryBtnTextDisabled]}
-            >
-              {step === STEPS.length - 1 ? "Finish" : "Next"}
-            </Text>
+            {saving ? (
+              <View style={s.savingRow}>
+                <ActivityIndicator size="small" color={C.text} />
+                <Text style={s.primaryBtnText}>Saving your profile…</Text>
+              </View>
+            ) : (
+              <Text
+                style={[s.primaryBtnText, !canNext() && s.primaryBtnTextDisabled]}
+              >
+                {step === STEPS.length - 1 ? "Finish" : "Next"}
+              </Text>
+            )}
           </TouchableOpacity>
         </SafeAreaView>
       </View>
@@ -715,10 +804,12 @@ const s = StyleSheet.create({
     paddingRight: 8,
   },
   scroll: {
+    flexGrow: 1,
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 100,
   },
+  scrollInner: { flexGrow: 1 },
   stepTitle: {
     fontSize: 22,
     fontWeight: "700",
@@ -936,4 +1027,59 @@ const s = StyleSheet.create({
   primaryBtnTextDisabled: {
     color: "#9CA3AF",
   },
+  savingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  doneContainer: {
+    flex: 1,
+    backgroundColor: C.bg,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+  },
+  doneIconOuter: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: C.primaryLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 28,
+  },
+  doneIconInner: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: C.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  doneTitle: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: C.text,
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  doneText: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: C.secondary,
+    textAlign: "center",
+  },
+  doneBonus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: C.primaryLight,
+  },
+  doneBonusText: { fontSize: 14, fontWeight: "700", color: C.primaryDark },
+  doneContinue: { marginTop: 20, paddingVertical: 10, paddingHorizontal: 24 },
+  doneContinueText: { fontSize: 15, fontWeight: "700", color: C.primary },
 });

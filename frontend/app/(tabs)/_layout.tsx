@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { InteractionManager, Platform, StyleSheet } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
@@ -22,6 +22,12 @@ import {
   preloadProfile,
 } from '../../utils/profileCache';
 import { pingAppOpen } from '../../utils/retention';
+import { needsLocationSetup } from '../../utils/locationSetup';
+
+const TAB_PREFETCH = [
+  { href: '/chat', delayMs: 800 },
+  { href: '/explore', delayMs: 2500 },
+] as const;
 
 export default function TabLayout() {
   const router = useRouter();
@@ -31,7 +37,7 @@ export default function TabLayout() {
   const { unreadCount, refreshUnread } = useSocket();
   const hadUserRef = useRef(false);
   const [profileGate, setProfileGate] = useState<
-    'checking' | 'ok' | 'need-profile'
+    'checking' | 'ok' | 'need-profile' | 'need-location'
   >('checking');
 
   // WhatsApp-style: sit above 3-button / gesture nav; height stays fixed across popups
@@ -82,9 +88,22 @@ export default function TabLayout() {
     }
   }, [user, router]);
 
-  // New users must finish Create profile before Discover / home tabs
+  // New users must finish Create profile, then the one-time Enable Location
+  // screen, before Discover / home tabs
   useEffect(() => {
     let cancelled = false;
+    const passProfileGate = async () => {
+      const token = await getAuthToken();
+      const needsLocation =
+        !!token && !!user?.id && (await needsLocationSetup(token, user.id));
+      if (cancelled) return;
+      if (needsLocation) {
+        setProfileGate('need-location');
+        router.replace('/enable-location');
+        return;
+      }
+      setProfileGate('ok');
+    };
     (async () => {
       if (!user?.email) {
         if (!cancelled) setProfileGate('checking');
@@ -92,7 +111,7 @@ export default function TabLayout() {
       }
       try {
         if (user.profileComplete) {
-          if (!cancelled) setProfileGate('ok');
+          await passProfileGate();
           return;
         }
         const route = await resolvePostLoginRoute(user);
@@ -102,7 +121,7 @@ export default function TabLayout() {
           router.replace('/create-profile');
           return;
         }
-        setProfileGate('ok');
+        await passProfileGate();
       } catch {
         const local = await getLocalProfile(normalizeEmail(user.email));
         if (cancelled) return;
@@ -111,7 +130,7 @@ export default function TabLayout() {
           router.replace('/create-profile');
           return;
         }
-        setProfileGate('ok');
+        await passProfileGate();
       }
     })();
     return () => {
@@ -139,6 +158,30 @@ export default function TabLayout() {
       void preloadProfile();
     })();
   }, [user, sessionVersion, profileGate]);
+
+  // Mount Chat and Explore hidden once Discover has painted, so their first
+  // open is instant. Staggered so they never compete with the Discover load.
+  useEffect(() => {
+    if (!user || profileGate !== 'ok') return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const task = InteractionManager.runAfterInteractions(() => {
+      TAB_PREFETCH.forEach(({ href, delayMs }) => {
+        timers.push(
+          setTimeout(() => {
+            try {
+              router.prefetch(href);
+            } catch {
+              /* tab opens normally on tap */
+            }
+          }, delayMs),
+        );
+      });
+    });
+    return () => {
+      task.cancel();
+      timers.forEach(clearTimeout);
+    };
+  }, [user, sessionVersion, profileGate, router]);
 
   if (user && profileGate !== 'ok') {
     return null;

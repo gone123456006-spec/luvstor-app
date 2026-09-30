@@ -53,6 +53,14 @@ function RootLayoutContent() {
         />
         <Stack.Screen name="create-profile" options={fadeScreenOptions} />
         <Stack.Screen
+          name="enable-location"
+          options={{
+            ...fadeScreenOptions,
+            gestureEnabled: false,
+            fullScreenGestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
           name="messages/[id]"
           options={{
             ...stackScreenOptions,

@@ -5,6 +5,7 @@ import {
   fetchNearbyUsersPage,
   loadNearbyFeed,
   NEARBY_PAGE_SIZE,
+  prefetchAvatars,
   sortNearbyByLane,
   type NearbyUser,
 } from './nearby';
@@ -35,10 +36,16 @@ export type NearbyFeedSnapshot = {
   revision: number;
 };
 
-type RefreshReason = 'start' | 'pull' | 'foreground' | 'prefs';
+/** 'sync' = filters changed from the server copy, not by the user: swap rows quietly. */
+type RefreshReason = 'start' | 'pull' | 'foreground' | 'focus' | 'prefs' | 'sync';
 
 const REFRESH_COOLDOWN_MS = 12_000;
-const FOREGROUND_COOLDOWN_MS = 15_000;
+/** Quick glances away (notification shade, permission dialog) don't reload the list. */
+const MIN_BACKGROUND_MS = 3_000;
+const FOREGROUND_COOLDOWN_MS = 5_000;
+/** Switching back to the Discover tab reloads only when the list is this old. */
+const FOCUS_STALE_MS = 60_000;
+const SILENT_RETRY_MS = 5_000;
 const PERSIST_MS = 500;
 
 const EMPTY: NearbyFeedSnapshot = {
@@ -64,6 +71,26 @@ let lastPrefs: NearbyPrefs | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let appStateBound = false;
 let appState: AppStateStatus = AppState.currentState;
+let backgroundAt = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearRetry() {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+/** Background refresh failed while rows are on screen: keep them, try again quietly once. */
+function scheduleSilentRetry(prefs: NearbyPrefs, attempt: number) {
+  clearRetry();
+  if (attempt >= 1) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (appState !== 'active' || !state.email) return;
+    void refresh({ prefs, reason: 'foreground', attempt: attempt + 1 });
+  }, SILENT_RETRY_MS);
+}
 
 function prefsKeyOf(prefs: NearbyPrefs) {
   return `${prefs.gender}|${prefs.radiusKm}|${prefs.activeWithinMinutes}`;
@@ -173,6 +200,7 @@ export function bindAccount(email?: string | null) {
   inFlight = false;
   lastOkAt = 0;
   lastPrefs = null;
+  clearRetry();
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
@@ -210,27 +238,35 @@ export async function hydrateAccount(email?: string | null) {
 }
 
 function shouldSkip(reason: RefreshReason, prefs: NearbyPrefs) {
-  if (reason === 'pull' || reason === 'prefs') return false;
+  if (reason === 'pull' || reason === 'prefs' || reason === 'sync') return false;
   if (inFlight) return true;
   const key = prefsKeyOf(prefs);
   if (state.prefsKey && state.prefsKey !== key) return false;
   if (!lastOkAt) return false;
-  const wait = reason === 'foreground' ? FOREGROUND_COOLDOWN_MS : REFRESH_COOLDOWN_MS;
+  const wait =
+    reason === 'foreground'
+      ? FOREGROUND_COOLDOWN_MS
+      : reason === 'focus'
+        ? FOCUS_STALE_MS
+        : REFRESH_COOLDOWN_MS;
   return Date.now() - lastOkAt < wait && state.users.length > 0;
 }
 
 export async function refresh(opts: {
   prefs: NearbyPrefs;
   reason?: RefreshReason;
+  attempt?: number;
 }) {
   const prefs = opts.prefs;
   const reason = opts.reason || 'start';
+  const attempt = opts.attempt ?? 0;
   lastPrefs = prefs;
+  if (reason === 'pull' || reason === 'prefs' || reason === 'sync') clearRetry();
   const key = prefsKeyOf(prefs);
 
   if (shouldSkip(reason, prefs)) return;
   // New filters (or a pull) supersede any request still running with old ones.
-  const supersede = reason === 'pull' || reason === 'prefs';
+  const supersede = reason === 'pull' || reason === 'prefs' || reason === 'sync';
   if (inFlight && !supersede) return;
 
   if (supersede && inFlight) {
@@ -271,14 +307,11 @@ export async function refresh(opts: {
     if (myGen !== gen) return;
 
     if (!ok) {
-      setState({
-        hint: NEARBY_REFRESH_HINT,
-        loading: false,
-        refreshing: false,
-      });
+      failRefresh(reason, hadRows, prefs, attempt);
       return;
     }
 
+    clearRetry();
     lastOkAt = Date.now();
     if (reason === 'foreground') lastForegroundAt = lastOkAt;
     if (!users.length) {
@@ -296,6 +329,7 @@ export async function refresh(opts: {
     }
 
     const sorted = sortNearbyByLane(users);
+    prefetchAvatars(sorted.map((u) => u.photo), NEARBY_PAGE_SIZE);
     applyUsers(
       sorted,
       {
@@ -310,14 +344,30 @@ export async function refresh(opts: {
     );
   } catch {
     if (myGen !== gen) return;
-    setState({
-      hint: NEARBY_REFRESH_HINT,
-      loading: false,
-      refreshing: false,
-    });
+    failRefresh(reason, hadRows, prefs, attempt);
   } finally {
     if (myGen === gen) inFlight = false;
   }
+}
+
+function failRefresh(
+  reason: RefreshReason,
+  hadRows: boolean,
+  prefs: NearbyPrefs,
+  attempt: number,
+) {
+  const userAsked = reason === 'pull' || reason === 'prefs';
+  if (hadRows && !userAsked) {
+    // Automatic refresh: the list on screen stays as-is, no banner.
+    setState({ loading: false, refreshing: false });
+    scheduleSilentRetry(prefs, attempt);
+    return;
+  }
+  setState({
+    hint: NEARBY_REFRESH_HINT,
+    loading: false,
+    refreshing: false,
+  });
 }
 
 export async function loadMore(prefs: NearbyPrefs) {
@@ -387,14 +437,27 @@ export function ensureAppStateBound() {
   AppState.addEventListener('change', (next: AppStateStatus) => {
     const was = appState;
     appState = next;
+    if (next === 'background') {
+      backgroundAt = Date.now();
+      clearRetry();
+      return;
+    }
     if (next !== 'active' || was === 'active') return;
     if (!state.email || !lastPrefs) return;
     const now = Date.now();
+    const awayMs = backgroundAt ? now - backgroundAt : Number.POSITIVE_INFINITY;
+    backgroundAt = 0;
+    if (awayMs < MIN_BACKGROUND_MS) return;
     if (now - lastForegroundAt < FOREGROUND_COOLDOWN_MS) return;
-    if (now - lastOkAt < FOREGROUND_COOLDOWN_MS) return;
     lastForegroundAt = now;
     void refresh({ prefs: lastPrefs, reason: 'foreground' });
   });
+}
+
+/** Discover tab regained focus — reload quietly only if the list is stale. */
+export function refreshIfStale(prefs: NearbyPrefs) {
+  if (appState !== 'active') return;
+  void refresh({ prefs, reason: 'focus' });
 }
 
 export { NEARBY_REFRESH_HINT };

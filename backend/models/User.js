@@ -47,6 +47,8 @@ const userSchema = new mongoose.Schema({
     type: { type: String, enum: ['Point'], default: 'Point' },
     coordinates: { type: [Number], default: [0, 0] }, // [longitude, latitude]
   },
+  /** First time a real GPS fix was saved — gates the one-time Enable Location screen. */
+  locationSetupCompletedAt: { type: Date, default: null },
   isVerified: { type: Boolean, default: false },
   /**
    * Photo / selfie verification (trust badge for Nearby + Explore).
