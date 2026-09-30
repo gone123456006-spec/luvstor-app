@@ -14,9 +14,11 @@ import MediaImage from "./MediaImage";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const GRID_COLS = 3;
-const GRID_GAP = 2;
+const GRID_GAP = 6;
+const GRID_PAD = 10;
+const GRID_RADIUS = 14;
 const GRID_CELL = Math.floor(
-  (SCREEN_WIDTH - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS,
+  (SCREEN_WIDTH - GRID_PAD * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS,
 );
 
 const IG = {
@@ -190,7 +192,10 @@ export default function ProfileInstagramSection({
                     onPress={() => onPhotoPress(index)}
                   >
                     <View style={styles.gridEmpty}>
-                      <Ionicons name="add" size={28} color="#262626" />
+                      <View style={styles.plus}>
+                        <View style={styles.plusBarH} />
+                        <View style={styles.plusBarV} />
+                      </View>
                     </View>
                   </TouchableOpacity>
                 );
@@ -359,22 +364,48 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: GRID_GAP,
+    paddingHorizontal: GRID_PAD,
+    paddingTop: GRID_GAP,
+    paddingBottom: 18,
   },
   gridCell: {
     width: GRID_CELL,
     height: GRID_CELL,
+    borderRadius: GRID_RADIUS,
     backgroundColor: "#EFEFEF",
     overflow: "hidden",
   },
   gridImage: {
     width: "100%",
     height: "100%",
+    // Android doesn't always clip images to the parent's radius
+    borderRadius: GRID_RADIUS,
   },
   gridEmpty: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#FAFAFA",
+  },
+  plus: {
+    width: 26,
+    height: 26,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  plusBarH: {
+    position: "absolute",
+    width: 26,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#262626",
+  },
+  plusBarV: {
+    position: "absolute",
+    width: 4,
+    height: 26,
+    borderRadius: 2,
+    backgroundColor: "#262626",
   },
   gridEmptyLocked: {
     backgroundColor: "#F5F5F5",

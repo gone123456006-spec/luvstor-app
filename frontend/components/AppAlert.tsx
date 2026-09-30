@@ -11,6 +11,7 @@ import {
   Alert,
   Animated,
   BackHandler,
+  Keyboard,
   Pressable,
   StyleSheet,
   Text,
@@ -55,16 +56,20 @@ type AppAlertContextValue = {
 
 const AppAlertContext = createContext<AppAlertContextValue | null>(null);
 
-/** iOS-style action sheet colors */
+/** Same look as the chat Block / Report sheets */
 const C = {
-  accent: "#007AFF",
-  danger: "#FF3B30",
-  title: "#000000",
-  message: "#3C3C43",
-  divider: "rgba(60, 60, 67, 0.29)",
-  card: "#E4E6EB",
-  backdrop: "rgba(0, 0, 0, 0.55)",
+  accent: "#6750A4",
+  danger: "#B3261E",
+  title: "#1C1B1F",
+  message: "#1C1B1F",
+  divider: "#E7E0EC",
+  sheet: "#E4E6EB",
+  card: "#FFFFFF",
+  closeBg: "#EADDFF",
+  backdrop: "rgba(0, 0, 0, 0.5)",
 };
+
+const SHEET_HIDDEN_Y = 420;
 
 function normalizeButtons(buttons?: AlertButton[]): AlertButton[] {
   if (buttons?.length) return buttons;
@@ -91,30 +96,28 @@ function mapNativeButtons(
   }));
 }
 
-function buttonTextStyle(style?: AlertButtonStyle) {
-  if (style === "destructive") return styles.sheetBtnDanger;
-  if (style === "cancel") return styles.sheetCancelText;
-  return styles.sheetBtnText;
+function buttonColor(style?: AlertButtonStyle) {
+  return style === "destructive" ? C.danger : C.accent;
 }
 
-function buttonIconColor(style?: AlertButtonStyle) {
-  if (style === "destructive") return C.danger;
-  return C.accent;
-}
-
-function renderActionLabel(btn: AlertButton, horizontal?: boolean) {
-  const color = buttonIconColor(btn.style);
-  if (horizontal && btn.icon) {
-    return (
-      <View style={styles.sheetRowBtnContent}>
-        <Ionicons name={btn.icon} size={20} color={color} />
-        <Text style={[buttonTextStyle(btn.style), styles.sheetRowBtnLabel]}>
-          {btn.text}
-        </Text>
-      </View>
-    );
-  }
-  return <Text style={buttonTextStyle(btn.style)}>{btn.text}</Text>;
+/** Picks a fitting icon from the label when the caller didn't pass one. */
+function defaultIcon(btn: AlertButton): keyof typeof Ionicons.glyphMap {
+  if (btn.icon) return btn.icon;
+  const t = btn.text.toLowerCase();
+  if (/delete|remove|clear/.test(t)) return "trash-outline";
+  if (/block/.test(t)) return "ban-outline";
+  if (/report/.test(t)) return "warning-outline";
+  if (/log ?out|sign ?out/.test(t)) return "log-out-outline";
+  if (/setting/.test(t)) return "settings-outline";
+  if (/retry|try again|refresh/.test(t)) return "refresh-outline";
+  if (/buy|purchase|pay|upgrade|subscribe/.test(t)) return "diamond-outline";
+  if (/share/.test(t)) return "share-outline";
+  if (/call/.test(t)) return "call-outline";
+  if (/camera/.test(t)) return "camera-outline";
+  if (/gallery|photo|library/.test(t)) return "images-outline";
+  if (/cancel|close|not now|later|no\b|keep/.test(t)) return "close-circle-outline";
+  if (btn.style === "destructive") return "alert-circle-outline";
+  return "checkmark-circle-outline";
 }
 
 /** Original system alert — use for Lucky Spin popups only. */
@@ -126,23 +129,23 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
   const [visible, setVisible] = useState(false);
   const [options, setOptions] = useState<AppAlertOptions | null>(null);
   const opacity = useRef(new Animated.Value(0)).current;
-  const slide = useRef(new Animated.Value(48)).current;
+  const slide = useRef(new Animated.Value(SHEET_HIDDEN_Y)).current;
   const closingRef = useRef(false);
   const pendingAction = useRef<(() => void) | null>(null);
 
   const animateIn = useCallback(() => {
     opacity.setValue(0);
-    slide.setValue(48);
+    slide.setValue(SHEET_HIDDEN_Y);
     Animated.parallel([
       Animated.timing(opacity, {
         toValue: 1,
-        duration: 220,
+        duration: 200,
         useNativeDriver: true,
       }),
       Animated.spring(slide, {
         toValue: 0,
-        friction: 9,
-        tension: 80,
+        friction: 10,
+        tension: 70,
         useNativeDriver: true,
       }),
     ]).start();
@@ -153,12 +156,12 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
       Animated.parallel([
         Animated.timing(opacity, {
           toValue: 0,
-          duration: 140,
+          duration: 160,
           useNativeDriver: true,
         }),
         Animated.timing(slide, {
-          toValue: 40,
-          duration: 160,
+          toValue: SHEET_HIDDEN_Y,
+          duration: 200,
           useNativeDriver: true,
         }),
       ]).start(({ finished }) => {
@@ -169,6 +172,8 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
   );
 
   const showAlert = useCallback((opts: AppAlertOptions) => {
+    // The sheet is pinned to the bottom of the root view, so an open keyboard would cover it.
+    Keyboard.dismiss();
     closingRef.current = false;
     setOptions({
       ...opts,
@@ -227,14 +232,25 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
     [animateOut, finishClose],
   );
 
+  const buttons = options?.buttons || [];
+  const cancelBtn = buttons.find((b) => b.style === "cancel");
+  const actionBtns = buttons.filter((b) => b.style !== "cancel");
+  // Info alerts with only a cancel-styled "OK" still need one tappable row.
+  const rows = actionBtns.length ? actionBtns : buttons;
+
+  /** X / backdrop / back button: behaves like the Cancel button when there is one. */
+  const dismiss = useCallback(() => {
+    close(cancelBtn?.onPress);
+  }, [close, cancelBtn]);
+
   useEffect(() => {
     if (!visible) return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      close();
+      dismiss();
       return true;
     });
     return () => sub.remove();
-  }, [visible, close]);
+  }, [visible, dismiss]);
 
   const handlePress = useCallback(
     (btn: AlertButton) => {
@@ -245,37 +261,9 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(() => ({ showAlert }), [showAlert]);
 
-  const buttons = options?.buttons || [];
-  const cancelBtn = buttons.find((b) => b.style === "cancel");
-  const actionBtns = buttons.filter((b) => b.style !== "cancel");
-
-  const iosActions = [...actionBtns].sort((a, b) => {
-    const rank = (s?: AlertButtonStyle) =>
-      s === "destructive" ? 0 : s === "primary" || s === "default" ? 1 : 2;
-    return rank(a.style) - rank(b.style);
-  });
-
-  // Two-option alerts → one row: [action | Cancel]. Explicit vertical opts out.
-  const isHorizontal =
-    options?.actionsLayout === "horizontal" ||
-    (options?.actionsLayout !== "vertical" && buttons.length === 2);
-
-  // Only fold Cancel into the row when there are exactly two choices
-  const cancelInRow = isHorizontal && buttons.length === 2 && !!cancelBtn;
-
-  const rowButtons = isHorizontal
-    ? cancelInRow
-      ? [...iosActions, cancelBtn]
-      : iosActions.length > 0
-        ? iosActions
-        : buttons
-    : [];
-
-  const showSeparateCancel = !!cancelBtn && !cancelInRow;
-
-  // Sit just above footer tabs when on tab screens; otherwise clear system nav
+  // Sit just above footer tabs on tab screens; otherwise clear system nav
   const sheetBottomPad =
-    tabClearance > 0 ? tabClearance : getSheetBottomPadding(stableBottom);
+    tabClearance > 0 ? 14 : getSheetBottomPadding(stableBottom);
 
   return (
     <AppAlertContext.Provider value={value}>
@@ -287,105 +275,64 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
             pointerEvents="box-none"
             accessibilityViewIsModal
           >
-            {/* Dim above footer tabs so nav stays readable */}
             <Animated.View
-              style={[
-                styles.dim,
-                { bottom: tabClearance, opacity },
-              ]}
+              style={[styles.dim, { bottom: tabClearance, opacity }]}
             >
-              <Pressable style={StyleSheet.absoluteFill} onPress={() => close()} />
+              <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} />
             </Animated.View>
 
             <Animated.View
               style={[
-                styles.sheetWrap,
+                styles.sheet,
                 {
+                  bottom: tabClearance,
                   paddingBottom: sheetBottomPad,
-                  opacity,
                   transform: [{ translateY: slide }],
                 },
               ]}
-              pointerEvents="box-none"
             >
-              {isHorizontal ? (
-                <View style={styles.sheetCard}>
-                  {(!!options?.title || !!options?.message) && (
-                    <View style={styles.sheetHeader}>
-                      {!!options?.title && (
-                        <Text style={styles.sheetTitle}>{options.title}</Text>
-                      )}
-                      {!!options?.message && (
-                        <Text style={styles.sheetMessage}>
-                          {options.message}
-                        </Text>
-                      )}
-                    </View>
-                  )}
-                  {(!!options?.title || !!options?.message) && (
-                    <View style={styles.dividerH} />
-                  )}
-                  <View style={styles.sheetRow}>
-                    {rowButtons.map((btn, i) => (
-                      <React.Fragment key={`${btn.text}-${i}`}>
-                        {i > 0 ? <View style={styles.dividerV} /> : null}
-                        <View style={styles.sheetRowCell}>
-                          <TouchableOpacity
-                            activeOpacity={0.55}
-                            onPress={() => handlePress(btn)}
-                            style={styles.sheetRowBtn}
-                          >
-                            {renderActionLabel(btn, true)}
-                          </TouchableOpacity>
-                        </View>
-                      </React.Fragment>
-                    ))}
-                  </View>
-                </View>
-              ) : (
-                <View style={styles.sheetCard}>
-                  {(!!options?.title || !!options?.message) && (
-                    <View style={styles.sheetHeader}>
-                      {!!options?.title && (
-                        <Text style={styles.sheetTitle}>{options.title}</Text>
-                      )}
-                      {!!options?.message && (
-                        <Text style={styles.sheetMessage}>
-                          {options.message}
-                        </Text>
-                      )}
-                    </View>
-                  )}
-                  {iosActions.map((btn, i) => {
-                    const showDivider =
-                      i > 0 || !!options?.title || !!options?.message;
-                    return (
-                      <React.Fragment key={`${btn.text}-${i}`}>
-                        {showDivider ? <View style={styles.dividerH} /> : null}
-                        <TouchableOpacity
-                          activeOpacity={0.55}
-                          onPress={() => handlePress(btn)}
-                          style={styles.sheetBtn}
-                        >
-                          <Text style={buttonTextStyle(btn.style)}>
-                            {btn.text}
-                          </Text>
-                        </TouchableOpacity>
-                      </React.Fragment>
-                    );
-                  })}
-                </View>
-              )}
-
-              {showSeparateCancel ? (
+              <View style={styles.header}>
+                <Text style={styles.title} numberOfLines={3}>
+                  {options?.title || ""}
+                </Text>
                 <TouchableOpacity
-                  activeOpacity={0.55}
-                  onPress={() => handlePress(cancelBtn)}
-                  style={styles.sheetCancel}
+                  style={styles.closeBtn}
+                  onPress={dismiss}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
                 >
-                  <Text style={styles.sheetCancelText}>{cancelBtn.text}</Text>
+                  <Ionicons name="close" size={20} color={C.accent} />
                 </TouchableOpacity>
+              </View>
+
+              {options?.message ? (
+                <View style={styles.infoCard}>
+                  <Text style={styles.infoText}>{options.message}</Text>
+                </View>
               ) : null}
+
+              <View style={styles.actionCard}>
+                {rows.map((btn, i) => {
+                  const color = buttonColor(btn.style);
+                  return (
+                    <React.Fragment key={`${btn.text}-${i}`}>
+                      {i > 0 ? <View style={styles.actionDivider} /> : null}
+                      <TouchableOpacity
+                        style={styles.actionRow}
+                        activeOpacity={0.55}
+                        onPress={() => handlePress(btn)}
+                        accessibilityRole="button"
+                      >
+                        <Ionicons name={defaultIcon(btn)} size={22} color={color} />
+                        <Text style={[styles.actionText, { color }]}>
+                          {btn.text}
+                        </Text>
+                      </TouchableOpacity>
+                    </React.Fragment>
+                  );
+                })}
+              </View>
             </Animated.View>
           </View>
         ) : null}
@@ -407,7 +354,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   host: {
-    ...StyleSheet.absoluteFillObject,
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 10000,
     elevation: 10000,
   },
@@ -418,106 +369,79 @@ const styles = StyleSheet.create({
     right: 0,
     backgroundColor: C.backdrop,
   },
-  sheetWrap: {
+  sheet: {
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: 0,
     width: "100%",
-    paddingHorizontal: 10,
-    gap: 8,
+    backgroundColor: C.sheet,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    gap: 10,
     zIndex: 1,
     elevation: 1,
   },
-  sheetCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
-    overflow: "hidden",
-  },
-  sheetHeader: {
-    paddingTop: 20,
-    paddingBottom: 16,
-    paddingHorizontal: 16,
+  header: {
+    minHeight: 44,
     alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 44,
   },
-  sheetTitle: {
-    fontSize: 17,
-    fontWeight: "600",
+  title: {
+    fontSize: 18,
+    fontWeight: "700",
     color: C.title,
     textAlign: "center",
-    letterSpacing: -0.2,
   },
-  sheetMessage: {
-    marginTop: 8,
-    fontSize: 13,
-    lineHeight: 18,
-    color: C.message,
-    textAlign: "center",
-  },
-  sheetBtn: {
-    minHeight: 56,
+  closeBtn: {
+    position: "absolute",
+    right: 4,
+    top: 0,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.closeBg,
     alignItems: "center",
     justifyContent: "center",
+  },
+  infoCard: {
+    backgroundColor: C.card,
+    borderRadius: 18,
     paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.divider,
+  },
+  infoText: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: C.message,
+  },
+  actionCard: {
     backgroundColor: C.card,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.divider,
   },
-  sheetBtnText: {
-    fontSize: 17,
-    fontWeight: "400",
-    color: C.accent,
-  },
-  sheetBtnDanger: {
-    color: C.danger,
-    fontWeight: "600",
-  },
-  sheetCancel: {
-    minHeight: 56,
-    borderRadius: 14,
-    backgroundColor: C.card,
+  actionRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 14,
+    minHeight: 54,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  sheetCancelText: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: C.accent,
-  },
-  dividerH: {
+  actionDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: C.divider,
+    marginLeft: 52,
   },
-  sheetRow: {
-    flexDirection: "row",
-    width: "100%",
-    minHeight: 56,
-    alignItems: "stretch",
-  },
-  sheetRowCell: {
+  actionText: {
     flex: 1,
-    width: 0,
-    minHeight: 56,
-  },
-  sheetRowBtn: {
-    flex: 1,
-    width: "100%",
-    minHeight: 56,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 8,
-    backgroundColor: C.card,
-  },
-  sheetRowBtnContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  sheetRowBtnLabel: {
     fontSize: 16,
-  },
-  dividerV: {
-    width: StyleSheet.hairlineWidth,
-    alignSelf: "stretch",
-    backgroundColor: C.divider,
+    fontWeight: "500",
   },
 });

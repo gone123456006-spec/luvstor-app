@@ -95,6 +95,7 @@ function WAInputField({
   maxLength,
   multiline,
   numberOfLines,
+  error,
 }: any) {
   const [focused, setFocused] = useState(false);
 
@@ -102,7 +103,11 @@ function WAInputField({
     <View style={fieldStyles.container}>
       <Text style={fieldStyles.label}>{label}</Text>
       <View
-        style={[fieldStyles.inputBox, focused && fieldStyles.inputBoxFocused]}
+        style={[
+          fieldStyles.inputBox,
+          focused && fieldStyles.inputBoxFocused,
+          !!error && fieldStyles.inputBoxError,
+        ]}
       >
         <TextInput
           style={[
@@ -121,6 +126,7 @@ function WAInputField({
           onBlur={() => setFocused(false)}
         />
       </View>
+      {error ? <Text style={fieldStyles.error}>{error}</Text> : null}
     </View>
   );
 }
@@ -148,6 +154,14 @@ const fieldStyles = StyleSheet.create({
   },
   inputBoxFocused: {
     borderColor: C.primary,
+  },
+  inputBoxError: {
+    borderColor: "#B3261E",
+  },
+  error: {
+    marginTop: 6,
+    fontSize: 13,
+    color: "#B3261E",
   },
   textInput: {
     fontSize: 16,
@@ -358,11 +372,15 @@ export default function CreateProfileScreen() {
           await markAuthUserProfileComplete();
         }
       }
-    } catch (e) {
-      console.error("Failed to save profile", e);
+    } catch (e: any) {
+      console.warn("Failed to save profile:", e?.message || e);
+      // 4xx = the server rejected a value; show why instead of blaming the network.
+      const status = Number(e?.status) || 0;
       Alert.alert(
         "Could not save profile",
-        "Check your internet connection and tap Complete again.",
+        status >= 400 && status < 500 && e?.message
+          ? String(e.message)
+          : "Check your internet connection and tap Finish again.",
       );
       return;
     }
@@ -409,9 +427,28 @@ export default function CreateProfileScreen() {
     );
   };
 
+  // Same limits the server enforces — catch them here, not after Finish.
+  const ageNum = Number(age);
+  const ageError =
+    age.trim() !== "" && !(ageNum >= 18 && ageNum <= 100)
+      ? "You must be 18 or older."
+      : null;
+  const heightNum = Number(height);
+  const heightError =
+    height.trim() !== "" && !(heightNum >= 100 && heightNum <= 250)
+      ? "Enter a height between 100 and 250 cm, or leave it empty."
+      : null;
+
   const canNext = () => {
     if (step === 0) return !!photo;
-    if (step === 1) return name.trim() !== "" && age.trim() !== "" && !!gender;
+    if (step === 1)
+      return (
+        name.trim() !== "" &&
+        age.trim() !== "" &&
+        !!gender &&
+        !ageError &&
+        !heightError
+      );
     if (step === 2)
       return bio.trim() !== "" && interests.length > 0 && !!relationshipGoal;
     return true;
@@ -467,6 +504,7 @@ export default function CreateProfileScreen() {
           placeholder="Your age"
           keyboardType="number-pad"
           maxLength={2}
+          error={ageError}
         />
         <WAInputField
           label="Height (cm)"
@@ -475,6 +513,7 @@ export default function CreateProfileScreen() {
           placeholder="Optional"
           keyboardType="number-pad"
           maxLength={3}
+          error={heightError}
         />
       </View>
 
