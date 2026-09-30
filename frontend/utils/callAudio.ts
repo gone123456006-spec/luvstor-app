@@ -10,7 +10,24 @@ import {
   NativeModules,
   Platform,
 } from 'react-native';
+import { isRunningInExpoGo } from 'expo';
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
+
+/** Expo Go ships neither InCallManager nor WebRTC natives — touching them throws. */
+const inExpoGo = isRunningInExpoGo();
+
+function getRTCAudioSession(): {
+  audioSessionDidActivate?: () => void;
+  audioSessionDidDeactivate?: () => void;
+} | null {
+  if (inExpoGo) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('react-native-webrtc').RTCAudioSession ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export type CallAudioRoute = 'bluetooth' | 'wired' | 'earpiece' | 'speaker';
 
@@ -117,6 +134,7 @@ function getInCallManager(): InCallManagerModule | null {
   if (getNativeCallAudio()) return null;
   if (inCallTried) return InCall;
   inCallTried = true;
+  if (inExpoGo || !NativeModules.InCallManager) return null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('react-native-incall-manager');
@@ -436,11 +454,9 @@ export async function stopCallAudio() {
   }
   if (Platform.OS === 'ios') {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { RTCAudioSession } = require('react-native-webrtc');
-      RTCAudioSession?.audioSessionDidDeactivate?.();
+      getRTCAudioSession()?.audioSessionDidDeactivate?.();
     } catch {
-      /* Expo Go / missing native */
+      /* missing native */
     }
   }
   try {
@@ -573,11 +589,9 @@ export async function reinforceCallAudio(_speakerOn?: boolean) {
   emitAudio();
   if (Platform.OS === 'ios') {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { RTCAudioSession } = require('react-native-webrtc');
-      RTCAudioSession?.audioSessionDidActivate?.();
+      getRTCAudioSession()?.audioSessionDidActivate?.();
     } catch {
-      /* Expo Go / missing native */
+      /* missing native */
     }
   }
 }

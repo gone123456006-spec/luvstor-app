@@ -157,18 +157,20 @@ export function mapGoogleSignInError(err: unknown): string {
   const mod = loadGoogleSignInModule();
   const raw = err instanceof Error ? err.message : String(err ?? '');
   const upper = raw.toUpperCase();
+  const code = String((err as { code?: unknown })?.code ?? '');
 
   if (
+    code === '10' ||
     upper.includes('DEVELOPER_ERROR') ||
-    upper.includes('CODE: 10') ||
-    upper.includes('ERROR_CODE: 10') ||
-    upper.includes('10:')
+    /\b(ERROR_)?CODE:\s*10\b/.test(upper) ||
+    /^10:/.test(raw.trim())
   ) {
     return (
       'Google Sign-In is misconfigured for this APK (DEVELOPER_ERROR).\n' +
       'Add this app’s signing SHA-1 in Firebase → Project settings → Your apps, ' +
       're-download google-services.json, then rebuild the APK.\n' +
-      'Run: cd frontend && node ./scripts/print-android-sha.js'
+      'Run: cd frontend && node ./scripts/print-android-sha.js' +
+      (raw ? `\n\nDetails: ${code ? `[${code}] ` : ''}${raw}` : '')
     );
   }
 
@@ -184,5 +186,6 @@ export function mapGoogleSignInError(err: unknown): string {
         break;
     }
   }
-  return err instanceof Error ? err.message : 'Google sign-in failed';
+  const detail = raw || 'Google sign-in failed';
+  return code ? `${detail} [code ${code}]` : detail;
 }

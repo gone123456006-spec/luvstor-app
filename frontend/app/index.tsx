@@ -2,7 +2,6 @@ import { Redirect } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from './../contexts/AuthContext';
-import { resolvePostLoginRoute } from '../utils/auth';
 import { consumePendingProfileId } from '../utils/pendingProfileLink';
 import { captureInstallReferrerOnce } from '../utils/pendingReferral';
 
@@ -13,12 +12,8 @@ export default function Index() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // Capture Play Store install referrer ASAP (once per install)
-      try {
-        await captureInstallReferrerOnce();
-      } catch {
-        /* ignore */
-      }
+      // Capture Play Store install referrer once per install; login awaits it
+      void captureInstallReferrerOnce().catch(() => {});
 
       if (!user) {
         if (!cancelled) setHref('/welcome');
@@ -30,10 +25,10 @@ export default function Index() {
           if (!cancelled) setHref(`/u/${pendingId}`);
           return;
         }
-        const route = await resolvePostLoginRoute(user);
-        if (!cancelled) setHref(route);
+        // The tabs gate decides Create profile / Enable location / retry
+        if (!cancelled) setHref('/(tabs)');
       } catch {
-        // Tabs gate re-verifies with the backend — never assume "new user" on error
+        // Tabs gate re-verifies (with a retry screen) — never assume "new user" on error
         if (!cancelled) setHref('/(tabs)');
       }
     })();

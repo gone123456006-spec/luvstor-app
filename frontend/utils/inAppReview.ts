@@ -1,6 +1,20 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as StoreReview from "expo-store-review";
 import { Platform } from "react-native";
+
+type StoreReviewModule = typeof import("expo-store-review");
+
+let storeReview: StoreReviewModule | null | undefined;
+
+/** Loaded lazily: older dev builds lack the native module and would crash on import. */
+function getStoreReview(): StoreReviewModule | null {
+  if (storeReview !== undefined) return storeReview;
+  try {
+    storeReview = require("expo-store-review") as StoreReviewModule;
+  } catch {
+    storeReview = null;
+  }
+  return storeReview;
+}
 
 /**
  * Google Play in-app review (star dialog inside the app).
@@ -59,6 +73,8 @@ function eligible(s: State, now = Date.now()) {
 
 async function maybeAsk(s: State) {
   if (Platform.OS !== "android" || asking || !eligible(s)) return;
+  const StoreReview = getStoreReview();
+  if (!StoreReview) return;
   asking = true;
   try {
     if (!(await StoreReview.isAvailableAsync())) return;

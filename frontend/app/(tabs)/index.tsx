@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -49,17 +50,24 @@ import {
 import {
     fetchSavedDiscoveryPrefs,
     fetchUserProfile,
+    getCachedUserProfile,
     NearbyUser,
-    nearbyListKm,
     searchUserByPublicId,
     sortNearbyByLane,
     uploadMyLocation,
 } from "../../utils/nearby";
 import { NEARBY_REFRESH_HINT } from "../../utils/nearbyFeedCache";
 import {
+    requestLocationAccess,
+    useLocationAccess,
+} from "../../utils/locationSetup";
+import {
     loadMore as loadMoreNearbyFeed,
+    NEARBY_AUTO_REFRESH_MS,
     patchUsers as patchNearbyUsers,
     refresh as refreshNearbyFeed,
+    refreshAuto as refreshNearbyAuto,
+    refreshIfStale as refreshNearbyIfStale,
     removeUser as removeNearbyUser,
 } from "../../utils/nearbyStore";
 import {
@@ -112,6 +120,39 @@ const DEFAULT_PREFS: DiscoveryPrefs = {
   radiusKm: 500, // Distance: All
   activeWithinMinutes: 0, // Login within: All
 };
+
+const LOCAL_PREFS_KEY = "luvstor.discoveryPrefs.";
+
+async function readLocalDiscoveryPrefs(
+  email: string,
+): Promise<DiscoveryPrefs | null> {
+  try {
+    const raw = await AsyncStorage.getItem(LOCAL_PREFS_KEY + email.toLowerCase());
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (!GENDER_OPTIONS.includes(p?.gender)) return null;
+    const radiusKm = Number(p.radiusKm);
+    if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
+    return {
+      gender: p.gender,
+      radiusKm,
+      activeWithinMinutes: Number(p.activeWithinMinutes) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeLocalDiscoveryPrefs(email: string, prefs: DiscoveryPrefs) {
+  try {
+    await AsyncStorage.setItem(
+      LOCAL_PREFS_KEY + email.toLowerCase(),
+      JSON.stringify(prefs),
+    );
+  } catch {
+    /* best effort */
+  }
+}
 
 /** Build relationship map from nearby API data (no extra requests per user). */
 function relationshipsFromUsers(users: NearbyUser[]) {
@@ -219,8 +260,6 @@ function NearbyListRowBase({
     return () => clearTimeout(t);
   }, [stagger, index, item.id, anim]);
 
-  const kmLabel = nearbyListKm(item);
-
   return (
     <Animated.View
       style={{
@@ -293,10 +332,6 @@ function NearbyListRowBase({
           </Text>
         </View>
 
-        {feedTab === "nearby" && kmLabel ? (
-          <Text style={styles.metaText}>{kmLabel} km</Text>
-        ) : null}
-
         <TouchableOpacity
           style={[
             styles.matchBtn,
@@ -344,8 +379,7 @@ export default function DiscoverScreen() {
     profileTick,
     lastProfileUpdate,
     notifUnreadCount,
-    presenceTick,
-    lastPresence,
+    subscribePresence,
     friendTick,
     lastFriendUpdate,
   } = useSocket();
@@ -429,6 +463,8 @@ export default function DiscoverScreen() {
   const fetchLockRef = React.useRef(false);
   const forYouUsersRef = React.useRef<NearbyUser[]>([]);
   const prefsKeyRef = React.useRef("");
+  /** Next filter change came from the server copy, not a tap in the filter sheet. */
+  const prefsFromServerRef = React.useRef(false);
 
   React.useEffect(() => {
     forYouUsersRef.current = forYouUsers;
@@ -469,6 +505,14 @@ export default function DiscoverScreen() {
       setLocationError(null);
     }
     (async () => {
+      // Filters saved on this phone start Nearby instantly; the server copy
+      // (another device / reinstall) is applied when it arrives.
+      const local = await readLocalDiscoveryPrefs(email);
+      if (cancelled) return;
+      if (local) {
+        setPrefs(local);
+        setPrefsHydrated(true);
+      }
       try {
         const token = await getAuthToken();
         if (!token) return;
@@ -478,10 +522,21 @@ export default function DiscoverScreen() {
           GENDER_OPTIONS.find(
             (g) => g.toLowerCase() === saved.gender.toLowerCase(),
           ) || DEFAULT_PREFS.gender;
-        setPrefs({
+        const next: DiscoveryPrefs = {
           gender,
           radiusKm: saved.radiusKm ?? DEFAULT_PREFS.radiusKm,
           activeWithinMinutes: saved.activeWithinMinutes,
+        };
+        setPrefs((p) => {
+          if (
+            p.gender === next.gender &&
+            p.radiusKm === next.radiusKm &&
+            p.activeWithinMinutes === next.activeWithinMinutes
+          ) {
+            return p;
+          }
+          prefsFromServerRef.current = true;
+          return next;
         });
       } catch {
         /* defaults are a fine fallback */
@@ -498,9 +553,28 @@ export default function DiscoverScreen() {
   // still holds, otherwise the next Discover request would save the old one back.
   const prefsRef = React.useRef(prefs);
   prefsRef.current = prefs;
+
+  React.useEffect(() => {
+    if (!prefsHydrated || !user?.email) return;
+    void writeLocalDiscoveryPrefs(user.email, prefs);
+  }, [prefsHydrated, prefs, user?.email]);
+
+  // New people appear without a pull while Discover stays open
   useFocusEffect(
     React.useCallback(() => {
       if (!prefsHydrated) return;
+      const iv = setInterval(
+        () => refreshNearbyAuto(prefsRef.current),
+        NEARBY_AUTO_REFRESH_MS,
+      );
+      return () => clearInterval(iv);
+    }, [prefsHydrated]),
+  );
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!prefsHydrated) return;
+      refreshNearbyIfStale(prefsRef.current);
       let cancelled = false;
       (async () => {
         try {
@@ -512,6 +586,7 @@ export default function DiscoverScreen() {
             (g) => g.toLowerCase() === saved.gender.toLowerCase(),
           );
           if (gender && gender !== prefsRef.current.gender) {
+            prefsFromServerRef.current = true;
             setPrefs((p) => ({ ...p, gender }));
           }
         } catch {
@@ -759,9 +834,11 @@ export default function DiscoverScreen() {
     if (!prefsHydrated || !user?.email) return;
     const changed = prefsKeyRef.current !== "" && prefsKeyRef.current !== prefsKey;
     prefsKeyRef.current = prefsKey;
+    const fromServer = prefsFromServerRef.current;
+    prefsFromServerRef.current = false;
     void refreshNearbyFeed({
       prefs,
-      reason: changed ? "prefs" : "start",
+      reason: changed ? (fromServer ? "sync" : "prefs") : "start",
     });
   }, [prefsHydrated, prefsKey, prefs, user?.email]);
 
@@ -818,10 +895,10 @@ export default function DiscoverScreen() {
   }, [profileTick, lastProfileUpdate]);
 
   // Instant online / offline reflection (Discover list + open profile)
-  React.useEffect(() => {
-    if (presenceTick === 0 || !lastPresence?.userId) return;
-    const uid = String(lastPresence.userId);
-    const online = !!lastPresence.isOnline;
+  React.useEffect(() => subscribePresence((presence) => {
+    if (!presence.userId) return;
+    const uid = String(presence.userId);
+    const online = !!presence.isOnline;
     const patch = (user: NearbyUser): NearbyUser =>
       user.id === uid ? { ...user, isOnline: online } : user;
     patchNearbyUsers((u) => {
@@ -837,7 +914,7 @@ export default function DiscoverScreen() {
       if (!prev || prev.id !== uid || !!prev.isOnline === online) return prev;
       return { ...prev, isOnline: online };
     });
-  }, [presenceTick, lastPresence]);
+  }), [subscribePresence]);
 
   // Realtime like / unlike / friends — update hearts without refresh
   React.useEffect(() => {
@@ -1145,6 +1222,41 @@ export default function DiscoverScreen() {
     await refreshNearbyFeed({ prefs, reason: "pull" });
   }, [feedTab, prefs, reloadForYou]);
 
+  // ── Nearby location prompt (permission revoked / denied / GPS off) ──
+  const { access: locationAccess, setAccess: setLocationAccess } =
+    useLocationAccess();
+  const locationOff =
+    locationAccess.status === "denied" ||
+    locationAccess.status === "blocked" ||
+    locationAccess.status === "services-off";
+  const [enablingLocation, setEnablingLocation] = React.useState(false);
+  const prevLocationStatusRef = React.useRef(locationAccess.status);
+
+  // Turned on (here, in Settings, or via GPS toggle) → push a fix and refresh Nearby.
+  React.useEffect(() => {
+    const prev = prevLocationStatusRef.current;
+    prevLocationStatusRef.current = locationAccess.status;
+    if (locationAccess.status !== "granted") return;
+    if (prev !== "denied" && prev !== "blocked" && prev !== "services-off") {
+      return;
+    }
+    void (async () => {
+      const token = await getAuthToken();
+      if (token) await uploadMyLocation(token, { timeoutMs: 10000 });
+      await refreshNearbyFeed({ prefs: prefsRef.current, reason: "pull" });
+    })();
+  }, [locationAccess.status]);
+
+  const onEnableLocation = React.useCallback(async () => {
+    if (enablingLocation) return;
+    setEnablingLocation(true);
+    try {
+      setLocationAccess(await requestLocationAccess());
+    } finally {
+      setEnablingLocation(false);
+    }
+  }, [enablingLocation, setLocationAccess]);
+
   // ── Open profile modal ─────────────────────────────────────────
   const openProfile = async (user: NearbyUser) => {
     dismissSearchKeyboard();
@@ -1155,8 +1267,20 @@ export default function DiscoverScreen() {
       photo: user.photo || "",
     });
     const rel = relationshipById[user.id];
+    const saved = getCachedUserProfile(user.id);
     setSelectedUser({
       ...user,
+      // List rows carry a slim profile; fill gaps from the last full profile seen.
+      ...(saved
+        ? {
+            photos: user.photos?.length ? user.photos : saved.photos,
+            coverPhoto: user.coverPhoto || saved.coverPhoto,
+            bio: user.bio || saved.bio,
+            interests: user.interests?.length ? user.interests : saved.interests,
+            height: user.height ?? saved.height,
+            relationshipGoal: user.relationshipGoal || saved.relationshipGoal,
+          }
+        : null),
       iLiked: rel?.iLiked ?? user.iLiked,
       areFriends: rel?.areFriends ?? user.areFriends,
       theyLiked: rel?.theyLiked ?? user.theyLiked,
@@ -1347,7 +1471,22 @@ export default function DiscoverScreen() {
     feedTab === "nearby" ? nearbyFeed.refreshing : refreshing;
   const listLoadingMore =
     feedTab === "nearby" ? nearbyFeed.loadingMore : loadingMore;
-  const listHint = feedTab === "nearby" ? nearbyFeed.hint : locationError;
+  const showLocationPrompt = feedTab === "nearby" && locationOff;
+  const isLocationHint = (hint: string | null | undefined) =>
+    !!hint &&
+    hint !== NEARBY_REFRESH_HINT &&
+    /location|gps|permission/i.test(hint);
+  const nearbyHint =
+    showLocationPrompt && isLocationHint(nearbyFeed.hint) ? null : nearbyFeed.hint;
+  const nearbyErrorHint =
+    nearbyHint && !isLocationHint(nearbyHint)
+      ? nearbyFeed.error === "offline"
+        ? "You're offline — showing saved people"
+        : nearbyFeed.error === "server"
+          ? "Connection problem — retrying…"
+          : nearbyHint
+      : nearbyHint;
+  const listHint = feedTab === "nearby" ? nearbyErrorHint : locationError;
 
   const activeUsers = feedTab === "for_you" ? forYouUsers : nearbyUsers;
 
@@ -1410,21 +1549,52 @@ export default function DiscoverScreen() {
         </View>
       );
     }
+    if (feedTab === "nearby" && showLocationPrompt) {
+      return (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="location-outline" size={48} color={D.muted} />
+          <Text style={styles.emptyTitle}>No one to show yet</Text>
+          <Text style={styles.emptyText}>
+            Nearby people appear here once Location is on.
+          </Text>
+        </View>
+      );
+    }
     if (feedTab === "nearby" && nearbyFeed.hint) {
-      const isRefreshHint = nearbyFeed.hint === NEARBY_REFRESH_HINT;
-      const isLocation =
-        !isRefreshHint && /location|gps|permission/i.test(nearbyFeed.hint);
+      const isLocation = isLocationHint(nearbyFeed.hint);
+      const offline = !isLocation && nearbyFeed.error === "offline";
+      const serverDown = !isLocation && nearbyFeed.error === "server";
       return (
         <View style={styles.emptyContainer}>
           <Ionicons
-            name={isLocation ? "location-outline" : "refresh"}
+            name={
+              isLocation
+                ? "location-outline"
+                : offline
+                  ? "cloud-offline-outline"
+                  : serverDown
+                    ? "sync-outline"
+                    : "refresh"
+            }
             size={48}
             color={D.muted}
           />
           <Text style={styles.emptyTitle}>
-            {isLocation ? "Location Needed" : "Couldn't refresh"}
+            {isLocation
+              ? "Location Needed"
+              : offline
+                ? "You're offline"
+                : serverDown
+                  ? "Connection problem — retrying…"
+                  : "Couldn't refresh"}
           </Text>
-          <Text style={styles.emptyText}>{nearbyFeed.hint}</Text>
+          <Text style={styles.emptyText}>
+            {offline
+              ? "Nearby people will load automatically when you're back online."
+              : serverDown
+                ? "We'll show nearby people as soon as the server responds."
+                : nearbyFeed.hint}
+          </Text>
           <TouchableOpacity
             style={styles.retryBtn}
             onPress={() => {
@@ -1715,6 +1885,32 @@ export default function DiscoverScreen() {
             </Pressable>
           )}
         </View>
+
+        {showLocationPrompt && !searchedUser ? (
+          <View style={styles.locationPrompt}>
+            <Ionicons name="location-outline" size={18} color={D.purple} />
+            <Text style={styles.locationPromptText} numberOfLines={2}>
+              {locationAccess.status === "services-off"
+                ? "Turn on Location to see Nearby users"
+                : "Enable Location to see Nearby users"}
+            </Text>
+            <TouchableOpacity
+              style={styles.locationPromptBtn}
+              onPress={onEnableLocation}
+              disabled={enablingLocation}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              {enablingLocation ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.locationPromptBtnText}>
+                  {locationAccess.status === "blocked" ? "Settings" : "Enable"}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {/* ── List / horizontal loading rows ── */}
         {(listLoading || !prefsHydrated) && displayUsers.length === 0 ? (
@@ -2289,6 +2485,35 @@ const styles = StyleSheet.create({
   feedTabTextActive: {
     color: D.purple,
   },
+  locationPrompt: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingLeft: 12,
+    paddingRight: 6,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: D.purpleSoft,
+  },
+  locationPromptText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: D.black,
+  },
+  locationPromptBtn: {
+    minWidth: 72,
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: D.purple,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  locationPromptBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
   refreshHint: {
     flexDirection: "row",
     alignItems: "center",

@@ -152,7 +152,7 @@ function ensureAndroidColors() {
   );
   if (!fs.existsSync(path.dirname(colorsPath))) return;
 
-  const splashBg = "#5A2FC7";
+  const splashBg = "#1A0136";
   const iconBg =
     process.env.EXPO_PUBLIC_ICON_BACKGROUND ||
     "#5A2FC7";
@@ -315,6 +315,15 @@ function patchAndroidGradleConfig() {
         "systemProp.org.gradle.internal.repository.initial.backoff=",
         "systemProp.org.gradle.internal.repository.initial.backoff=2000\n",
       ],
+      // R8 shrink + obfuscation — Play flags DEX optimisation below 25%
+      [
+        "android.enableMinifyInReleaseBuilds=",
+        "android.enableMinifyInReleaseBuilds=true\n",
+      ],
+      [
+        "android.enableShrinkResourcesInReleaseBuilds=",
+        "android.enableShrinkResourcesInReleaseBuilds=true\n",
+      ],
     ];
     let changed = false;
     for (const [key, line] of markers) {
@@ -331,6 +340,14 @@ function patchAndroidGradleConfig() {
         /org\.gradle\.jvmargs=([^\r\n]*)/,
         (m, jvmArgs) =>
           `org.gradle.jvmargs=${jvmArgs} -Dhttps.protocols=TLSv1.2,TLSv1.3 -Djdk.tls.client.protocols=TLSv1.2,TLSv1.3`,
+      );
+      changed = true;
+    }
+    // R8 on the full app needs more than the 2 GB template heap
+    if (/-Xmx2048m -XX:MaxMetaspaceSize=512m/.test(props)) {
+      props = props.replace(
+        "-Xmx2048m -XX:MaxMetaspaceSize=512m",
+        "-Xmx4096m -XX:MaxMetaspaceSize=1024m",
       );
       changed = true;
     }

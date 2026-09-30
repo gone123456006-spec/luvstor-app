@@ -3,7 +3,7 @@
  * 10 tokens → chat session (duration depends on subscription tier).
  * Free tier: per-conversation 2h session — initiator AND replier each pay 10.
  * Paid tiers: global session across chats.
- * Anti-spam rules: max 10 consecutive messages without reply, can't start new conversations when waiting.
+ * Anti-spam rule: max 10 consecutive messages without reply, per conversation.
  * Server-time only.
  */
 const mongoose = require('mongoose');
@@ -563,34 +563,9 @@ async function canSendMessage(senderId, receiverId, messageType = 'text') {
     };
   }
 
-  // 5. Check if user is waiting for reply in ANY OTHER conversation
-  const waitingInOtherConv = await ConversationState.findOne({
-    userId: senderId,
-    otherUserId: { $ne: receiverId },
-    waitingForReply: true,
-  });
+  // The 10-message wait applies only to this conversation — other chats stay open.
 
-  if (waitingInOtherConv) {
-    // User is blocked from starting new conversations or sending first messages
-    // Check if the receiver has ever sent a message to this user in this conversation
-    const Message = require('../models/Message');
-    const hasReceivedMessage = await Message.findOne({
-      roomId: room,
-      senderId: receiverId,
-      receiverId: senderId,
-    });
-
-    if (!hasReceivedMessage) {
-      // This is a new conversation or user hasn't received any message from receiver
-      return {
-        ok: false,
-        code: 'WAITING_FOR_REPLY_OTHER',
-        message: 'You cannot start new conversations while waiting for a reply in another conversation. Please wait for a response first.',
-      };
-    }
-  }
-
-  // 6. All checks passed
+  // 5. All checks passed
   return {
     ok: true,
     consecutiveCount: convState.consecutiveMessages,
@@ -688,7 +663,7 @@ async function getConversationRestrictions(userId) {
       consecutiveMessages: c.consecutiveMessages,
       lastMessageAt: c.lastMessageAt,
     })),
-    canStartNewConversations: !hasBlockedConversations,
+    canStartNewConversations: true,
   };
 }
 

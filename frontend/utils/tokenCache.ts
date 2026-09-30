@@ -11,6 +11,9 @@ let inflight: Promise<TokenBalanceSnapshot | null> | null = null;
 
 const CACHE_TTL_MS = 60_000;
 
+/** Opens the Tokens tab scrolled to the "Get more tokens" packs. */
+export const TOKEN_PACKS_HREF = '/(tabs)/token?section=packs';
+
 export function getCachedTokenBalance(): TokenBalanceSnapshot | null {
   if (!cached) return null;
   if (Date.now() - cached.at > CACHE_TTL_MS) return null;

@@ -170,11 +170,12 @@ async function permanentlyDeleteAccounts() {
 }
 
 /**
- * Check for deactivated accounts on login and restore if within grace period
+ * Check for deactivated accounts on login and restore if within grace period.
+ * Pass the already-loaded user document to skip a second lookup.
  */
-async function checkAndRestoreOnLogin(userId) {
+async function checkAndRestoreOnLogin(userId, loadedUser = null) {
   try {
-    const user = await User.findById(userId);
+    const user = loadedUser || (await User.findById(userId));
     if (!user) return null;
 
     if (user.isDeactivated && user.deletionScheduledAt) {
@@ -192,17 +193,19 @@ async function checkAndRestoreOnLogin(userId) {
       user.reminderSentAt = null;
       await user.save();
 
-      // Send restoration email
-      try {
-        await sendOTPEmail(
-          user.email,
-          null,
-          `Account Restored`,
-          `Hi ${user.name || 'there'},\n\nWelcome back! Your Luvstor account has been automatically restored because you logged in within the 7-day grace period.\n\nAll your matches, chats, and profile data are intact. You can continue using Luvstor as before.\n\nBest regards,\nLuvstor Team`
-        );
-      } catch (emailErr) {
-        console.error('Failed to send restoration email:', emailErr);
-      }
+      // Restoration email must not hold up the login response
+      Promise.resolve()
+        .then(() =>
+          sendOTPEmail(
+            user.email,
+            null,
+            `Account Restored`,
+            `Hi ${user.name || 'there'},\n\nWelcome back! Your Luvstor account has been automatically restored because you logged in within the 7-day grace period.\n\nAll your matches, chats, and profile data are intact. You can continue using Luvstor as before.\n\nBest regards,\nLuvstor Team`
+          ),
+        )
+        .catch((emailErr) => {
+          console.error('Failed to send restoration email:', emailErr);
+        });
 
       console.log(`[Auto Restore] Restored account for user ${user.email}`);
       return { restored: true, user };

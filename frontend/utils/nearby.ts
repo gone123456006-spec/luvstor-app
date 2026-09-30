@@ -1,5 +1,8 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { apiRequest } from './api';
+import { resolveMediaUrl } from './media';
 import { resolveShowMe } from './showMe';
 import { isLiveSubscriptionBadge } from './subscriptions';
 import { userFacingMessage } from './userFacingError';
@@ -283,7 +286,9 @@ async function uploadMyLocationNow(
       };
     }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    // Only read the permission: the OS dialog is shown from explicit taps
+    // (Enable Location screen / Nearby prompt), never from background feed loads.
+    const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') {
       return {
         error: 'Location permission denied. Enable it in Settings, then tap Retry.',
@@ -606,8 +611,66 @@ export async function searchUserByPublicId(
   }
 }
 
+const PROFILE_CACHE_PREFIX = 'luvstor.peerProfileFull.';
+const PROFILE_CACHE_MAX = 200;
+const profileMemory = new Map<string, NearbyUser>();
+
+function rememberFullProfile(user: NearbyUser) {
+  const id = String(user.id || '');
+  if (!id) return;
+  profileMemory.delete(id);
+  profileMemory.set(id, user);
+  if (profileMemory.size > PROFILE_CACHE_MAX) {
+    const oldest = profileMemory.keys().next().value;
+    if (oldest) profileMemory.delete(oldest);
+  }
+  AsyncStorage.setItem(PROFILE_CACHE_PREFIX + id, JSON.stringify(user)).catch(() => {});
+  prefetchProfileMedia(user);
+}
+
+function prefetchProfileMedia(user: Partial<NearbyUser>) {
+  const uris = [user.photo, user.coverPhoto, ...(user.photos || [])]
+    .map((u) => resolveMediaUrl(u || ''))
+    .filter((u): u is string => !!u);
+  for (const uri of uris) Image.prefetch(uri, 'memory-disk').catch(() => {});
+}
+
+/** Last profile seen for this user (this session) — for instant display. */
+export function getCachedUserProfile(userId: string): NearbyUser | null {
+  return profileMemory.get(String(userId || '')) || null;
+}
+
+async function readCachedUserProfile(userId: string): Promise<NearbyUser | null> {
+  const id = String(userId || '');
+  const hit = profileMemory.get(id);
+  if (hit) return hit;
+  try {
+    const raw = await AsyncStorage.getItem(PROFILE_CACHE_PREFIX + id);
+    if (!raw) return null;
+    const user = JSON.parse(raw) as NearbyUser;
+    if (!user?.id) return null;
+    profileMemory.set(id, user);
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+/** Save profile photos to disk ahead of time so they show instantly / offline. */
+export function prefetchAvatars(photos: (string | null | undefined)[], limit = 40) {
+  let n = 0;
+  for (const raw of photos) {
+    if (n >= limit) break;
+    const uri = resolveMediaUrl(raw || '');
+    if (!uri) continue;
+    n += 1;
+    Image.prefetch(uri, 'memory-disk').catch(() => {});
+  }
+}
+
 /**
- * Fetch another user's public profile (includes background photos gallery)
+ * Fetch another user's public profile (includes background photos gallery).
+ * Offline / server error → last saved copy, so profiles still open.
  */
 export async function fetchUserProfile(
   token: string,
@@ -627,9 +690,12 @@ export async function fetchUserProfile(
       ...mapNearbyUser({ ...data, id: data.id || data._id || userId }),
       lastSeen: data.lastSeen,
     };
+    rememberFullProfile(user);
 
     return { user, error: null };
   } catch (err: any) {
+    const cached = await readCachedUserProfile(userId);
+    if (cached) return { user: cached, error: null };
     return {
       user: null,
       error: userFacingMessage(err, "Couldn't load this profile. Try again."),

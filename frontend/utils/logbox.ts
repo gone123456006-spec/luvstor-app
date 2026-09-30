@@ -12,4 +12,11 @@ if (__DEV__) {
     '`expo-notifications` functionality is not fully supported in Expo Go',
     "expo-notifications: Custom sound 'default' not found",
   ]);
+} else {
+  // Release builds: chatty socket / chat logs cost JS time on low-end phones.
+  // warn / error stay on for crash reports.
+  const noop = () => {};
+  console.log = noop;
+  console.info = noop;
+  console.debug = noop;
 }

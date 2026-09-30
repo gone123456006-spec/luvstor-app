@@ -38,6 +38,26 @@ export async function claimReferral(
   }) as Promise<{ success: boolean; ok?: boolean; reason?: string }>;
 }
 
+/** Backup invite attribution after sign-in — never blocks navigation. */
+export function claimPendingReferralInBackground(token: string): void {
+  void (async () => {
+    try {
+      const { peekPendingReferralCode, consumePendingReferralCode } =
+        await import('./pendingReferral');
+      const code = await peekPendingReferralCode();
+      if (!code) return;
+      try {
+        await claimReferral(token, code);
+      } catch {
+        /* already attributed / not new / etc. */
+      }
+      await consumePendingReferralCode();
+    } catch {
+      /* non-blocking */
+    }
+  })();
+}
+
 export function buildReferralShareMessage(opts: {
   shareUrl: string;
   rewardTokens: number;

@@ -5,6 +5,7 @@ import {
   setChatListCache,
 } from './chatListCache';
 import {
+  getRememberedPeerProfile,
   isUsableName,
   isUsablePhoto,
   mergePeerProfile,
@@ -102,6 +103,11 @@ export function applyChatListPreviewPatch(
     snapshot.requestRows.find((r) => r.otherId === otherId) ||
     archivedExisting;
 
+  // Mark-read / profile-only patches must never invent a blank "User · Message" row.
+  if (!existing && !(touchPreview && lastMessage)) {
+    return snapshot;
+  }
+
   const unreadFor = (prev: number) => {
     if (patch.resetUnread) return 0;
     if (patch.incrementUnread) return prev + 1;
@@ -109,12 +115,13 @@ export function applyChatListPreviewPatch(
   };
 
   // Merge peer identity keyed by otherUserId — never wipe good name/DP with empty
+  const remembered = getRememberedPeerProfile(otherId);
   const peer = mergePeerProfile(
     otherId,
     {
-      name: existing?.name,
-      photo: existing?.photo,
-      gender: existing?.gender,
+      name: isUsableName(existing?.name) ? existing?.name : remembered?.name,
+      photo: isUsablePhoto(existing?.photo) ? existing?.photo : remembered?.photo,
+      gender: existing?.gender || remembered?.gender,
     },
     otherId,
     {

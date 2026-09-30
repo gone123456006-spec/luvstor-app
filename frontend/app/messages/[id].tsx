@@ -90,6 +90,7 @@ import {
   UPLOAD_FETCH_TIMEOUT_MS,
 } from "../../utils/api";
 import { durableMediaPathFromUrl, resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
+import { TOKEN_PACKS_HREF } from "../../utils/tokenCache";
 import {
   getRememberedPeerProfile,
   isUsableName,
@@ -1369,8 +1370,7 @@ export default function MessageScreen() {
     lastFriendUpdate,
     profileTick,
     lastProfileUpdate,
-    presenceTick,
-    lastPresence,
+    subscribePresence,
     conversationDeletedTick,
     lastConversationDeleted,
     bumpChatPreview,
@@ -1417,7 +1417,6 @@ export default function MessageScreen() {
   const [replyingTo, setReplyingTo] = useState<ChatMsg | null>(null);
   const [selectedMessages, setSelectedMessages] = useState<string[]>([]);
   const [chatAccess, setChatAccess] = useState<ChatAccessStatus | null>(null);
-  const [remainingMs, setRemainingMs] = useState(0);
   const [conversationStatus, setConversationStatus] = useState<{
     canSend: boolean;
     code?: string;
@@ -1686,8 +1685,15 @@ export default function MessageScreen() {
   }, [messages.length, scrollToLatest]);
 
   const applyChatAccess = (status: ChatAccessStatus) => {
-    setChatAccess(status);
-    setRemainingMs(status.remainingMs || 0);
+    // The minute poll usually returns the same status — skip the re-render
+    // (remainingMs always differs and nothing renders it, so it's ignored).
+    setChatAccess((prev) =>
+      prev &&
+      JSON.stringify({ ...prev, remainingMs: 0 }) ===
+        JSON.stringify({ ...status, remainingMs: 0 })
+        ? prev
+        : status,
+    );
   };
 
   const fetchConversationStatus = async () => {
@@ -2237,7 +2243,7 @@ export default function MessageScreen() {
         {
           text: "Buy Tokens",
           style: "primary",
-          onPress: () => router.push("/(tabs)/token"),
+          onPress: () => router.push(TOKEN_PACKS_HREF as any),
         },
       ],
     });
@@ -2651,38 +2657,35 @@ export default function MessageScreen() {
     }, [id]),
   );
 
+  // One timer at session expiry — a per-second tick re-rendered this whole
+  // screen every second and stuttered scrolling on low-end phones.
   useEffect(() => {
-    if (chatAccess?.unlimitedChat) {
-      setRemainingMs(chatAccess.remainingMs || 0);
-      return;
-    }
-    if (!chatAccess?.hasActiveSession || !chatAccess.sessionExpiresAt) {
-      setRemainingMs(0);
-      return;
-    }
+    if (chatAccess?.unlimitedChat) return;
+    if (!chatAccess?.hasActiveSession || !chatAccess.sessionExpiresAt) return;
     const expires = new Date(chatAccess.sessionExpiresAt).getTime();
-    const tick = () => {
-      const left = Math.max(0, expires - Date.now());
-      // Options Modal re-renders on every setState — skipping while open
-      // stops the continuous full-page blink on Android.
-      if (menuOpenRef.current) return;
-      setRemainingMs(left);
-      if (left <= 0) {
-        setChatAccess((prev) =>
-          prev && !prev.unlimitedChat
-            ? {
-                ...prev,
-                hasActiveSession: false,
-                remainingMs: 0,
-                canChat: (prev.tokenBalance ?? 0) >= (prev.tokenCost ?? 10),
-              }
-            : prev,
-        );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expire = () => {
+      const left = expires - Date.now();
+      // Options Modal re-renders on every setState — wait until it closes
+      if (left > 0 || menuOpenRef.current) {
+        timer = setTimeout(expire, left > 0 ? Math.min(left, 2 ** 31 - 1) : 1000);
+        return;
       }
+      setChatAccess((prev) =>
+        prev && !prev.unlimitedChat
+          ? {
+              ...prev,
+              hasActiveSession: false,
+              remainingMs: 0,
+              canChat: (prev.tokenBalance ?? 0) >= (prev.tokenCost ?? 10),
+            }
+          : prev,
+      );
     };
-    tick();
-    const iv = setInterval(tick, 1000);
-    return () => clearInterval(iv);
+    expire();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [
     chatAccess?.sessionExpiresAt,
     chatAccess?.hasActiveSession,
@@ -3599,7 +3602,6 @@ export default function MessageScreen() {
                   }
                 : null,
             );
-            setRemainingMs(0);
           }
           showInsufficientTokensPopup(payload?.error || payload?.message);
         } else if (
@@ -3755,9 +3757,9 @@ export default function MessageScreen() {
   );
 
   // Also reflect global presence from SocketContext (instant, even before chat:join)
-  useEffect(() => {
-    if (presenceTick === 0 || !lastPresence?.userId) return;
-    if (String(lastPresence.userId) !== String(id)) return;
+  useEffect(() => subscribePresence((presence) => {
+    if (!presence.userId) return;
+    if (String(presence.userId) !== String(id)) return;
     // Don't rebuild Options every presence tick — causes loop blink
     if (menuOpenRef.current) return;
     const fs = friendshipStatusRef.current;
@@ -3765,14 +3767,12 @@ export default function MessageScreen() {
       setOtherUserOnline(false);
       return;
     }
-    if (lastPresence.isOnline) {
+    if (presence.isOnline) {
       applyPeerOnline();
     } else {
-      applyPeerOffline(
-        lastPresence.lastSeen ? String(lastPresence.lastSeen) : null,
-      );
+      applyPeerOffline(presence.lastSeen ? String(presence.lastSeen) : null);
     }
-  }, [presenceTick, lastPresence, id, privacyHidden, applyPeerOnline, applyPeerOffline]);
+  }), [subscribePresence, id, privacyHidden, applyPeerOnline, applyPeerOffline]);
 
   const dismissChatKeyboard = useCallback(() => {
     Keyboard.dismiss();
@@ -5026,18 +5026,6 @@ export default function MessageScreen() {
                 <Text style={styles.blockedText}>
                   Please wait for the other user to reply before sending more
                   messages
-                </Text>
-              </View>
-            )}
-          {!friendshipStatus?.iBlocked &&
-            !friendshipStatus?.theyBlocked &&
-            !conversationStatus.canSend &&
-            conversationStatus.code === "WAITING_FOR_REPLY_OTHER" && (
-              <View style={styles.blockedBar}>
-                <Ionicons name="hand-left" size={16} color="#f44336" />
-                <Text style={styles.blockedText}>
-                  You cannot start new conversations while waiting for a reply
-                  in another chat
                 </Text>
               </View>
             )}

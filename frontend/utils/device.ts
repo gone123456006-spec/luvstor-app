@@ -93,15 +93,16 @@ async function getStableHardwareDeviceId(): Promise<string | null> {
  */
 export async function getOrCreateDeviceId(): Promise<string> {
   const hardwareId = await getStableHardwareDeviceId();
+  const existing = await readPersistedDeviceId();
   if (hardwareId) {
-    await persistDeviceId(hardwareId);
+    // Keystore-backed SecureStore is slow or broken on some Android phones —
+    // only write when the value actually changes.
+    if (existing !== hardwareId) await persistDeviceId(hardwareId);
     return hardwareId;
   }
 
-  const existing = await readPersistedDeviceId();
   // Prefer SecureStore/AsyncStorage only when hardware is unavailable (web / rare)
   if (existing && existing.length >= 8) {
-    await persistDeviceId(existing);
     return existing;
   }
 

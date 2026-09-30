@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import { getOrCreateDeviceId } from './device';
@@ -124,6 +125,20 @@ export const AUTH_FETCH_TIMEOUT_MS = 45_000;
 /** Uploads move real bytes over mobile data — they need more room than reads. */
 export const UPLOAD_FETCH_TIMEOUT_MS = 60_000;
 
+const WARM_UP_INTERVAL_MS = 60_000;
+let lastWarmUpAt = 0;
+
+/**
+ * Fire-and-forget ping so a sleeping Render instance starts booting while the
+ * user is still typing or picking a Google account, not after they tap.
+ */
+export function warmUpServer(): void {
+  const now = Date.now();
+  if (now - lastWarmUpAt < WARM_UP_INTERVAL_MS) return;
+  lastWarmUpAt = now;
+  fetch(`${getApiBase()}/health`, { method: 'GET' }).catch(() => undefined);
+}
+
 /**
  * `fetch` that always settles. Anything that talks to the API must go through
  * this (or `apiRequest`) — a bare `fetch` can hang until the OS TCP timeout,
@@ -184,6 +199,30 @@ async function apiFetch(
   return apiFetchUncoalesced(path, options, timeoutMs);
 }
 
+function bearerFrom(headers: RequestInit['headers']): string | null {
+  const raw = (headers as Record<string, string> | undefined)?.Authorization || '';
+  return raw.startsWith('Bearer ') ? raw.slice(7) : null;
+}
+
+async function isCurrentToken(token: string): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(AUTH_TOKEN_KEY)) === token;
+  } catch {
+    return false;
+  }
+}
+
+/** Only replace the token the request was made with — never a newer session's. */
+async function storeRenewedToken(usedToken: string, renewed: string): Promise<void> {
+  try {
+    if (await isCurrentToken(usedToken)) {
+      await AsyncStorage.setItem(AUTH_TOKEN_KEY, renewed);
+    }
+  } catch {
+    /* next renewal retries */
+  }
+}
+
 async function apiFetchUncoalesced(
   path: string,
   options: RequestInit = {},
@@ -191,6 +230,10 @@ async function apiFetchUncoalesced(
 ) {
   const url = `${getApiBase()}${path}`;
   const res = await fetchWithTimeout(url, options, timeoutMs);
+  const usedToken = bearerFrom(options.headers);
+
+  const renewed = res.headers?.get?.('x-auth-token');
+  if (renewed && usedToken) void storeRenewedToken(usedToken, renewed);
 
   let data: Record<string, unknown> = {};
   try {
@@ -203,7 +246,11 @@ async function apiFetchUncoalesced(
     const code = typeof data.code === 'string' ? data.code : undefined;
     const message = (data.error as string) || `Request failed (${res.status})`;
 
-    if (code === 'DEVICE_MISMATCH' || (res.status === 401 && code === 'DEVICE_MISMATCH')) {
+    if (code === 'DEVICE_MISMATCH') {
+      onSessionInvalid?.(code);
+    } else if (code === 'INVALID_TOKEN' && usedToken && (await isCurrentToken(usedToken))) {
+      // Expired / revoked session: send the user to login instead of leaving
+      // every screen silently failing.
       onSessionInvalid?.(code);
     }
 

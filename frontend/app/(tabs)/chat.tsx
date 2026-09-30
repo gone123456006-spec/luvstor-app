@@ -66,6 +66,8 @@ import {
 } from "../../utils/friends";
 import {
     fetchUserProfile,
+    getCachedUserProfile,
+    prefetchAvatars,
     NearbyUser,
     uploadMyLocation,
 } from "../../utils/nearby";
@@ -139,10 +141,7 @@ function mapNearbyToOnlineRows(
         : person.theyLiked
           ? "request"
           : "stranger";
-      const subtitle =
-        person.distanceKm && person.distanceKm !== "?"
-          ? `Active now · ${person.distanceKm} km away`
-          : "Active now";
+      const subtitle = "Active now";
       return {
         otherId: String(person.id || person._id),
         name: person.name || "User",
@@ -259,6 +258,14 @@ function archivedApiToItem(c: any, myId: string): ConversationItem | null {
 
 export type { ConversationItem };
 
+function isPlaceholderRow(row: ConversationItem): boolean {
+  return (
+    !isUsableName(row.name) &&
+    !isUsablePhoto(row.photo) &&
+    !getRememberedPeerProfile(row.otherId)
+  );
+}
+
 type FilterKey = ChatFilterKey;
 
 function apiConversationToItem(c: any, myId: string): ConversationItem | null {
@@ -357,8 +364,7 @@ export default function ChatScreen() {
     conversationDeletedTick,
     lastConversationDeleted,
     refreshUnread,
-    presenceTick,
-    lastPresence,
+    subscribePresence,
     profileTick,
     lastProfileUpdate,
     markChatAsRead,
@@ -548,9 +554,11 @@ export default function ChatScreen() {
       }
       for (const row of prev) {
         if (skip.has(row.otherId) || deleted.has(row.otherId)) continue;
-        if (!map.has(row.otherId)) {
-          map.set(row.otherId, row);
-        }
+        if (map.has(row.otherId)) continue;
+        // Local-only row the server doesn't know and we can't identify: a stale
+        // placeholder from an old mark-read patch — drop it.
+        if (isPlaceholderRow(row)) continue;
+        map.set(row.otherId, row);
       }
       return Array.from(map.values()).sort(
         (a, b) => b.lastMessageAt - a.lastMessageAt,
@@ -591,7 +599,11 @@ export default function ChatScreen() {
             }
             return next;
           });
-        setConversations(fix(hydrated.conversations));
+        setConversations(
+          fix(hydrated.conversations).filter(
+            (row) => !(isPlaceholderRow(row) && row.lastMessage === "Message"),
+          ),
+        );
         setFriendRows(fix(hydrated.friendRows));
         setRequestRows(fix(hydrated.requestRows).filter(isIncomingRequestRow));
         // Never restore Online tab from disk — it goes stale and shows fake "Online now"
@@ -987,6 +999,15 @@ export default function ChatScreen() {
           loaded: true,
         });
 
+        // DPs on disk ahead of time → rows show photos instantly and offline.
+        InteractionManager.runAfterInteractions(() => {
+          prefetchAvatars(
+            [...nextConversations, ...nextFriends, ...nextRequests]
+              .filter((row) => !row.privacyHidden)
+              .map((row) => row.photo),
+          );
+        });
+
         if (user?.email && !silent) {
           // Warm a few threads, but only after the list has settled — eight
           // parallel history fetches during paint starved the UI.
@@ -1016,6 +1037,20 @@ export default function ChatScreen() {
     },
     [sessionVersion, user?.email, mergeKeepLocalRows],
   );
+
+  // Chat is mounted hidden in the background right after Discover; fetch the
+  // list then so the first tap shows fresh rows with no skeleton.
+  const warmedSessionRef = React.useRef("");
+  React.useEffect(() => {
+    const key = `${user?.email || ""}|${sessionVersion}`;
+    if (!user?.email || warmedSessionRef.current === key) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (warmedSessionRef.current === key) return;
+      warmedSessionRef.current = key;
+      void loadConversations(hasLoadedOnce.current);
+    });
+    return () => task.cancel();
+  }, [user?.email, sessionVersion, loadConversations]);
 
   const onPullRefresh = React.useCallback(async () => {
     setRefreshing(true);
@@ -1306,10 +1341,10 @@ export default function ChatScreen() {
   ]);
 
   // Instant online / offline across every category + Online tab
-  React.useEffect(() => {
-    if (presenceTick === 0 || !lastPresence?.userId) return;
-    const uid = String(lastPresence.userId);
-    const online = !!lastPresence.isOnline;
+  React.useEffect(() => subscribePresence((presence) => {
+    if (!presence.userId) return;
+    const uid = String(presence.userId);
+    const online = !!presence.isOnline;
     const patch = (item: ConversationItem): ConversationItem =>
       item.otherId === uid
         ? {
@@ -1361,7 +1396,7 @@ export default function ChatScreen() {
     setArchiveRows(next.archiveRows);
     setOnlineRows(next.onlineRows);
     setChatListCache({ ...next, sessionVersion, loaded: true });
-  }, [presenceTick, lastPresence, sessionVersion]);
+  }), [subscribePresence, sessionVersion]);
 
   const goToChat = (
     otherId: string,
@@ -1411,16 +1446,23 @@ export default function ChatScreen() {
     const seedPhoto = item.photo || "";
     // Only the most recent open may apply its late fetch result
     const requestId = ++profileRequestIdRef.current;
+    // Last full profile seen → gallery / bio show instantly (and offline).
+    const saved = item.privacyHidden ? null : getCachedUserProfile(item.otherId);
     setProfileUser({
+      ...(saved || {}),
       id: item.otherId,
-      name: item.name,
-      age: 0,
-      bio: "",
-      photo: seedPhoto,
-      coverPhoto: "",
-      photos: seedPhoto ? [seedPhoto] : [],
-      gender: item.gender,
-      interests: [],
+      name: item.name || saved?.name || "",
+      age: saved?.age || 0,
+      bio: saved?.bio || "",
+      photo: seedPhoto || saved?.photo || "",
+      coverPhoto: saved?.coverPhoto || "",
+      photos: saved?.photos?.length
+        ? saved.photos
+        : seedPhoto
+          ? [seedPhoto]
+          : [],
+      gender: item.gender || saved?.gender || "",
+      interests: saved?.interests || [],
       isOnline: item.isOnline,
       areFriends: item.areFriends,
       iLiked: item.iLiked,

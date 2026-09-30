@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React from "react";
 import {
     Alert,
@@ -27,7 +27,9 @@ import {
 } from "react-native-safe-area-context";
 import { nativeAlert } from "../../components/AppAlert";
 import BonusCoin from "../../components/BonusCoin";
-import WhatsAppAvatar from "../../components/WhatsAppAvatar";
+import WhatsAppAvatar, {
+  VerifiedTick,
+} from "../../components/WhatsAppAvatar";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -632,46 +634,291 @@ function PremiumAdBanner({ onPress }: { onPress: () => void }) {
       activeOpacity={0.92}
       onPress={onPress}
     >
-      <LinearGradient
-        colors={["#1B0B2E", "#3D1A6B", "#5A2FC7", "#2A1050"]}
-        locations={[0, 0.35, 0.72, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-        pointerEvents="none"
-      />
-      {/* Soft light wash — banner depth without photos */}
-      <LinearGradient
-        colors={[
-          "rgba(255, 209, 102, 0.22)",
-          "rgba(255, 209, 102, 0.04)",
-          "transparent",
-        ]}
-        locations={[0, 0.4, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0.85, y: 1 }}
-        style={styles.adSheen}
-        pointerEvents="none"
-      />
-      <View style={styles.adOrbLarge} pointerEvents="none" />
-      <View style={styles.adOrbSmall} pointerEvents="none" />
-      <View style={styles.adGoldEdge} pointerEvents="none" />
+      <View style={styles.adMark} pointerEvents="none">
+        <Ionicons name="diamond" size={190} color="rgba(255,255,255,0.09)" />
+      </View>
 
       <View style={styles.adCopy} pointerEvents="none">
-        <View style={styles.adKickerRow}>
-          <Ionicons name="diamond" size={12} color="#FFD166" />
-          <Text style={styles.adKicker}>Luvstor Premium</Text>
-        </View>
         <Text style={styles.adTitle}>Get Premium</Text>
-        <Text style={styles.adSub}>
-          Meet more people · Blue tick · Extra spins
-        </Text>
+        <View style={styles.adPerks}>
+          {["Blue tick", "Extra spins", "Longer chats"].map((perk) => (
+            <View key={perk} style={styles.adPerk}>
+              {perk === "Blue tick" ? (
+                <View style={styles.adBlueTick}>
+                  <VerifiedTick avatarSize={0} />
+                </View>
+              ) : (
+                <View style={styles.adTick}>
+                  <Ionicons name="checkmark-sharp" size={11} color="#24104F" />
+                </View>
+              )}
+              <Text style={styles.adPerkText}>{perk}</Text>
+            </View>
+          ))}
+        </View>
         <View style={styles.adCta}>
           <Text style={styles.adCtaText}>View plans</Text>
-          <Ionicons name="chevron-forward" size={14} color="#1A1208" />
+          <Ionicons name="arrow-forward" size={14} color="#24104F" />
         </View>
       </View>
     </TouchableOpacity>
+  );
+}
+
+type PlanCompareCard = {
+  id: "gold" | "platinum" | "black";
+  name: string;
+  bg: [string, string, string];
+  text: string;
+  muted: string;
+  divider: string;
+  tickBg: string;
+  tickIcon: string;
+  rows: { label: string; free: string; plan: string }[];
+};
+
+/** Mirrors PLAN_CONFIG in backend/services/subscriptions.js */
+const PLAN_COMPARE_CARDS: PlanCompareCard[] = [
+  {
+    id: "gold",
+    name: "Gold",
+    bg: ["#FBE9A6", "#E2BE4A", "#B88A12"],
+    text: "#2E2000",
+    muted: "rgba(46,32,0,0.55)",
+    divider: "rgba(46,32,0,0.14)",
+    tickBg: "#2E2000",
+    tickIcon: "#FFE9A0",
+    rows: [
+      { label: "Chat session", free: "2 hrs", plan: "6 hrs" },
+      { label: "Monthly tokens", free: "—", plan: "100" },
+      { label: "Daily spins", free: "1", plan: "2" },
+      { label: "Explore filters", free: "—", plan: "Yes" },
+    ],
+  },
+  {
+    id: "platinum",
+    name: "Platinum",
+    bg: ["#FFFFFF", "#D5DDE4", "#9AA8B4"],
+    text: "#152028",
+    muted: "rgba(21,32,40,0.55)",
+    divider: "rgba(21,32,40,0.12)",
+    tickBg: "#152028",
+    tickIcon: "#F4F7F9",
+    rows: [
+      { label: "Chat session", free: "2 hrs", plan: "12 hrs" },
+      { label: "Monthly tokens", free: "—", plan: "350" },
+      { label: "Daily spins", free: "1", plan: "4" },
+      { label: "Discover priority", free: "—", plan: "Yes" },
+    ],
+  },
+  {
+    id: "black",
+    name: "Black",
+    bg: ["#3A3A3A", "#161616", "#000000"],
+    text: "#FFFFFF",
+    muted: "rgba(255,255,255,0.5)",
+    divider: "rgba(255,255,255,0.12)",
+    tickBg: "#FFFFFF",
+    tickIcon: "#111111",
+    rows: [
+      { label: "Chat session", free: "2 hrs", plan: "24 hrs" },
+      { label: "Monthly tokens", free: "—", plan: "1,200" },
+      { label: "Daily spins", free: "1", plan: "Unlimited" },
+      { label: "Daily top spot", free: "—", plan: "40 min" },
+    ],
+  },
+];
+
+const PLAN_CARD_W = SCREEN_W - 64;
+const PLAN_CARD_GAP = 12;
+const PLAN_AUTO_SLIDE_MS = 4000;
+const PLAN_DRAG_PAUSE_MS = 7000;
+
+/** Purple banner that melts into the page behind the middle of the plan cards. */
+function PremiumSection({ onPress }: { onPress: () => void }) {
+  const [carouselY, setCarouselY] = React.useState(AD_BANNER_H);
+  const [cardH, setCardH] = React.useState(230);
+  const fadeStart = AD_BANNER_H - 40;
+  const fadeEnd = Math.max(fadeStart + 80, carouselY + cardH / 2);
+
+  return (
+    <View style={styles.premiumSection}>
+      <LinearGradient
+        colors={["#24104F", "#4B24B0"]}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={[styles.premiumBg, { height: fadeEnd }]}
+        pointerEvents="none"
+      />
+      <LinearGradient
+        colors={[
+          "rgba(245,245,247,0)",
+          "rgba(245,245,247,0.18)",
+          "rgba(245,245,247,0.55)",
+          "rgba(245,245,247,0.85)",
+          "#F5F5F7",
+        ]}
+        locations={[0, 0.3, 0.6, 0.82, 1]}
+        style={[
+          styles.premiumBg,
+          { top: fadeStart, height: fadeEnd - fadeStart + 1 },
+        ]}
+        pointerEvents="none"
+      />
+      <PremiumAdBanner onPress={onPress} />
+      <View onLayout={(e) => setCarouselY(e.nativeEvent.layout.y)}>
+        <PlanCompareCarousel onPress={onPress} onCardHeight={setCardH} />
+      </View>
+    </View>
+  );
+}
+
+function PlanCompareCarousel({
+  onPress,
+  onCardHeight,
+}: {
+  onPress: () => void;
+  onCardHeight?: (height: number) => void;
+}) {
+  const scrollRef = React.useRef<ScrollView>(null);
+  const indexRef = React.useRef(0);
+  const lastDragAt = React.useRef(0);
+  const [index, setIndex] = React.useState(0);
+  const step = PLAN_CARD_W + PLAN_CARD_GAP;
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const timer = setInterval(() => {
+        if (Date.now() - lastDragAt.current < PLAN_DRAG_PAUSE_MS) return;
+        const next = (indexRef.current + 1) % PLAN_COMPARE_CARDS.length;
+        indexRef.current = next;
+        setIndex(next);
+        scrollRef.current?.scrollTo({ x: next * step, animated: true });
+      }, PLAN_AUTO_SLIDE_MS);
+      return () => clearInterval(timer);
+    }, [step]),
+  );
+
+  const onSettle = (x: number) => {
+    const i = Math.max(
+      0,
+      Math.min(PLAN_COMPARE_CARDS.length - 1, Math.round(x / step)),
+    );
+    indexRef.current = i;
+    setIndex(i);
+  };
+
+  return (
+    <View>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        decelerationRate="fast"
+        snapToInterval={step}
+        snapToAlignment="start"
+        contentContainerStyle={styles.planCarouselContent}
+        onScrollBeginDrag={() => {
+          lastDragAt.current = Date.now();
+        }}
+        onMomentumScrollEnd={(e) => onSettle(e.nativeEvent.contentOffset.x)}
+      >
+        {PLAN_COMPARE_CARDS.map((card, cardIndex) => (
+          <TouchableOpacity
+            key={card.id}
+            activeOpacity={0.9}
+            onPress={onPress}
+            style={styles.planCard}
+            onLayout={
+              cardIndex === 0
+                ? (e) => onCardHeight?.(e.nativeEvent.layout.height)
+                : undefined
+            }
+          >
+            <LinearGradient
+              colors={card.bg}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.planCardHead}>
+              <Text style={[styles.planCardName, { color: card.text }]}>
+                {card.name}
+              </Text>
+              <View style={styles.planCardArrow}>
+                <Text style={[styles.planCardLink, { color: card.text }]}>
+                  View plan
+                </Text>
+                <Ionicons name="arrow-forward" size={14} color={card.text} />
+              </View>
+            </View>
+
+            <View
+              style={[
+                styles.cmpRow,
+                styles.cmpRowHead,
+                { borderColor: card.divider },
+              ]}
+            >
+              <View style={styles.planColLabel} />
+              <Text style={[styles.planColHead, { color: card.muted }]}>
+                Free
+              </Text>
+              <Text style={[styles.planColHead, { color: card.text }]}>
+                {card.name}
+              </Text>
+            </View>
+            {card.rows.map((row, i) => (
+              <View
+                key={row.label}
+                style={[
+                  styles.cmpRow,
+                  i < card.rows.length - 1 && {
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderColor: card.divider,
+                  },
+                ]}
+              >
+                <Text
+                  style={[styles.planColLabel, { color: card.text }]}
+                  numberOfLines={1}
+                >
+                  {row.label}
+                </Text>
+                <Text style={[styles.planColFree, { color: card.muted }]}>
+                  {row.free}
+                </Text>
+                <View style={styles.planColPlan}>
+                  <View
+                    style={[styles.planTick, { backgroundColor: card.tickBg }]}
+                  >
+                    <Ionicons
+                      name="checkmark-sharp"
+                      size={10}
+                      color={card.tickIcon}
+                    />
+                  </View>
+                  <Text
+                    style={[styles.planColPlanText, { color: card.text }]}
+                    numberOfLines={1}
+                  >
+                    {row.plan}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+      <View style={styles.planDots}>
+        {PLAN_COMPARE_CARDS.map((card, i) => (
+          <View
+            key={card.id}
+            style={[styles.planDot, i === index && styles.planDotActive]}
+          />
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -692,6 +939,19 @@ export default function TokenScreen() {
       animated: true,
     });
   }, []);
+
+  const { section } = useLocalSearchParams<{ section?: string }>();
+  const pendingPacksScroll = React.useRef(false);
+
+  React.useEffect(() => {
+    if (section !== "packs") return;
+    router.setParams({ section: undefined });
+    if (tokenSectionY.current > 0) {
+      setTimeout(scrollToTokenPacks, 250);
+    } else {
+      pendingPacksScroll.current = true;
+    }
+  }, [section, router, scrollToTokenPacks]);
 
   const scrollToBuyButton = React.useCallback(() => {
     const y = tokenSectionY.current + buyButtonY.current - 24;
@@ -746,7 +1006,8 @@ export default function TokenScreen() {
 
   const loadBalance = React.useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
-      if (!silent) {
+      // A balance already on screen stays visible and updates in place.
+      if (!silent && !getCachedTokenBalance()) {
         setLoadingBalance(true);
       }
       try {
@@ -979,7 +1240,7 @@ export default function TokenScreen() {
             </View>
           </View>
 
-          <PremiumAdBanner
+          <PremiumSection
             onPress={() => router.push("/subscription" as any)}
           />
 
@@ -1032,6 +1293,11 @@ export default function TokenScreen() {
           <View
             onLayout={(e) => {
               tokenSectionY.current = e.nativeEvent.layout.y;
+              if (pendingPacksScroll.current) {
+                pendingPacksScroll.current = false;
+                // The plan cards above settle their height a frame later.
+                setTimeout(scrollToTokenPacks, 350);
+              }
             }}
           >
             <Text style={styles.sectionTitle}>Get more tokens</Text>
@@ -1294,110 +1560,177 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  adBannerWrap: {
-    marginHorizontal: -20,
-    marginBottom: 16,
-    height: AD_BANNER_H,
-    overflow: "hidden",
-    backgroundColor: "#1B0B2E",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255, 209, 102, 0.35)",
+  premiumSection: {
+    marginHorizontal: -SCROLL_H_PAD,
+    marginBottom: 22,
   },
-  adSheen: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 1,
-  },
-  adOrbLarge: {
-    position: "absolute",
-    right: -40,
-    top: -50,
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: "rgba(255, 209, 102, 0.12)",
-    zIndex: 1,
-  },
-  adOrbSmall: {
-    position: "absolute",
-    right: 48,
-    bottom: -36,
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: "rgba(142, 45, 226, 0.35)",
-    zIndex: 1,
-  },
-  adGoldEdge: {
+  premiumBg: {
     position: "absolute",
     left: 0,
+    right: 0,
     top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: "#FFD166",
-    zIndex: 2,
+  },
+  adBannerWrap: {
+    height: AD_BANNER_H,
+    overflow: "hidden",
+  },
+  adMark: {
+    position: "absolute",
+    right: -34,
+    top: -14,
+    transform: [{ rotate: "-14deg" }],
   },
   adCopy: {
     position: "absolute",
     left: 20,
-    right: 16,
-    bottom: 14,
-    top: 14,
-    justifyContent: "flex-end",
-    zIndex: 3,
-  },
-  adKickerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 4,
-  },
-  adKicker: {
-    color: "#FFD166",
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
+    right: 20,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
   },
   adTitle: {
     color: "#fff",
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: "800",
     letterSpacing: -0.5,
-    textShadowColor: "rgba(0,0,0,0.35)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
   },
-  adSub: {
-    color: "rgba(255,255,255,0.9)",
+  adPerks: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: 12,
+    rowGap: 4,
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  adPerk: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  adBlueTick: {
+    width: 16,
+    height: 16,
+  },
+  adTick: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#FFD166",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  adPerkText: {
+    color: "#fff",
     fontSize: 13,
-    fontWeight: "500",
-    marginTop: 4,
-    marginBottom: 12,
+    fontWeight: "600",
   },
   adCta: {
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    backgroundColor: "#FFD166",
-    paddingHorizontal: 16,
+    gap: 6,
+    backgroundColor: "#fff",
+    paddingHorizontal: 18,
     paddingVertical: 9,
-    borderRadius: 22,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#FFD166",
-        shadowOpacity: 0.35,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 2 },
-      },
-      android: { elevation: 3 },
-    }),
+    borderRadius: 20,
   },
   adCtaText: {
-    color: "#1A1208",
+    color: "#24104F",
     fontSize: 13,
     fontWeight: "800",
+  },
+
+  planCarouselContent: {
+    paddingHorizontal: SCROLL_H_PAD,
+    gap: PLAN_CARD_GAP,
+  },
+  planCard: {
+    width: PLAN_CARD_W,
+    borderRadius: 18,
+    overflow: "hidden",
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 8,
+  },
+  planCardHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  planCardName: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  planCardArrow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  planCardLink: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  cmpRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 9,
+  },
+  cmpRowHead: {
+    paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  planColLabel: {
+    flex: 1.5,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  planColHead: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  planColFree: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  planColPlan: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  planTick: {
+    width: 15,
+    height: 15,
+    borderRadius: 7.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  planColPlanText: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  planDots: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 10,
+  },
+  planDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#D1D5DB",
+  },
+  planDotActive: {
+    width: 18,
+    backgroundColor: "#4B24B0",
   },
 
   // Daily Lucky Spin

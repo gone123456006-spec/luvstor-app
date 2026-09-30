@@ -21,7 +21,6 @@ import { getAuthToken, isValidPublicId } from "../utils/auth";
 import { blockUser, ReportReason, reportUser } from "../utils/friends";
 import { mediaIdentity, resolveMediaUrl } from "../utils/media";
 import { getSheetBottomPadding } from "../utils/navigation";
-import { nearbyKmLabel } from "../utils/nearby";
 import { showMeLabel } from "../utils/showMe";
 import { useAppAlert } from "./AppAlert";
 import CopyablePublicId, { sharePublicProfile } from "./CopyablePublicId";
@@ -318,8 +317,6 @@ function UserProfileModal({
     resolveMediaUrl(displayUser.coverPhoto) || displayUser.coverPhoto || null;
   const coverHeight = 148 + Math.max(insets.top, 0);
   const avatarPhoto = displayUser.photo || "";
-  const kmValue = nearbyKmLabel(displayUser.distanceKm) || "";
-
   const profileInfoRows = [
     {
       icon: "person" as const,
@@ -348,12 +345,6 @@ function UserProfileModal({
       value: displayUser.showMe
         ? showMeLabel(displayUser.gender, displayUser.showMe)
         : undefined,
-    },
-    {
-      icon: "locate" as const,
-      color: WA.teal,
-      title: "Distance",
-      value: kmValue ? `${kmValue} km` : undefined,
     },
   ];
 

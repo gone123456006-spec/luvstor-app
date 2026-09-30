@@ -369,6 +369,7 @@ function registerGracefulShutdown() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[Shutdown] ${signal} — closing server…`);
+    require('./utils/keepAwake').stopKeepAwake();
 
     await new Promise((resolve) => {
       server.close(() => {
@@ -508,12 +509,18 @@ async function startHttp() {
     console.log(`🔌 WebSocket: ${host.replace(/^http/, 'ws')}`);
     console.log(`📧 Auth: POST /api/auth/send-otp  |  POST /api/auth/google`);
     console.log(`🔔 Push: ${fcm.isEnabled() ? 'FCM ready' : 'FCM disabled (no credentials)'}`);
-    const { isGoogleAuthConfigured, getGoogleAuthStatus } = require('./services/googleAuth');
+    const {
+      isGoogleAuthConfigured,
+      getGoogleAuthStatus,
+      prewarmGoogleCerts,
+    } = require('./services/googleAuth');
     const gStatus = getGoogleAuthStatus();
+    if (isGoogleAuthConfigured()) prewarmGoogleCerts();
     console.log(
       `🔐 Google login: ${isGoogleAuthConfigured() ? 'ready' : 'disabled (set GOOGLE_WEB_CLIENT_ID)'} (${gStatus.audienceCount} audience(s))`,
     );
     console.log(`📈 Health: GET /health  |  Ping: GET /ping  |  Ready: GET /ready`);
+    require('./utils/keepAwake').startKeepAwake(server.address()?.port || PORT);
 
     setInterval(async () => {
       if (mongoose.connection.readyState !== 1) return;

@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import {
+  ActivityIndicator,
+  AppState,
+  InteractionManager,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
@@ -7,11 +16,9 @@ import { useSocket } from '../../contexts/SocketContext';
 import { useStableBottomInset } from '../../hooks/useStableBottomInset';
 import { tabScreenOptions, getTabBarBottomInset, getTabBarHeight } from '../../utils/navigation';
 import {
+  checkProfileSetup,
   getAuthToken,
-  getLocalProfile,
-  hasFinishedProfileSetup,
-  normalizeEmail,
-  resolvePostLoginRoute,
+  type ProfileSetupState,
 } from '../../utils/auth';
 import {
   clearTokenBalanceCache,
@@ -22,17 +29,24 @@ import {
   preloadProfile,
 } from '../../utils/profileCache';
 import { pingAppOpen } from '../../utils/retention';
+import { needsLocationSetup } from '../../utils/locationSetup';
+
+const TAB_PREFETCH = [
+  { href: '/chat', delayMs: 800 },
+  { href: '/explore', delayMs: 2500 },
+] as const;
 
 export default function TabLayout() {
   const router = useRouter();
   // Latch inset — Modals must not resize / teleport the absolute tab bar
   const stableBottom = useStableBottomInset();
-  const { sessionVersion, user } = useAuth();
-  const { unreadCount, refreshUnread } = useSocket();
+  const { sessionVersion, user, signOut } = useAuth();
+  const { socket, unreadCount, refreshUnread } = useSocket();
   const hadUserRef = useRef(false);
   const [profileGate, setProfileGate] = useState<
-    'checking' | 'ok' | 'need-profile'
+    'checking' | 'ok' | 'need-profile' | 'need-location' | 'offline'
   >('checking');
+  const [gateAttempt, setGateAttempt] = useState(0);
 
   // WhatsApp-style: sit above 3-button / gesture nav; height stays fixed across popups
   const bottomInset = getTabBarBottomInset(stableBottom);
@@ -82,42 +96,79 @@ export default function TabLayout() {
     }
   }, [user, router]);
 
-  // New users must finish Create profile before Discover / home tabs
+  // New users must finish Create profile, then the one-time Enable Location
+  // screen, before Discover / home tabs
   useEffect(() => {
     let cancelled = false;
+    const passProfileGate = async () => {
+      const token = await getAuthToken();
+      const needsLocation =
+        !!token && !!user?.id && (await needsLocationSetup(token, user.id));
+      if (cancelled) return;
+      if (needsLocation) {
+        setProfileGate('need-location');
+        router.replace('/enable-location');
+        return;
+      }
+      setProfileGate('ok');
+    };
     (async () => {
       if (!user?.email) {
         if (!cancelled) setProfileGate('checking');
         return;
       }
+      setProfileGate((prev) => (prev === 'ok' ? prev : 'checking'));
+      let state: ProfileSetupState = 'unknown';
       try {
-        if (user.profileComplete) {
-          if (!cancelled) setProfileGate('ok');
-          return;
-        }
-        const route = await resolvePostLoginRoute(user);
-        if (cancelled) return;
-        if (route === '/create-profile') {
-          setProfileGate('need-profile');
-          router.replace('/create-profile');
-          return;
-        }
-        setProfileGate('ok');
+        state = await checkProfileSetup(user);
       } catch {
-        const local = await getLocalProfile(normalizeEmail(user.email));
-        if (cancelled) return;
-        if (!hasFinishedProfileSetup(local)) {
-          setProfileGate('need-profile');
-          router.replace('/create-profile');
-          return;
-        }
-        setProfileGate('ok');
+        /* treated as unknown */
+      }
+      if (cancelled) return;
+      if (state === 'signed-out') {
+        // The user-cleared effect above sends the app to /login
+        await signOut();
+        return;
+      }
+      if (state === 'incomplete') {
+        setProfileGate('need-profile');
+        router.replace('/create-profile');
+        return;
+      }
+      if (state === 'unknown') {
+        setProfileGate((prev) => (prev === 'ok' ? prev : 'offline'));
+        return;
+      }
+      try {
+        await passProfileGate();
+      } catch {
+        if (!cancelled) setProfileGate('ok');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [user, sessionVersion, router]);
+  }, [user, sessionVersion, router, gateAttempt, signOut]);
+
+  // Retry the gate without a tap: on return to the app, when the realtime
+  // connection comes back (server awake / internet back), and on a backoff timer
+  useEffect(() => {
+    if (profileGate !== 'offline') return;
+    const retry = () => setGateAttempt((n) => n + 1);
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') retry();
+    });
+    socket?.on('connect', retry);
+    const delay = Math.min(60_000, 5_000 * 2 ** Math.min(gateAttempt, 4));
+    const timer = setTimeout(() => {
+      if (AppState.currentState === 'active') retry();
+    }, delay);
+    return () => {
+      sub.remove();
+      socket?.off('connect', retry);
+      clearTimeout(timer);
+    };
+  }, [profileGate, socket, gateAttempt]);
 
   useEffect(() => {
     refreshUnread();
@@ -140,8 +191,55 @@ export default function TabLayout() {
     })();
   }, [user, sessionVersion, profileGate]);
 
+  // Mount Chat and Explore hidden once Discover has painted, so their first
+  // open is instant. Staggered so they never compete with the Discover load.
+  useEffect(() => {
+    if (!user || profileGate !== 'ok') return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const task = InteractionManager.runAfterInteractions(() => {
+      TAB_PREFETCH.forEach(({ href, delayMs }) => {
+        timers.push(
+          setTimeout(() => {
+            try {
+              router.prefetch(href);
+            } catch {
+              /* tab opens normally on tap */
+            }
+          }, delayMs),
+        );
+      });
+    });
+    return () => {
+      task.cancel();
+      timers.forEach(clearTimeout);
+    };
+  }, [user, sessionVersion, profileGate, router]);
+
+  if (user && profileGate === 'offline') {
+    return (
+      <View style={styles.gate}>
+        <Ionicons name="cloud-offline-outline" size={44} color="#6750A4" />
+        <Text style={styles.gateTitle}>Can&apos;t connect right now</Text>
+        <Text style={styles.gateBody}>
+          Check your internet connection and try again.
+        </Text>
+        <TouchableOpacity
+          style={styles.gateBtn}
+          activeOpacity={0.85}
+          onPress={() => setGateAttempt((n) => n + 1)}
+        >
+          <Text style={styles.gateBtnText}>Try again</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (user && profileGate !== 'ok') {
-    return null;
+    return (
+      <View style={styles.gate}>
+        <ActivityIndicator size="large" color="#6750A4" />
+      </View>
+    );
   }
 
   return (
@@ -222,3 +320,38 @@ export default function TabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  gate: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: '#FDF8FF',
+  },
+  gateTitle: {
+    marginTop: 14,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1C1B1F',
+    textAlign: 'center',
+  },
+  gateBody: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#49454F',
+    textAlign: 'center',
+  },
+  gateBtn: {
+    marginTop: 20,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: '#6750A4',
+  },
+  gateBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+});
