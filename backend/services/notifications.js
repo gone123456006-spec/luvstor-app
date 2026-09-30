@@ -297,6 +297,54 @@ async function chatUnreadCountFor(userId) {
   }
 }
 
+const CHAT_STACK_MAX_LINES = 6;
+const CHAT_STACK_LINE_MAX = 120;
+
+function chatLinePreview(m) {
+  if (m.viewOnce) return '📷 View once photo';
+  if (m.type === 'image') return '📷 Photo';
+  if (m.type === 'audio') return '🎵 Voice message';
+  const text = String(m.text || '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'New message';
+  return text.length > CHAT_STACK_LINE_MAX
+    ? `${text.slice(0, CHAT_STACK_LINE_MAX - 1)}…`
+    : text;
+}
+
+/**
+ * WhatsApp-style stacked chat tray: the push for the newest message carries
+ * every unread line from that sender. The tray tag / FCM collapse key is per
+ * conversation, so each push replaces the previous one — and offline phones
+ * only receive the last collapsed push — so it must include the older lines.
+ */
+async function stackedChatContent(userId, actorId, roomId) {
+  if (!actorId) return null;
+  const Message = require('../models/Message');
+  const filter = {
+    receiverId: userId,
+    senderId: actorId,
+    read: false,
+    isDeleted: false,
+    undelivered: { $ne: true },
+    deletedFor: { $ne: userId },
+    type: { $ne: 'call' },
+    ...(roomId ? { roomId } : {}),
+  };
+  const [recent, count] = await Promise.all([
+    Message.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(CHAT_STACK_MAX_LINES)
+      .select('text type viewOnce')
+      .lean(),
+    Message.countDocuments(filter),
+  ]);
+  if (!recent.length) return null;
+  return {
+    count,
+    lines: recent.reverse().map(chatLinePreview),
+  };
+}
+
 /**
  * Queue the FCM push for a persisted notification.
  * Never throws — push failure must not break the caller's flow.
@@ -309,7 +357,7 @@ async function queuePush(userId, notification, { badge } = {}) {
     // Fast chat path: fewer sequential DB hits → WhatsApp-like push latency
     if (isChat) {
       const actorId = notification.actorId || null;
-      const [tokens, user, muteState, unreadBadge] = await Promise.all([
+      const [tokens, user, muteState, unreadBadge, stack] = await Promise.all([
         deviceTokens.getActiveTokens(userId),
         User.findById(userId).select('notificationPrefs').lean(),
         actorId
@@ -323,6 +371,9 @@ async function queuePush(userId, notification, { badge } = {}) {
         typeof badge === 'number'
           ? Promise.resolve(badge)
           : chatUnreadCountFor(userId),
+        stackedChatContent(userId, actorId, notification.data?.roomId).catch(
+          () => null,
+        ),
       ]);
 
       if (!tokens.length) {
@@ -336,10 +387,18 @@ async function queuePush(userId, notification, { badge } = {}) {
       if (muteState?.muted || muteState?.archived) return;
 
       const hidePreview = prefs?.showMessagePreview === false;
-      const title = notification.title || 'New message';
+      const stacked = stack && stack.count > 1 ? stack : null;
+      const baseTitle = notification.title || 'New message';
+      const title = stacked
+        ? `${baseTitle} (${stacked.count} messages)`
+        : baseTitle;
       const body = hidePreview
-        ? 'New message'
-        : notification.body || 'New message';
+        ? stacked
+          ? `${stacked.count} new messages`
+          : 'New message'
+        : stacked
+          ? stacked.lines.join('\n')
+          : notification.body || 'New message';
       const badgeCount = unreadBadge || 0;
 
       const pushId =

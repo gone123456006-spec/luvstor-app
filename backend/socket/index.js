@@ -182,9 +182,16 @@ module.exports = function initSocket(io) {
       if (!decoded.userId || !decoded.deviceId) {
         return next(new Error('Authentication error: Invalid token'));
       }
-      const user = await User.findById(decoded.userId).select(
-        'activeDeviceId name photo gender isBanned',
-      );
+      let user;
+      try {
+        user = await User.findById(decoded.userId).select(
+          'activeDeviceId name photo gender isBanned',
+        );
+      } catch (err) {
+        // Not an auth failure — the client retries on this message
+        console.warn('socket auth: user lookup failed:', err?.message || err);
+        return next(new Error('Server busy'));
+      }
       if (
         !user ||
         user.isBanned === true ||

@@ -347,30 +347,31 @@ export default function CreateProfileScreen() {
       userId: authUser.id,
     };
     try {
-      await saveLocalProfile(accountEmail, profileData);
       const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
-      if (token) {
-        const syncRes: any = await syncProfileToServer(token, profileData);
-        const profile = syncRes?.profile || syncRes || {};
-        welcomeTokens = Number(syncRes?.welcomeTokensGranted || 0);
-        // Also fetch /me so we get the unique publicId (ABCD1234)
-        let publicId = String(syncRes?.publicId || profile?.publicId || "");
-        try {
-          const me: any = await apiRequest("/api/users/me", token);
-          publicId = String(me?.publicId || publicId || "");
-        } catch {
-          /* ignore */
-        }
-        await saveLocalProfile(accountEmail, {
-          ...profileData,
-          photo: profile?.photo
-            ? String(profile.photo)
-            : profileData.photo,
-          publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : "",
-        });
-        if (syncRes?.profileCompleted === true || syncRes?.profileComplete === true) {
-          await markAuthUserProfileComplete();
-        }
+      if (!token) {
+        router.replace("/login");
+        return;
+      }
+      const syncRes: any = await syncProfileToServer(token, profileData);
+      const profile = syncRes?.profile || syncRes || {};
+      welcomeTokens = Number(syncRes?.welcomeTokensGranted || 0);
+      // Also fetch /me so we get the unique publicId (ABCD1234)
+      let publicId = String(syncRes?.publicId || profile?.publicId || "");
+      try {
+        const me: any = await apiRequest("/api/users/me", token);
+        publicId = String(me?.publicId || publicId || "");
+      } catch {
+        /* ignore */
+      }
+      // Cache locally only after the server accepted it — a local "finished"
+      // profile lets the app skip Create profile on its own.
+      await saveLocalProfile(accountEmail, {
+        ...profileData,
+        photo: profile?.photo ? String(profile.photo) : profileData.photo,
+        publicId: /^[A-Z]{4}[0-9]{4}$/.test(publicId) ? publicId : "",
+      });
+      if (syncRes?.profileCompleted === true || syncRes?.profileComplete === true) {
+        await markAuthUserProfileComplete();
       }
     } catch (e: any) {
       console.warn("Failed to save profile:", e?.message || e);

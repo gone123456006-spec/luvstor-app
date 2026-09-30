@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiRequest } from './api';
 import { getOrCreateDeviceId } from './device';
+import { TOKEN_PACKS_HREF } from './tokenCache';
 
 const STORED_TOKEN_KEY = 'luvstor_fcm_token';
 
@@ -446,6 +447,7 @@ export async function setBadge(count: number) {
 
 /** Clear the tray notifications for one conversation once it is opened. */
 export async function dismissForGroup(groupKey: string) {
+  chatTrayStacks.delete(groupKey);
   const Notifications = loadNotifications();
   if (!Notifications) return;
   try {
@@ -464,6 +466,7 @@ export async function dismissForGroup(groupKey: string) {
 }
 
 export async function dismissAll() {
+  chatTrayStacks.clear();
   const Notifications = loadNotifications();
   if (!Notifications) return;
   try {
@@ -596,9 +599,14 @@ export async function presentIncomingCallLocalNotification(opts: {
   }
 }
 
+const CHAT_STACK_MAX_LINES = 6;
+/** Unread lines per conversation for the stacked foreground tray. */
+const chatTrayStacks = new Map<string, { count: number; lines: string[] }>();
+
 /**
  * WhatsApp-style message tray while the app is in the foreground.
- * Same conversation reuses one identifier so rapid messages collapse.
+ * Same conversation reuses one identifier; older unread lines stay listed
+ * above the newest one ("Name (3 messages)").
  * Background / killed still rely on FCM from the server.
  */
 export async function presentChatMessageNotification(opts: {
@@ -620,9 +628,19 @@ export async function presentChatMessageNotification(opts: {
   const groupKey = opts.roomId
     ? `chat:${opts.roomId}`
     : `chat:${senderId}`;
-  const title = (opts.senderName || 'New message').trim() || 'New message';
-  const body = (opts.body || 'New message').trim() || 'New message';
+  const name = (opts.senderName || 'New message').trim() || 'New message';
+  const line =
+    (opts.body || 'New message').replace(/\s+/g, ' ').trim() || 'New message';
   const photo = String(opts.senderPhoto || '').trim();
+
+  const prev = chatTrayStacks.get(groupKey);
+  const stack = {
+    count: (prev?.count || 0) + 1,
+    lines: [...(prev?.lines || []), line].slice(-CHAT_STACK_MAX_LINES),
+  };
+  chatTrayStacks.set(groupKey, stack);
+  const title = stack.count > 1 ? `${name} (${stack.count} messages)` : name;
+  const body = stack.lines.join('\n');
 
   try {
     await ensureChatReplyCategory();
@@ -642,7 +660,7 @@ export async function presentChatMessageNotification(opts: {
           groupKey,
           actorId: senderId,
           userId: senderId,
-          actorName: title,
+          actorName: name,
           actorPhoto: photo,
           actorGender: opts.senderGender || '',
           screen: 'messages',
@@ -762,6 +780,10 @@ export function hrefToAppRoute(
     return `/u/${uSeg[1].toUpperCase()}`;
   }
 
+  if (/^\/(\(tabs\)\/)?tokens?$/i.test(pathOnly)) {
+    return /[?&]section=packs\b/i.test(path) ? TOKEN_PACKS_HREF : '/(tabs)/token';
+  }
+
   if (pathOnly.startsWith('/(tabs)/discover') || pathOnly === '/discover') {
     return '/(tabs)';
   }
@@ -802,9 +824,10 @@ export function routeForData(data: Record<string, any> = {}) {
     case 'profile_view':
     case 'suggestion':
       return profileRouteFromData(data);
+    case 'token_low':
+      return TOKEN_PACKS_HREF;
     case 'token':
     case 'token_purchase':
-    case 'token_low':
     case 'spin':
     case 'subscription':
       return '/(tabs)/token';

@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
@@ -19,6 +18,7 @@ const {
   recordVerifyAttempt,
 } = require('../middleware/otpRateLimit');
 const { serializeUser, hasCompletedProfileSetup } = require('../utils/userHelpers');
+const { issueToken: issueAuthToken } = require('../utils/authToken');
 const { generateUniquePublicId, ensureUserPublicId } = require('../utils/publicId');
 const { checkAndRestoreOnLogin } = require('../jobs/accountDeletion');
 const { isUserBanned, sendBanned } = require('../utils/accountBan');
@@ -80,11 +80,7 @@ async function maybeApplyReferral(req, user, deviceId, isNewUser) {
 }
 
 function issueToken(user) {
-  return jwt.sign(
-    { userId: user._id, deviceId: user.activeDeviceId },
-    process.env.JWT_SECRET,
-    { expiresIn: '30d' }
-  );
+  return issueAuthToken(user._id, user.activeDeviceId);
 }
 
 async function bindDeviceAndRespond(res, user, deviceId, io = null) {

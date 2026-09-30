@@ -375,40 +375,60 @@ export async function completeAccountLogin(
   }
 }
 
-export async function resolvePostLoginRoute(
-  user: AuthUser,
-): Promise<'/(tabs)' | '/create-profile'> {
-  const email = normalizeEmail(user.email);
+export type ProfileSetupState = 'complete' | 'incomplete' | 'unknown' | 'signed-out';
 
-  if (user.profileComplete) {
-    return '/(tabs)';
+/** A sleeping Render instance can take ~30-50 s to answer the first request. */
+const PROFILE_CHECK_RETRY_TIMEOUT_MS = 30_000;
+
+/**
+ * Has this account finished Profile Setup?
+ * `incomplete` only when the server itself says so — a timeout, 5xx or offline
+ * phone is `unknown`, never "new user". Treating errors as incomplete is what
+ * sent existing users back to Create profile after reinstall or a cold server.
+ */
+export async function checkProfileSetup(user: AuthUser): Promise<ProfileSetupState> {
+  if (user.profileComplete) return 'complete';
+
+  // `false` is the server's answer at login (kept until setup marks it true),
+  // so a leftover cached profile — e.g. from a deleted account re-registered
+  // with the same email — must not override it.
+  const email = normalizeEmail(user.email);
+  if (user.profileComplete !== false) {
+    const local = await getLocalProfile(email);
+    if (hasFinishedProfileSetup(local)) return 'complete';
   }
 
-  // Backend is the source of truth (covers logout/login, reinstall, other device)
   const token = await getAuthToken();
-  if (token) {
+  if (!token) return 'unknown';
+
+  for (const timeoutMs of [undefined, PROFILE_CHECK_RETRY_TIMEOUT_MS]) {
     try {
-      const me = (await apiRequest('/api/users/me', token)) as Record<
+      const me = (await apiRequest('/api/users/me', token, {}, timeoutMs)) as Record<
         string,
         unknown
       >;
-      await saveLocalProfile(email, userToLocalProfile(me));
       if (isServerProfileComplete(me)) {
+        await saveLocalProfile(email, userToLocalProfile(me));
         await markAuthUserProfileComplete();
-        return '/(tabs)';
+        return 'complete';
       }
-      // Server reachable and says setup never finished → genuinely new user
-      return '/create-profile';
-    } catch {
-      /* offline / server error — fall back to this account's cached profile */
+      return 'incomplete';
+    } catch (err) {
+      const { status, code } = err as { status?: number; code?: string };
+      if (code === 'INVALID_TOKEN') return 'signed-out';
+      // Other 4xx won't change on retry (DEVICE_MISMATCH signs out via api.ts)
+      if (Number(status) >= 400 && Number(status) < 500) return 'unknown';
     }
   }
+  return 'unknown';
+}
 
-  const local = await getLocalProfile(email);
-  if (hasFinishedProfileSetup(local)) {
-    return '/(tabs)';
-  }
-  return '/create-profile';
+export async function resolvePostLoginRoute(
+  user: AuthUser,
+): Promise<'/(tabs)' | '/create-profile'> {
+  const state = await checkProfileSetup(user);
+  // `unknown` goes to tabs: its gate shows a retry screen until the server answers
+  return state === 'incomplete' ? '/create-profile' : '/(tabs)';
 }
 
 /** Logout: notify server (clears device lock) + clear all local session data */

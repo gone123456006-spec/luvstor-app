@@ -90,6 +90,7 @@ import {
   UPLOAD_FETCH_TIMEOUT_MS,
 } from "../../utils/api";
 import { durableMediaPathFromUrl, resolveMediaUrl as resolveSharedMediaUrl } from "../../utils/media";
+import { TOKEN_PACKS_HREF } from "../../utils/tokenCache";
 import {
   getRememberedPeerProfile,
   isUsableName,
@@ -2237,7 +2238,7 @@ export default function MessageScreen() {
         {
           text: "Buy Tokens",
           style: "primary",
-          onPress: () => router.push("/(tabs)/token"),
+          onPress: () => router.push(TOKEN_PACKS_HREF as any),
         },
       ],
     });
@@ -5026,18 +5027,6 @@ export default function MessageScreen() {
                 <Text style={styles.blockedText}>
                   Please wait for the other user to reply before sending more
                   messages
-                </Text>
-              </View>
-            )}
-          {!friendshipStatus?.iBlocked &&
-            !friendshipStatus?.theyBlocked &&
-            !conversationStatus.canSend &&
-            conversationStatus.code === "WAITING_FOR_REPLY_OTHER" && (
-              <View style={styles.blockedBar}>
-                <Ionicons name="hand-left" size={16} color="#f44336" />
-                <Text style={styles.blockedText}>
-                  You cannot start new conversations while waiting for a reply
-                  in another chat
                 </Text>
               </View>
             )}

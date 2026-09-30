@@ -3,12 +3,18 @@ import '../utils/logbox';
 // Background FCM → local Answer/Decline trays (must register before React)
 import '../utils/pushBackground';
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
-import { Stack } from 'expo-router';
+import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { enableFreeze } from 'react-native-screens';
-import { useColorScheme } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from 'react-native';
 import React from 'react';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { AuthProvider } from '../contexts/AuthContext';
@@ -115,6 +121,68 @@ function RootLayoutContent() {
     </ThemeProvider>
   );
 }
+
+/**
+ * Any render error below the root used to close the whole app in release
+ * builds. Show a recovery screen instead. Must not use app contexts — the
+ * error may have come from one of them.
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  React.useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
+    console.error('[App] render error:', error?.message || error);
+  }, [error]);
+  return (
+    <View style={errorStyles.root}>
+      <Text style={errorStyles.title}>Something went wrong</Text>
+      <Text style={errorStyles.body}>
+        Luvstor hit a problem loading this screen. Tap below to try again.
+      </Text>
+      <TouchableOpacity
+        style={errorStyles.btn}
+        activeOpacity={0.85}
+        onPress={() => void retry()}
+      >
+        <Text style={errorStyles.btnText}>Try again</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const errorStyles = StyleSheet.create({
+  root: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: '#FDF8FF',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1C1B1F',
+    textAlign: 'center',
+  },
+  body: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#49454F',
+    textAlign: 'center',
+  },
+  btn: {
+    marginTop: 22,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: '#6750A4',
+  },
+  btnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+});
 
 export default function RootLayout() {
   return (

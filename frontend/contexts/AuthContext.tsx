@@ -30,6 +30,9 @@ import {
 import { AUTH_TOKEN_KEY, AUTH_USER_KEY, setOnSessionInvalid } from '../utils/api';
 import { clearLegacyGlobalStorage } from '../utils/accountStorage';
 import { hydrateNearbyFeedCache } from '../utils/nearbyFeedCache';
+import { withTimeout } from '../utils/withTimeout';
+
+const STARTUP_STEP_TIMEOUT_MS = 5000;
 
 type AuthContextValue = {
   sessionVersion: number;
@@ -57,10 +60,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSession = useCallback(async () => {
     try {
-      await syncDeviceSessionIfNeeded();
+      // The splash stays up until this finishes — never let a slow network or
+      // storage call keep the app from opening.
+      await withTimeout(syncDeviceSessionIfNeeded(), STARTUP_STEP_TIMEOUT_MS, undefined);
       const current = await getCurrentAuthUser();
       if (current?.email) {
-        await hydrateNearbyFeedCache(current.email);
+        await withTimeout(
+          hydrateNearbyFeedCache(current.email),
+          STARTUP_STEP_TIMEOUT_MS,
+          [],
+        );
       }
       setUser(current);
     } catch (err) {

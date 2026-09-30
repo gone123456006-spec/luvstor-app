@@ -829,7 +829,6 @@ export default function NotificationsScreen() {
                 unread && styles.lastMessageUnread,
                 isLockedProfileView && styles.lockedText,
               ]}
-              numberOfLines={1}
             >
               {displayBody(item, profileViewsUnlocked)}
             </Text>

@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { withTimeout } from './withTimeout';
 
 const PENDING_REFERRAL_KEY = 'luvstor_pending_referral_code';
 const REFERRER_CAPTURED_KEY = 'luvstor_install_referrer_captured';
@@ -46,7 +47,22 @@ export async function consumePendingReferralCode(): Promise<string | null> {
  * Capture Play Store install referrer once (production Android).
  * Share links use utm_campaign=CODE so friends who install via Play are attributed.
  */
-export async function captureInstallReferrerOnce(): Promise<string | null> {
+let captureInflight: Promise<string | null> | null = null;
+
+export function captureInstallReferrerOnce(): Promise<string | null> {
+  if (!captureInflight) {
+    captureInflight = captureInstallReferrer().finally(() => {
+      captureInflight = null;
+    });
+  }
+  return captureInflight;
+}
+
+// Phones without Google Play (Huawei, de-Googled ROMs) never answer the
+// referrer service — an unbounded await here froze app start and login.
+const INSTALL_REFERRER_TIMEOUT_MS = 3000;
+
+async function captureInstallReferrer(): Promise<string | null> {
   try {
     const done = await AsyncStorage.getItem(REFERRER_CAPTURED_KEY);
     if (done === '1') return peekPendingReferralCode();
@@ -55,7 +71,12 @@ export async function captureInstallReferrerOnce(): Promise<string | null> {
     try {
       const Application = await import('expo-application');
       if (typeof Application.getInstallReferrerAsync === 'function') {
-        referrer = (await Application.getInstallReferrerAsync()) || '';
+        referrer =
+          (await withTimeout(
+            Application.getInstallReferrerAsync(),
+            INSTALL_REFERRER_TIMEOUT_MS,
+            '',
+          )) || '';
       }
     } catch {
       /* expo-application unavailable in some environments */
