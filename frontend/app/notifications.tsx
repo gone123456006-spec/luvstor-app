@@ -1428,7 +1428,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#DFE5E7",
   },
   lockedAvatarFrost: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(255,255,255,0.32)",
   },
   iconCircle: {

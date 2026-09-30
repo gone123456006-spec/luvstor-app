@@ -1587,17 +1587,17 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   planCardShine: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   planCardSheen: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   planCardSpecular: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0.55,
   },
   metalShineHost: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     overflow: "hidden",
     zIndex: 2,
   },
