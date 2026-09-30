@@ -27,7 +27,9 @@ import {
 } from "react-native-safe-area-context";
 import { nativeAlert } from "../../components/AppAlert";
 import BonusCoin from "../../components/BonusCoin";
-import WhatsAppAvatar from "../../components/WhatsAppAvatar";
+import WhatsAppAvatar, {
+  VerifiedTick,
+} from "../../components/WhatsAppAvatar";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -633,42 +635,38 @@ function PremiumAdBanner({ onPress }: { onPress: () => void }) {
       onPress={onPress}
     >
       <LinearGradient
-        colors={["#1B0B2E", "#3D1A6B", "#5A2FC7", "#2A1050"]}
-        locations={[0, 0.35, 0.72, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
+        colors={["#24104F", "#4B24B0"]}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
-      {/* Soft light wash — banner depth without photos */}
-      <LinearGradient
-        colors={[
-          "rgba(255, 209, 102, 0.22)",
-          "rgba(255, 209, 102, 0.04)",
-          "transparent",
-        ]}
-        locations={[0, 0.4, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0.85, y: 1 }}
-        style={styles.adSheen}
-        pointerEvents="none"
-      />
-      <View style={styles.adOrbLarge} pointerEvents="none" />
-      <View style={styles.adOrbSmall} pointerEvents="none" />
-      <View style={styles.adGoldEdge} pointerEvents="none" />
+      <View style={styles.adMark} pointerEvents="none">
+        <Ionicons name="diamond" size={190} color="rgba(255,255,255,0.09)" />
+      </View>
 
       <View style={styles.adCopy} pointerEvents="none">
-        <View style={styles.adKickerRow}>
-          <Ionicons name="diamond" size={12} color="#FFD166" />
-          <Text style={styles.adKicker}>Luvstor Premium</Text>
-        </View>
+        <Text style={styles.adKicker}>LUVSTOR PREMIUM</Text>
         <Text style={styles.adTitle}>Get Premium</Text>
-        <Text style={styles.adSub}>
-          Meet more people · Blue tick · Extra spins
-        </Text>
+        <View style={styles.adPerks}>
+          {["Blue tick", "Extra spins", "Longer chats"].map((perk) => (
+            <View key={perk} style={styles.adPerk}>
+              {perk === "Blue tick" ? (
+                <View style={styles.adBlueTick}>
+                  <VerifiedTick avatarSize={0} />
+                </View>
+              ) : (
+                <View style={styles.adTick}>
+                  <Ionicons name="checkmark-sharp" size={11} color="#24104F" />
+                </View>
+              )}
+              <Text style={styles.adPerkText}>{perk}</Text>
+            </View>
+          ))}
+        </View>
         <View style={styles.adCta}>
           <Text style={styles.adCtaText}>View plans</Text>
-          <Ionicons name="chevron-forward" size={14} color="#1A1208" />
+          <Ionicons name="arrow-forward" size={14} color="#24104F" />
         </View>
       </View>
     </TouchableOpacity>
@@ -1300,103 +1298,77 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     height: AD_BANNER_H,
     overflow: "hidden",
-    backgroundColor: "#1B0B2E",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255, 209, 102, 0.35)",
+    backgroundColor: "#24104F",
   },
-  adSheen: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 1,
-  },
-  adOrbLarge: {
+  adMark: {
     position: "absolute",
-    right: -40,
-    top: -50,
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: "rgba(255, 209, 102, 0.12)",
-    zIndex: 1,
-  },
-  adOrbSmall: {
-    position: "absolute",
-    right: 48,
-    bottom: -36,
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: "rgba(142, 45, 226, 0.35)",
-    zIndex: 1,
-  },
-  adGoldEdge: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: "#FFD166",
-    zIndex: 2,
+    right: -34,
+    top: -14,
+    transform: [{ rotate: "-14deg" }],
   },
   adCopy: {
     position: "absolute",
     left: 20,
-    right: 16,
-    bottom: 14,
-    top: 14,
-    justifyContent: "flex-end",
-    zIndex: 3,
-  },
-  adKickerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 4,
+    right: 20,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
   },
   adKicker: {
-    color: "#FFD166",
+    color: "rgba(255,255,255,0.7)",
     fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
+    letterSpacing: 1.2,
   },
   adTitle: {
     color: "#fff",
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: "800",
-    letterSpacing: -0.5,
-    textShadowColor: "rgba(0,0,0,0.35)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    letterSpacing: -0.4,
+    marginTop: 2,
   },
-  adSub: {
-    color: "rgba(255,255,255,0.9)",
+  adPerks: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: 12,
+    rowGap: 4,
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  adPerk: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  adBlueTick: {
+    width: 16,
+    height: 16,
+  },
+  adTick: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#FFD166",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  adPerkText: {
+    color: "#fff",
     fontSize: 13,
-    fontWeight: "500",
-    marginTop: 4,
-    marginBottom: 12,
+    fontWeight: "600",
   },
   adCta: {
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    backgroundColor: "#FFD166",
-    paddingHorizontal: 16,
+    gap: 6,
+    backgroundColor: "#fff",
+    paddingHorizontal: 18,
     paddingVertical: 9,
-    borderRadius: 22,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#FFD166",
-        shadowOpacity: 0.35,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 2 },
-      },
-      android: { elevation: 3 },
-    }),
+    borderRadius: 20,
   },
   adCtaText: {
-    color: "#1A1208",
+    color: "#24104F",
     fontSize: 13,
     fontWeight: "800",
   },
