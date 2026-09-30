@@ -370,7 +370,8 @@ export async function completeAccountLogin(
       id: user.id,
       email,
       name: user.name || '',
-      profileComplete: user.profileComplete || false,
+      profileComplete:
+        typeof user.profileComplete === 'boolean' ? user.profileComplete : undefined,
     };
   }
 }
@@ -429,6 +430,19 @@ export async function resolvePostLoginRoute(
   const state = await checkProfileSetup(user);
   // `unknown` goes to tabs: its gate shows a retry screen until the server answers
   return state === 'incomplete' ? '/create-profile' : '/(tabs)';
+}
+
+/**
+ * Route straight after sign-in. `completeAccountLogin` returns the server's
+ * own profileComplete (from /me or the login response), so no extra request.
+ */
+export async function routeAfterSignIn(
+  user: AuthUser,
+): Promise<'/(tabs)' | '/create-profile'> {
+  if (typeof user.profileComplete === 'boolean') {
+    return user.profileComplete ? '/(tabs)' : '/create-profile';
+  }
+  return resolvePostLoginRoute(user);
 }
 
 /** Logout: notify server (clears device lock) + clear all local session data */

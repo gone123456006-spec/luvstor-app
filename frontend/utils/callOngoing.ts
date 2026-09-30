@@ -18,6 +18,7 @@ import {
   Platform,
 } from 'react-native';
 import Constants from 'expo-constants';
+import { loadNotifications } from './notificationsModule';
 
 export const CALL_ONGOING_END_EVENT = 'luvstor_call_end_requested';
 export const CALL_ONGOING_OPEN_EVENT = 'luvstor_call_open_requested';
@@ -65,15 +66,6 @@ let active: OngoingCallInfo | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let usingNative = false;
 let fallbackNotifId: string | null = null;
-
-function loadNotifications(): typeof import('expo-notifications') | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('expo-notifications');
-  } catch {
-    return null;
-  }
-}
 
 export function isCallForegroundNativeAvailable(): boolean {
   return !!Native;

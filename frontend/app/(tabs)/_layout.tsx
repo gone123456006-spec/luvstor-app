@@ -41,7 +41,7 @@ export default function TabLayout() {
   // Latch inset — Modals must not resize / teleport the absolute tab bar
   const stableBottom = useStableBottomInset();
   const { sessionVersion, user, signOut } = useAuth();
-  const { unreadCount, refreshUnread } = useSocket();
+  const { socket, unreadCount, refreshUnread } = useSocket();
   const hadUserRef = useRef(false);
   const [profileGate, setProfileGate] = useState<
     'checking' | 'ok' | 'need-profile' | 'need-location' | 'offline'
@@ -150,14 +150,25 @@ export default function TabLayout() {
     };
   }, [user, sessionVersion, router, gateAttempt, signOut]);
 
-  // Retry the gate automatically when the user comes back to the app
+  // Retry the gate without a tap: on return to the app, when the realtime
+  // connection comes back (server awake / internet back), and on a backoff timer
   useEffect(() => {
     if (profileGate !== 'offline') return;
+    const retry = () => setGateAttempt((n) => n + 1);
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') setGateAttempt((n) => n + 1);
+      if (next === 'active') retry();
     });
-    return () => sub.remove();
-  }, [profileGate]);
+    socket?.on('connect', retry);
+    const delay = Math.min(60_000, 5_000 * 2 ** Math.min(gateAttempt, 4));
+    const timer = setTimeout(() => {
+      if (AppState.currentState === 'active') retry();
+    }, delay);
+    return () => {
+      sub.remove();
+      socket?.off('connect', retry);
+      clearTimeout(timer);
+    };
+  }, [profileGate, socket, gateAttempt]);
 
   useEffect(() => {
     refreshUnread();

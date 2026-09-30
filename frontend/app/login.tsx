@@ -25,8 +25,14 @@ import {
 } from "../config/googleAuth";
 import { useAuth } from "../contexts/AuthContext";
 import { mapGoogleSignInError, useGoogleAuth } from "../hooks/useGoogleAuth";
-import { ApiError, apiGoogleLogin, apiSendOTP } from "../utils/api";
-import { resolvePostLoginRoute } from "../utils/auth";
+import {
+    ApiError,
+    apiGoogleLogin,
+    apiSendOTP,
+    warmUpServer,
+} from "../utils/api";
+import { routeAfterSignIn } from "../utils/auth";
+import { claimPendingReferralInBackground } from "../utils/referrals";
 import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
@@ -139,6 +145,10 @@ export default function LoginScreen() {
     });
   }, [slide, heroColorAnim]);
 
+  React.useEffect(() => {
+    warmUpServer();
+  }, []);
+
   // Cycle hero poses + colours one by one in the same position
   React.useEffect(() => {
     const id = setInterval(() => {
@@ -158,25 +168,7 @@ export default function LoginScreen() {
       profileComplete: user.profileComplete,
     });
 
-    // Backup attribution if auth path missed the invite code
-    try {
-      const {
-        peekPendingReferralCode,
-        consumePendingReferralCode,
-      } = await import("../utils/pendingReferral");
-      const { claimReferral } = await import("../utils/referrals");
-      const code = await peekPendingReferralCode();
-      if (code) {
-        try {
-          await claimReferral(token, code);
-        } catch {
-          /* already attributed / not new / etc. */
-        }
-        await consumePendingReferralCode();
-      }
-    } catch {
-      /* non-blocking */
-    }
+    claimPendingReferralInBackground(token);
 
     // Prefer deep-link / share redirect → pending profile → normal post-login
     const redirectRaw = Array.isArray(params.redirect)
@@ -192,7 +184,7 @@ export default function LoginScreen() {
       return;
     }
 
-    const nextRoute = await resolvePostLoginRoute(hydratedUser);
+    const nextRoute = await routeAfterSignIn(hydratedUser);
     router.replace(nextRoute as any);
   };
 
@@ -245,6 +237,7 @@ export default function LoginScreen() {
     setError("");
     if (!forceTransfer) setDeviceConflict(false);
     setGoogleLoading(true);
+    warmUpServer();
 
     try {
       let idToken = pendingIdToken;

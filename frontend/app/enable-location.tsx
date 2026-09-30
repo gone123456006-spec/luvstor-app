@@ -5,12 +5,10 @@ import {
   ActivityIndicator,
   BackHandler,
   LayoutAnimation,
-  Platform,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
-  UIManager,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -22,13 +20,6 @@ import {
   useLocationAccess,
 } from "../utils/locationSetup";
 import { uploadMyLocation } from "../utils/nearby";
-
-if (
-  Platform.OS === "android" &&
-  UIManager.setLayoutAnimationEnabledExperimental
-) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 const C = {
   bg: "#16051F",

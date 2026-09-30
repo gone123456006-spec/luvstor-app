@@ -125,6 +125,20 @@ export const AUTH_FETCH_TIMEOUT_MS = 45_000;
 /** Uploads move real bytes over mobile data — they need more room than reads. */
 export const UPLOAD_FETCH_TIMEOUT_MS = 60_000;
 
+const WARM_UP_INTERVAL_MS = 60_000;
+let lastWarmUpAt = 0;
+
+/**
+ * Fire-and-forget ping so a sleeping Render instance starts booting while the
+ * user is still typing or picking a Google account, not after they tap.
+ */
+export function warmUpServer(): void {
+  const now = Date.now();
+  if (now - lastWarmUpAt < WARM_UP_INTERVAL_MS) return;
+  lastWarmUpAt = now;
+  fetch(`${getApiBase()}/health`, { method: 'GET' }).catch(() => undefined);
+}
+
 /**
  * `fetch` that always settles. Anything that talks to the API must go through
  * this (or `apiRequest`) — a bare `fetch` can hang until the OS TCP timeout,

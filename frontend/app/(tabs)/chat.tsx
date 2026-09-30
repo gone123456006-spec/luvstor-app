@@ -364,8 +364,7 @@ export default function ChatScreen() {
     conversationDeletedTick,
     lastConversationDeleted,
     refreshUnread,
-    presenceTick,
-    lastPresence,
+    subscribePresence,
     profileTick,
     lastProfileUpdate,
     markChatAsRead,
@@ -1342,10 +1341,10 @@ export default function ChatScreen() {
   ]);
 
   // Instant online / offline across every category + Online tab
-  React.useEffect(() => {
-    if (presenceTick === 0 || !lastPresence?.userId) return;
-    const uid = String(lastPresence.userId);
-    const online = !!lastPresence.isOnline;
+  React.useEffect(() => subscribePresence((presence) => {
+    if (!presence.userId) return;
+    const uid = String(presence.userId);
+    const online = !!presence.isOnline;
     const patch = (item: ConversationItem): ConversationItem =>
       item.otherId === uid
         ? {
@@ -1397,7 +1396,7 @@ export default function ChatScreen() {
     setArchiveRows(next.archiveRows);
     setOnlineRows(next.onlineRows);
     setChatListCache({ ...next, sessionVersion, loaded: true });
-  }, [presenceTick, lastPresence, sessionVersion]);
+  }), [subscribePresence, sessionVersion]);
 
   const goToChat = (
     otherId: string,

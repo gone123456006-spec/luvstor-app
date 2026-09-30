@@ -18,7 +18,7 @@ const ICON = path.join(root, "assets", "images", "app-icon.png");
 const MONO = path.join(root, "assets", "images", "android-icon-monochrome.png");
 const PURPLE = "#5A2FC7";
 /** Match adaptive icon background so splash ↔ icon feel continuous. */
-const SPLASH_BG = PURPLE;
+const SPLASH_BG = "#1A0136";
 /**
  * Android 12+ splash icons are masked to a circle ~192dp on a 288dp canvas.
  * imageWidth must stay well under 192 or left/right of the logo get clipped.

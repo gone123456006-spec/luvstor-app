@@ -152,7 +152,7 @@ function ensureAndroidColors() {
   );
   if (!fs.existsSync(path.dirname(colorsPath))) return;
 
-  const splashBg = "#5A2FC7";
+  const splashBg = "#1A0136";
   const iconBg =
     process.env.EXPO_PUBLIC_ICON_BACKGROUND ||
     "#5A2FC7";

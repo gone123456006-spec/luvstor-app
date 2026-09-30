@@ -19,8 +19,14 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DeviceTransferModal from "../components/DeviceTransferModal";
 import { useAuth } from "../contexts/AuthContext";
-import { ApiError, apiSendOTP, apiVerifyOTP } from "../utils/api";
-import { resolvePostLoginRoute } from "../utils/auth";
+import {
+  ApiError,
+  apiSendOTP,
+  apiVerifyOTP,
+  warmUpServer,
+} from "../utils/api";
+import { routeAfterSignIn } from "../utils/auth";
+import { claimPendingReferralInBackground } from "../utils/referrals";
 import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
@@ -118,6 +124,10 @@ export default function OtpScreen() {
   }, []);
 
   useEffect(() => {
+    warmUpServer();
+  }, []);
+
+  useEffect(() => {
     const initial = parseInt(cooldown || "0", 10);
     if (initial > 0) setResendCooldown(initial);
   }, [cooldown]);
@@ -144,6 +154,7 @@ export default function OtpScreen() {
       setOtp(next);
       const focusAt = Math.min(digits.length, OTP_LENGTH) - 1;
       inputs.current[focusAt]?.focus();
+      if (digits.length >= OTP_LENGTH) void handleVerify(next.join(""));
       return;
     }
 
@@ -153,6 +164,8 @@ export default function OtpScreen() {
     if (digits && index < OTP_LENGTH - 1) {
       inputs.current[index + 1]?.focus();
     }
+    const code = newOtp.join("");
+    if (digits && code.length === OTP_LENGTH) void handleVerify(code);
   };
 
   const handleKeyPress = (e: any, index: number) => {
@@ -175,24 +188,7 @@ export default function OtpScreen() {
       profileComplete: user.profileComplete,
     });
 
-    try {
-      const {
-        peekPendingReferralCode,
-        consumePendingReferralCode,
-      } = await import("../utils/pendingReferral");
-      const { claimReferral } = await import("../utils/referrals");
-      const code = await peekPendingReferralCode();
-      if (code) {
-        try {
-          await claimReferral(token, code);
-        } catch {
-          /* already attributed / not new / etc. */
-        }
-        await consumePendingReferralCode();
-      }
-    } catch {
-      /* non-blocking */
-    }
+    claimPendingReferralInBackground(token);
 
     const redirectRaw = Array.isArray(redirect) ? redirect[0] : redirect;
     const redirectMatch = String(redirectRaw || "").match(
@@ -205,12 +201,13 @@ export default function OtpScreen() {
       return;
     }
 
-    const nextRoute = await resolvePostLoginRoute(hydratedUser);
+    const nextRoute = await routeAfterSignIn(hydratedUser);
     router.replace(nextRoute as any);
   };
 
-  const handleVerify = async () => {
-    const code = otp.join("");
+  const handleVerify = async (entered?: string) => {
+    if (busy) return;
+    const code = entered ?? otp.join("");
     if (code.length < OTP_LENGTH) {
       setError("Enter the complete 6-digit code");
       return;
@@ -393,6 +390,8 @@ export default function OtpScreen() {
                       onChangeText={(text) => handleChange(text, index)}
                       onKeyPress={(e) => handleKeyPress(e, index)}
                       keyboardType="number-pad"
+                      autoComplete={index === 0 ? "one-time-code" : "off"}
+                      textContentType={index === 0 ? "oneTimeCode" : "none"}
                       maxLength={index === 0 ? OTP_LENGTH : 1}
                       selectTextOnFocus
                       editable={!busy}
@@ -411,7 +410,7 @@ export default function OtpScreen() {
               ) : null}
 
               <TouchableOpacity
-                onPress={handleVerify}
+                onPress={() => handleVerify()}
                 activeOpacity={0.88}
                 disabled={busy || filledCount < OTP_LENGTH || deviceConflict}
                 style={[
