@@ -34,7 +34,7 @@ import {
     markNotificationsUnread,
 } from "../utils/notifications";
 import { getSheetBottomPadding } from "../utils/navigation";
-import { routeForData } from "../utils/push";
+import { isExternalLink, openExternalLink, routeForData } from "../utils/push";
 import { fetchSubscriptionStatus } from "../utils/subscriptions";
 
 const PAGE_SIZE = 25;
@@ -533,6 +533,11 @@ export default function NotificationsScreen() {
       deepLink: n.deepLink,
       actorId: n.actorId,
     });
+
+    if (isExternalLink(route)) {
+      void openExternalLink(route);
+      return;
+    }
 
     if (route.startsWith("/messages/")) {
       router.push({
