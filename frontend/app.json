@@ -177,6 +177,8 @@
       "./plugins/withWebRTC",
       "./plugins/withCallForegroundService",
       "./plugins/withCallAudio",
+      "./plugins/withLargeScreenSupport",
+      "./plugins/withReleaseManifest",
       [
         "expo-notifications",
         {

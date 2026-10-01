@@ -293,7 +293,7 @@ const styles = StyleSheet.create({
     height: SCREEN_H,
   },
   page: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     flex: 1,
   },
   backAbs: {

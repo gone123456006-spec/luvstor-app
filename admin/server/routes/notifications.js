@@ -32,8 +32,8 @@ function readMessage(body) {
   const deepLink = cleanText(body?.deepLink, 300);
   if (!type) throw new HttpError(400, `type must be one of: ${SENDABLE_TYPES.join(', ')}`);
   if (!title) throw new HttpError(400, 'Title is required');
-  if (deepLink && !/^(\/|luvstor:\/\/)/.test(deepLink)) {
-    throw new HttpError(400, 'Deep link must start with / or luvstor://');
+  if (deepLink && !/^(\/|luvstor:\/\/|https:\/\/[^\s/]+\.[^\s]+$)/i.test(deepLink)) {
+    throw new HttpError(400, 'Link must start with /, luvstor:// or https://');
   }
   return { type, title, body: text, deepLink };
 }
