@@ -59,7 +59,7 @@ function MessageFields({ meta, value, onChange }: { meta: Meta; value: Message; 
         <textarea rows={4} value={value.body} onChange={set('body')} maxLength={1000} />
       </label>
       <label className="field">
-        <span>Deep link (optional, e.g. /support or luvstor://…)</span>
+        <span>Link (optional, e.g. /support, luvstor://… or a Play Store https:// URL)</span>
         <input value={value.deepLink} onChange={set('deepLink')} maxLength={300} placeholder="/" />
       </label>
     </>
