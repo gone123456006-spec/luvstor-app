@@ -5,7 +5,6 @@ import {
     ActivityIndicator,
     AppState,
     FlatList,
-    InteractionManager,
     Platform,
     RefreshControl,
     ScrollView,
@@ -26,6 +25,7 @@ import WhatsAppAvatar, {
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import { apiRequest } from "../../utils/api";
+import { runWhenIdle } from "../../utils/idle";
 import { resolveMediaUrl } from "../../utils/media";
 import {
   getRememberedPeerProfile,
@@ -82,6 +82,7 @@ import {
     clearThreadCache,
     preloadRecentThreads,
     setThreadCacheAccount,
+    warmThreadsFromDisk,
 } from "../../utils/threadCache";
 import { formatChatListTime } from "../../utils/timeFormat";
 
@@ -367,7 +368,6 @@ export default function ChatScreen() {
     subscribePresence,
     profileTick,
     lastProfileUpdate,
-    markChatAsRead,
   } = useSocket();
 
   const cached = getChatListCache(sessionVersion);
@@ -1000,7 +1000,7 @@ export default function ChatScreen() {
         });
 
         // DPs on disk ahead of time → rows show photos instantly and offline.
-        InteractionManager.runAfterInteractions(() => {
+        runWhenIdle(() => {
           prefetchAvatars(
             [...nextConversations, ...nextFriends, ...nextRequests]
               .filter((row) => !row.privacyHidden)
@@ -1008,14 +1008,21 @@ export default function ChatScreen() {
           );
         });
 
-        if (user?.email && !silent) {
-          // Warm a few threads, but only after the list has settled — eight
-          // parallel history fetches during paint starved the UI.
+        if (user?.email) {
           const email = user.email;
-          const warmIds = nextConversations.slice(0, 3).map((c) => c.otherId);
-          InteractionManager.runAfterInteractions(() => {
-            void preloadRecentThreads(email, warmIds, token, 3);
+          // Saved threads → memory (disk only, no network) so taps open instantly
+          const diskIds = nextConversations.slice(0, 12).map((c) => c.otherId);
+          runWhenIdle(() => {
+            void warmThreadsFromDisk(email, diskIds);
           });
+          if (!silent) {
+            // Warm a few threads, but only after the list has settled — eight
+            // parallel history fetches during paint starved the UI.
+            const warmIds = nextConversations.slice(0, 3).map((c) => c.otherId);
+            runWhenIdle(() => {
+              void preloadRecentThreads(email, warmIds, token, 3);
+            });
+          }
         }
     } catch (e) {
         console.error("Failed to load conversations", e);
@@ -1044,7 +1051,7 @@ export default function ChatScreen() {
   React.useEffect(() => {
     const key = `${user?.email || ""}|${sessionVersion}`;
     if (!user?.email || warmedSessionRef.current === key) return;
-    const task = InteractionManager.runAfterInteractions(() => {
+    const task = runWhenIdle(() => {
       if (warmedSessionRef.current === key) return;
       warmedSessionRef.current = key;
       void loadConversations(hasLoadedOnce.current);
@@ -1417,8 +1424,8 @@ export default function ChatScreen() {
       name: name || "User",
       photo: privacyHidden ? "" : photo || "",
     });
-    // WhatsApp: badge clears the instant you open the chat
-    markChatAsRead(otherId);
+    // Badge clears from the chat screen's mount — re-rendering this list in the
+    // tap frame delayed the push animation.
     closeSearchMode();
     const matched =
       !!friendship?.areFriends ||
@@ -1989,6 +1996,7 @@ export default function ChatScreen() {
     <TouchableOpacity
       style={styles.chatItem}
       activeOpacity={0.55}
+      onPressIn={() => void warmThreadsFromDisk(user?.email, [item.otherId])}
       onPress={() =>
         goToChat(
           item.otherId,
@@ -2080,6 +2088,7 @@ export default function ChatScreen() {
       openUserProfile,
       renderTrailing,
       renderRequestActions,
+      user?.email,
     ],
   );
 

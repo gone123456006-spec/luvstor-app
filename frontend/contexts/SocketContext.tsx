@@ -121,7 +121,9 @@ type SocketContextValue = {
   unreadCount: number;
   refreshUnread: () => Promise<void>;
   notifUnreadCount: number;
-  refreshNotifUnread: () => Promise<void>;
+  refreshNotifUnread: (force?: boolean) => Promise<void>;
+  /** Optimistic badge update (e.g. 0 right after "Clear all"). */
+  setNotifUnreadLocal: (count: number) => void;
   notifTick: number;
   chatListTick: number;
   chatPreviewTick: number;
@@ -284,10 +286,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const refreshNotifUnread = useCallback(async () => {
+  /** `force` skips the 8s throttle — use right after the user changes the list. */
+  const refreshNotifUnread = useCallback(async (force = false) => {
     const g = notifGateRef.current;
     if (g.inflight) return;
-    if (Date.now() - g.at < 8_000) return;
+    if (!force && Date.now() - g.at < 8_000) return;
     g.inflight = true;
     g.at = Date.now();
     try {
@@ -938,6 +941,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       refreshUnread,
       notifUnreadCount,
       refreshNotifUnread,
+      setNotifUnreadLocal: setNotifUnreadCount,
       notifTick,
       chatListTick,
       chatPreviewTick,

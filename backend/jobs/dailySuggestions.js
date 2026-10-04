@@ -14,6 +14,7 @@ const { createPersonalNotifications } = require('../services/notifications');
 const { countViewersSinceBulk } = require('../services/profileViews');
 const { buildEligibilityFilter, hasRealLocation } = require('../services/discovery');
 const { resolveShowMe, toGenderFilter } = require('../utils/showMe');
+const { filterWithinBudget, recordAutoSent } = require('../services/autoNotificationPolicy');
 
 /** Master switch — set DAILY_SUGGESTIONS_ENABLED=false to turn the digest off. */
 const ENABLED = process.env.DAILY_SUGGESTIONS_ENABLED !== 'false';
@@ -29,8 +30,11 @@ const TZ_OFFSET_MINUTES = clampInt(process.env.DAILY_SUGGESTION_TZ_OFFSET_MINUTE
 /** Accounts idle for longer than this are left alone. */
 const ACTIVE_WITHIN_DAYS = clampInt(process.env.DAILY_SUGGESTION_ACTIVE_DAYS, 30, 1, 365);
 
-/** How far back the digest looks for likes, matches and profile visits. */
-const LOOKBACK_HOURS = clampInt(process.env.DAILY_SUGGESTION_LOOKBACK_HOURS, 24, 1, 168);
+/**
+ * Local weekdays (0 = Sunday … 6 = Saturday) the digest goes out on.
+ * Default Mon / Wed / Sat — three times a week, never daily.
+ */
+const SEND_WEEKDAYS = parseWeekdays(process.env.DAILY_SUGGESTION_DAYS, [1, 3, 6]);
 
 /** "New people near you" counts joiners from the last week. */
 const NEW_JOINER_DAYS = clampInt(process.env.DAILY_SUGGESTION_NEW_JOINER_DAYS, 7, 1, 30);
@@ -55,6 +59,28 @@ function clampInt(value, fallback, min, max) {
   return Math.min(Math.max(n, min), max);
 }
 
+function parseWeekdays(value, fallback) {
+  const days = String(value || '')
+    .split(',')
+    .map((s) => parseInt(s, 10))
+    .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
+  return days.length ? [...new Set(days)].sort() : fallback;
+}
+
+/** Local weekday in the configured timezone. */
+function localWeekday(now = new Date()) {
+  return new Date(now.getTime() + TZ_OFFSET_MINUTES * MINUTE_MS).getUTCDay();
+}
+
+/** Days since the previous send day, so each digest covers the whole gap. */
+function lookbackDays(now = new Date()) {
+  const today = localWeekday(now);
+  for (let back = 1; back <= 7; back++) {
+    if (SEND_WEEKDAYS.includes((today - back + 7) % 7)) return back;
+  }
+  return 7;
+}
+
 /** Calendar date in the configured timezone — the digest's idempotency key. */
 function suggestionDayKey(now = new Date()) {
   const shifted = new Date(now.getTime() + TZ_OFFSET_MINUTES * MINUTE_MS);
@@ -71,7 +97,7 @@ function localHour(now = new Date()) {
  * send; the day key on each notification is what actually enforces "once".
  */
 function isSendWindow(now = new Date()) {
-  return localHour(now) === SEND_HOUR;
+  return SEND_WEEKDAYS.includes(localWeekday(now)) && localHour(now) === SEND_HOUR;
 }
 
 function plural(n, one, many) {
@@ -106,8 +132,8 @@ function composeDigest(signals) {
   } else if (views > 0) {
     title =
       views === 1
-        ? '1 person viewed your profile today'
-        : `${views} people viewed your profile today`;
+        ? '1 person viewed your profile'
+        : `${views} people viewed your profile`;
   } else if (nearby > 0) {
     // Retention-first tray copy — concrete nearby count drives opens.
     title =
@@ -220,7 +246,7 @@ async function sendDailySuggestions(io, { now = new Date(), force = false } = {}
   if (!force && !isSendWindow(now)) return { ...stats, skipped: 'outside-send-window' };
 
   const dayKey = suggestionDayKey(now);
-  const socialSince = new Date(now.getTime() - LOOKBACK_HOURS * HOUR_MS);
+  const socialSince = new Date(now.getTime() - lookbackDays(now) * DAY_MS);
   const joinerSince = new Date(now.getTime() - NEW_JOINER_DAYS * DAY_MS);
   const activeSince = new Date(now.getTime() - ACTIVE_WITHIN_DAYS * DAY_MS);
 
@@ -251,14 +277,16 @@ async function sendDailySuggestions(io, { now = new Date(), force = false } = {}
     stats.scanned += page.length;
 
     const ids = page.map((u) => u._id);
-    const [{ likes, matches }, views] = await Promise.all([
+    const [{ likes, matches }, views, withinBudget] = await Promise.all([
       collectRelationshipSignals(ids, socialSince),
       countViewersSinceBulk(ids, socialSince),
+      filterWithinBudget(ids, now),
     ]);
 
     const items = [];
     for (const user of page) {
       const id = String(user._id);
+      if (!withinBudget.has(id)) continue;
       const signals = {
         matches: matches.get(id) || 0,
         likes: likes.get(id) || 0,
@@ -301,6 +329,7 @@ async function sendDailySuggestions(io, { now = new Date(), force = false } = {}
       });
       stats.created += result.created;
       stats.pushed += result.pushed;
+      await recordAutoSent(items.map((i) => i.userId), 'DAILY_SUGGESTION', now);
     }
 
     if (page.length < PAGE_SIZE) break;
@@ -347,7 +376,10 @@ module.exports = {
   suggestionDayKey,
   isSendWindow,
   localHour,
+  localWeekday,
+  lookbackDays,
   SEND_HOUR,
+  SEND_WEEKDAYS,
   TZ_OFFSET_MINUTES,
   ENABLED,
 };

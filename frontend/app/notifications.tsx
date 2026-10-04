@@ -267,7 +267,8 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const bottomInset = useStableBottomInset();
-  const { notifTick, refreshNotifUnread, notifUnreadCount } = useSocket();
+  const { notifTick, refreshNotifUnread, notifUnreadCount, setNotifUnreadLocal } =
+    useSocket();
   const { showAlert } = useAppAlert();
   const { user } = useAuth();
   const userId = user?.id || "";
@@ -552,7 +553,7 @@ export default function NotificationsScreen() {
         setItems((prev) =>
           prev.map((x) => (x._id === n._id ? { ...x, read: true } : x)),
         );
-        refreshNotifUnread();
+        void refreshNotifUnread(true);
       }
     } catch {
       /* navigation should still happen */
@@ -633,7 +634,7 @@ export default function NotificationsScreen() {
       setItems((prev) =>
         prev.map((x) => (x._id === n._id ? { ...x, read: true } : x)),
       );
-      refreshNotifUnread();
+      void refreshNotifUnread(true);
     } catch {
       /* ignore */
     }
@@ -684,15 +685,20 @@ export default function NotificationsScreen() {
 
   const markAll = async () => {
     setMenuOpen(false);
+    // Optimistic — ticks and badge update before the server answers
+    const before = items;
+    setItems((prev) =>
+      filter === "Unread" ? [] : prev.map((x) => ({ ...x, read: true })),
+    );
+    setNotifUnreadLocal(0);
     try {
       const token = await getAuthToken();
       if (!token) return;
       await markNotificationsRead(token, { all: true });
-      setItems((prev) => prev.map((x) => ({ ...x, read: true })));
-      refreshNotifUnread();
-      if (filter === "Unread") load(true);
+      void refreshNotifUnread(true);
     } catch {
-      /* ignore */
+      setItems(before);
+      void refreshNotifUnread(true);
     }
   };
 
@@ -709,15 +715,27 @@ export default function NotificationsScreen() {
           text: "Clear all",
           style: "destructive",
           onPress: async () => {
+            // Optimistic — list and badge empty instantly; restored on failure
+            const before = {
+              items,
+              cursor: cursor.current,
+              hasMore: hasMore.current,
+            };
+            setItems([]);
+            cursor.current = null;
+            hasMore.current = false;
+            lastLoadAtRef.current = Date.now();
+            setNotifUnreadLocal(0);
             try {
               const token = await getAuthToken();
-              if (!token) return;
+              if (!token) throw new Error("Not signed in");
               await clearAllNotifications(token);
-              setItems([]);
-              cursor.current = null;
-              hasMore.current = false;
-              refreshNotifUnread();
+              void refreshNotifUnread(true);
             } catch {
+              setItems(before.items);
+              cursor.current = before.cursor;
+              hasMore.current = before.hasMore;
+              void refreshNotifUnread(true);
               showAlert({
                 title: "Could not clear",
                 message: "Please try again.",
@@ -737,7 +755,7 @@ export default function NotificationsScreen() {
       const token = await getAuthToken();
       if (!token) return;
       await deleteNotification(token, n._id);
-      refreshNotifUnread();
+      void refreshNotifUnread(true);
     } catch {
       load(true);
     }
@@ -757,7 +775,7 @@ export default function NotificationsScreen() {
       } else {
         await markNotificationsUnread(token, [n._id]);
       }
-      refreshNotifUnread();
+      void refreshNotifUnread(true);
     } catch {
       load(true);
     }

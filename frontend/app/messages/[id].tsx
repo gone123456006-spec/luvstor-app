@@ -29,7 +29,6 @@ import {
     Dimensions,
     Easing,
     FlatList,
-    InteractionManager,
     Keyboard,
     Modal,
     Platform,
@@ -102,6 +101,7 @@ import {
   rememberPeerProfile,
 } from "../../utils/peerProfile";
 import { getSheetBottomPadding } from "../../utils/navigation";
+import { runWhenIdle } from "../../utils/idle";
 import { getAuthToken, getCurrentAuthUser } from "../../utils/auth";
 import { askReviewAfterChat, noteMessageSent } from "../../utils/inAppReview";
 import {
@@ -123,8 +123,10 @@ import {
 import { fetchUserProfile, NearbyUser } from "../../utils/nearby";
 import {
     clearThreadCache,
+    getRawThreadFromMemory,
     getThreadFromMemory,
     hydrateThreadFromDisk,
+    setThreadInMemory,
     schedulePersistThread,
     setThreadCacheAccount,
     type CachedChatMsg,
@@ -135,12 +137,12 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const IS_COMPACT = SCREEN_WIDTH < 360;
 const IS_WIDE = SCREEN_WIDTH >= 768;
 const INPUT_BTN = IS_COMPACT ? 34 : IS_WIDE ? 40 : 36;
-const SEND_BTN = INPUT_BTN - 4;
-const LUVSTOR_PURPLE = "#8E2DE2";
+const SEND_BTN = INPUT_BTN + 6;
+/** Brand purple (logo / active tab), lifted slightly at the top-left for depth */
+const SEND_GRADIENT = ["#5A16A8", "#370372"] as const;
 const SENDER_BUBBLE_BLACK = "#111";
 const LUVSTOR_PRIMARY = "#6750A4";
 const APP_THEME = LUVSTOR_PRIMARY;
-const LUVSTOR_GRADIENT = [LUVSTOR_PURPLE, LUVSTOR_PRIMARY] as const;
 const INPUT_ICON = IS_COMPACT ? 20 : 22;
 const ATTACH_ICON = IS_COMPACT ? 24 : 26;
 const CHAT_KEYBOARD_GAP = 4;
@@ -239,6 +241,89 @@ interface ChatMsg {
 
 function getCachedThread(chatId: string): ChatMsg[] {
   return (getThreadFromMemory(chatId) as ChatMsg[] | undefined) || [];
+}
+
+/** Messages to paint on the very first frame: memory, else preloaded rows. */
+function firstFrameThread(chatId: string, myUid?: string): ChatMsg[] {
+  const cached = getCachedThread(chatId);
+  if (cached.length || !myUid) return cached;
+  const raw = getRawThreadFromMemory(chatId);
+  if (!raw) return [];
+  try {
+    const mapped = (raw as any[]).map((m) => mapMsg(m, String(myUid)));
+    setThreadInMemory(chatId, mapped as CachedChatMsg[]);
+    return mapped;
+  } catch {
+    return [];
+  }
+}
+
+/** Server chat row → screen message (pure; also used for first-frame cache). */
+function mapMsg(m: any, myUid: string): ChatMsg {
+  const isDeleted = Boolean(m.isDeleted);
+  const mediaUrl = isDeleted
+    ? null
+    : resolveMediaUrl(m.mediaUrl) || m.mediaUrl || null;
+  const mediaThumb =
+    !isDeleted && !m.viewOnce && typeof m.mediaThumb === "string"
+      ? m.mediaThumb
+      : undefined;
+
+  let replyTo: ChatMsg | undefined;
+  const rt = m.replyTo;
+  if (rt && typeof rt === "object" && rt._id) {
+    const rtDeleted = Boolean(rt.isDeleted);
+    const rtViewOnce = !!rt.viewOnce;
+    const rtMedia =
+      rtDeleted || rtViewOnce
+        ? null
+        : resolveMediaUrl(rt.mediaUrl) || rt.mediaUrl || null;
+    replyTo = {
+      _id: String(rt._id),
+      sender: String(rt.senderId) === myUid ? "me" : "other",
+      text: rtDeleted ? "" : rt.text || "",
+      type: rt.type || "text",
+      mediaUrl:
+        !rtDeleted && !rtViewOnce && rt.type === "image" ? rtMedia : null,
+      localImageUri:
+        !rtDeleted && !rtViewOnce && rt.type === "image" && rtMedia
+          ? rtMedia
+          : undefined,
+      localVoiceUri:
+        !rtDeleted && rt.type === "audio" && rtMedia ? rtMedia : undefined,
+      createdAt: rt.createdAt ? new Date(rt.createdAt).getTime() : Date.now(),
+      isDeleted: rtDeleted,
+      viewOnce: rtViewOnce,
+      viewOnceOpened: !!rt.viewOnceOpened,
+    };
+  }
+
+  return {
+    _id: String(m._id),
+    sender: String(m.senderId) === myUid ? "me" : "other",
+    text: isDeleted ? "" : m.text || "",
+    type: m.type || "text",
+    mediaUrl,
+    mediaThumb,
+    localVoiceUri:
+      !isDeleted && m.type === "audio" && mediaUrl ? mediaUrl : undefined,
+    replyTo,
+    viewOnce: !!m.viewOnce,
+    viewOnceOpened: !!m.viewOnceOpened,
+    callMeta: m.callMeta || undefined,
+    // Invalid timestamps would become NaN and corrupt ordering
+    createdAt: Number.isFinite(new Date(m.createdAt).getTime())
+      ? new Date(m.createdAt).getTime()
+      : Date.now(),
+    pending: false,
+    undelivered: !!m.undelivered,
+    // Back-compat: older messages had no `delivered` field — treat as delivered
+    delivered: m.undelivered
+      ? false
+      : m.delivered === true || m.read === true || m.delivered == null,
+    read: !!m.read && !m.undelivered,
+    isDeleted,
+  };
 }
 
 function DeliveryTicks({
@@ -1435,7 +1520,7 @@ export default function MessageScreen() {
     friendshipStatusParam === "mutual_match";
 
   const [messages, setMessages] = useState<ChatMsg[]>(() =>
-    getCachedThread(peerId),
+    firstFrameThread(peerId, user?.id),
   );
   const [loading, setLoading] = useState(
     () => getCachedThread(peerId).length === 0,
@@ -2037,7 +2122,7 @@ export default function MessageScreen() {
       setMessages(deferred);
     }
     if (after) {
-      InteractionManager.runAfterInteractions(() => {
+      runWhenIdle(() => {
         requestAnimationFrame(after);
       });
     }
@@ -2867,73 +2952,6 @@ export default function MessageScreen() {
   useEffect(() => {
     setThreadCacheAccount(user?.email);
   }, [user?.email]);
-
-  const mapMsg = (m: any, myUid: string): ChatMsg => {
-    const isDeleted = Boolean(m.isDeleted);
-    const mediaUrl = isDeleted
-      ? null
-      : resolveMediaUrl(m.mediaUrl) || m.mediaUrl || null;
-    const mediaThumb =
-      !isDeleted && !m.viewOnce && typeof m.mediaThumb === "string"
-        ? m.mediaThumb
-        : undefined;
-
-    let replyTo: ChatMsg | undefined;
-    const rt = m.replyTo;
-    if (rt && typeof rt === "object" && rt._id) {
-      const rtDeleted = Boolean(rt.isDeleted);
-      const rtViewOnce = !!rt.viewOnce;
-      const rtMedia =
-        rtDeleted || rtViewOnce
-          ? null
-          : resolveMediaUrl(rt.mediaUrl) || rt.mediaUrl || null;
-      replyTo = {
-        _id: String(rt._id),
-        sender: String(rt.senderId) === myUid ? "me" : "other",
-        text: rtDeleted ? "" : rt.text || "",
-        type: rt.type || "text",
-        mediaUrl:
-          !rtDeleted && !rtViewOnce && rt.type === "image" ? rtMedia : null,
-        localImageUri:
-          !rtDeleted && !rtViewOnce && rt.type === "image" && rtMedia
-            ? rtMedia
-            : undefined,
-        localVoiceUri:
-          !rtDeleted && rt.type === "audio" && rtMedia ? rtMedia : undefined,
-        createdAt: rt.createdAt ? new Date(rt.createdAt).getTime() : Date.now(),
-        isDeleted: rtDeleted,
-        viewOnce: rtViewOnce,
-        viewOnceOpened: !!rt.viewOnceOpened,
-      };
-    }
-
-    return {
-      _id: String(m._id),
-      sender: String(m.senderId) === myUid ? "me" : "other",
-      text: isDeleted ? "" : m.text || "",
-      type: m.type || "text",
-      mediaUrl,
-      mediaThumb,
-      localVoiceUri:
-        !isDeleted && m.type === "audio" && mediaUrl ? mediaUrl : undefined,
-      replyTo,
-      viewOnce: !!m.viewOnce,
-      viewOnceOpened: !!m.viewOnceOpened,
-      callMeta: m.callMeta || undefined,
-      // Invalid timestamps would become NaN and corrupt ordering
-      createdAt: Number.isFinite(new Date(m.createdAt).getTime())
-        ? new Date(m.createdAt).getTime()
-        : Date.now(),
-      pending: false,
-      undelivered: !!m.undelivered,
-      // Back-compat: older messages had no `delivered` field — treat as delivered
-      delivered: m.undelivered
-        ? false
-        : m.delivered === true || m.read === true || m.delivered == null,
-      read: !!m.read && !m.undelivered,
-      isDeleted,
-    };
-  };
 
   const replyTargetId = (m: ChatMsg | null | undefined) =>
     m && /^[0-9a-f]{24}$/i.test(String(m._id)) ? String(m._id) : null;
@@ -4968,7 +4986,7 @@ export default function MessageScreen() {
               if (dx < 12 && dy < 12) dismissChatKeyboard();
             }}
             removeClippedSubviews={Platform.OS === "android"}
-            initialNumToRender={18}
+            initialNumToRender={12}
             maxToRenderPerBatch={10}
             updateCellsBatchingPeriod={50}
             windowSize={11}
@@ -5288,7 +5306,7 @@ export default function MessageScreen() {
                   ]}
                 >
                   <LinearGradient
-                    colors={[...LUVSTOR_GRADIENT]}
+                    colors={[...SEND_GRADIENT]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                     style={styles.sendButtonGradient}
@@ -5301,7 +5319,7 @@ export default function MessageScreen() {
                             ? "send"
                             : "mic"
                       }
-                      size={INPUT_ICON - 3}
+                      size={INPUT_ICON}
                       color="#fff"
                     />
                   </LinearGradient>
@@ -6775,7 +6793,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(0,0,0,0.12)",
     paddingHorizontal: IS_COMPACT ? 12 : 14,
-    minHeight: INPUT_BTN,
+    minHeight: SEND_BTN,
     maxHeight: IS_WIDE ? 120 : 100,
   },
   inputWhileRecording: {
@@ -6804,7 +6822,8 @@ const styles = StyleSheet.create({
     height: SEND_BTN,
     borderRadius: SEND_BTN / 2,
     overflow: "hidden",
-    marginBottom: 1,
+    marginBottom: 0,
+    marginLeft: 4,
     flexShrink: 0,
   },
   sendButtonDisabled: {
@@ -6827,7 +6846,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(0,0,0,0.12)",
     paddingHorizontal: IS_COMPACT ? 12 : 14,
-    minHeight: INPUT_BTN,
+    minHeight: SEND_BTN,
     justifyContent: "space-between",
   },
   recordingIndicatorContainer: { flexDirection: "row", alignItems: "center" },

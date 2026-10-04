@@ -11,6 +11,21 @@ type Message = { type: string; title: string; body: string; deepLink: string };
 
 const EMPTY: Message = { type: 'system', title: '', body: '', deepLink: '' };
 
+const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.luvstor.app';
+const APP_UPDATE: Message = {
+  type: 'system',
+  title: '🔔 New update available',
+  body: "We've made some improvements to make your experience better. Update the app to enjoy the latest features and fixes. 😊",
+  deepLink: PLAY_STORE_URL,
+};
+
+function linkTarget(link: string): string {
+  if (!link) return 'Notifications screen';
+  if (link === PLAY_STORE_URL) return 'Luvstor on Google Play';
+  if (/^https:\/\//i.test(link)) return link;
+  return `App screen ${link}`;
+}
+
 export default function Notifications() {
   const [tab, setTab] = useState<Tab>('send');
   const meta = useApi<Meta>('/notifications/meta');
@@ -44,6 +59,19 @@ function MessageFields({ meta, value, onChange }: { meta: Meta; value: Message; 
   const set = (k: keyof Message) => (e: { target: { value: string } }) => onChange({ ...value, [k]: e.target.value });
   return (
     <>
+      <div className="row gap-sm wrap">
+        <button type="button" className="btn btn-sm" onClick={() => onChange({ ...APP_UPDATE })}>
+          App update template
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => onChange({ ...value, deepLink: PLAY_STORE_URL })}
+          disabled={value.deepLink === PLAY_STORE_URL}
+        >
+          Open Play Store on tap
+        </button>
+      </div>
       <label className="field">
         <span>Type</span>
         <select value={value.type} onChange={set('type')}>
@@ -72,6 +100,7 @@ function Preview({ m }: { m: Message }) {
       <div className="muted small">Preview</div>
       <strong>{m.title || 'Title'}</strong>
       <div className="small">{m.body || <span className="muted">Message body</span>}</div>
+      <div className="muted small">Tap opens: {linkTarget(m.deepLink)}</div>
     </div>
   );
 }

@@ -580,8 +580,7 @@ async function startHttp() {
     // Every minute: analyse pending selfies past the 30-minute window
     setInterval(runPhotoVerificationAnalysis, 60 * 1000);
 
-    // Engaging notifications: nearby users, active now, conversation starters, etc.
-    // Run every 10 minutes for timely, relevant notifications
+    // Match reminder ("say hi"), within the weekly auto-notification budget
     setInterval(() => {
       if (mongoose.connection.readyState !== 1) return;
       runScheduledJob('engaging-notifications', () =>
@@ -589,7 +588,7 @@ async function startHttp() {
       ).catch((err) =>
         console.error('[Scheduled Job] engaging notifications failed:', err?.message || err),
       );
-    }, 10 * 60 * 1000);
+    }, 30 * 60 * 1000);
 
     setTimeout(async () => {
       if (mongoose.connection.readyState !== 1) return;

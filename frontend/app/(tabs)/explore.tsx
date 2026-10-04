@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Easing,
   Platform,
   Pressable,
   StatusBar,
@@ -684,9 +685,17 @@ function SearchingState({
   onSkip: () => void;
   onLeave: () => void;
 }) {
-  const ring1 = useRef(new Animated.Value(0)).current;
-  const ring2 = useRef(new Animated.Value(0)).current;
-  const ring3 = useRef(new Animated.Value(0)).current;
+  const [ring1] = useState(() => new Animated.Value(0));
+  const [ring2] = useState(() => new Animated.Value(0));
+  const [ring3] = useState(() => new Animated.Value(0));
+  const [orbit] = useState(() => new Animated.Value(0));
+  const [breathe] = useState(() => new Animated.Value(0));
+  const [tipFade] = useState(() => new Animated.Value(1));
+
+  const [startedAt] = useState(() => Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  const [dots, setDots] = useState(1);
+  const [tipIdx, setTipIdx] = useState(0);
 
   useEffect(() => {
     const make = (v: Animated.Value, delay: number) =>
@@ -695,7 +704,8 @@ function SearchingState({
           Animated.delay(delay),
           Animated.timing(v, {
             toValue: 1,
-            duration: 2200,
+            duration: 2400,
+            easing: Easing.out(Easing.quad),
             useNativeDriver: true,
           }),
           Animated.timing(v, {
@@ -705,42 +715,108 @@ function SearchingState({
           }),
         ]),
       );
-    const a = make(ring1, 0);
-    const b = make(ring2, 700);
-    const c = make(ring3, 1400);
-    a.start();
-    b.start();
-    c.start();
-    return () => {
-      a.stop();
-      b.stop();
-      c.stop();
-    };
-  }, [ring1, ring2, ring3]);
+    const loops = [
+      make(ring1, 0),
+      make(ring2, 800),
+      make(ring3, 1600),
+      Animated.loop(
+        Animated.timing(orbit, {
+          toValue: 1,
+          duration: 9000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(breathe, {
+            toValue: 1,
+            duration: 1100,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(breathe, {
+            toValue: 0,
+            duration: 1100,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ]),
+      ),
+    ];
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
+  }, [ring1, ring2, ring3, orbit, breathe]);
+
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+      setDots((d) => (d % 3) + 1);
+    }, 500);
+    return () => clearInterval(tick);
+  }, [startedAt]);
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      Animated.timing(tipFade, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start(() => {
+        setTipIdx((i) => (i + 1) % SEARCH_TIPS.length);
+        Animated.timing(tipFade, {
+          toValue: 1,
+          duration: 260,
+          useNativeDriver: true,
+        }).start();
+      });
+    }, 4000);
+    return () => clearInterval(iv);
+  }, [tipFade]);
 
   const ringStyle = (v: Animated.Value) => ({
-    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }),
+    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
     transform: [
       {
-        scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 2.05] }),
+        scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 2.3] }),
       },
     ],
   });
+
+  const spin = orbit.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+  const counterSpin = orbit.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "-360deg"],
+  });
+  const coreScale = breathe.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.06],
+  });
+
+  const cooling = cooldownSec > 0;
+  const modeIcon = mode === "video" ? "videocam" : "call";
+  const mm = Math.floor(elapsed / 60);
+  const ss = String(elapsed % 60).padStart(2, "0");
+  const tip = SEARCH_TIPS[tipIdx];
 
   return (
     <TabPadded style={styles.stateScreen}>
       <View style={styles.stateCenter}>
         <View style={styles.modeLivePill}>
-          <Ionicons
-            name={mode === "video" ? "videocam" : "call"}
-            size={12}
-            color={T.primary}
-          />
+          <View style={styles.modeLiveDot} />
           <Text style={styles.modeLiveText}>
             {mode === "video" ? "Video" : "Voice"} queue
           </Text>
+          <Text style={styles.modeLiveTimer}>
+            {cooling ? "paused" : `${mm}:${ss}`}
+          </Text>
         </View>
+
         <View style={styles.radarWrap}>
+          <View style={styles.radarHalo} />
           <Animated.View
             style={[styles.radarRing, styles.radarRingRose, ringStyle(ring1)]}
           />
@@ -748,52 +824,144 @@ function SearchingState({
             style={[styles.radarRing, styles.radarRingPurple, ringStyle(ring2)]}
           />
           <Animated.View style={[styles.radarRing, ringStyle(ring3)]} />
-          <LinearGradient
-            colors={[T.rose, T.primary]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.radarCore}
+
+          <View style={styles.orbitTrack} pointerEvents="none" />
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.orbit, { transform: [{ rotate: spin }] }]}
           >
-            <Ionicons
-              name={mode === "video" ? "videocam" : "call"}
-              size={32}
-              color="#fff"
-            />
-          </LinearGradient>
+            {ORBITERS.map((o) => (
+              <Animated.View
+                key={o.key}
+                style={[
+                  styles.orbiter,
+                  o.pos,
+                  { width: o.size, height: o.size, borderRadius: o.size / 2 },
+                  { transform: [{ rotate: counterSpin }] },
+                ]}
+              >
+                {o.img ? (
+                  <Image
+                    source={o.img}
+                    style={styles.pairPhoto}
+                    contentFit="cover"
+                  />
+                ) : (
+                  <View style={[styles.orbiterIcon, { backgroundColor: o.bg }]}>
+                    <Ionicons name={o.icon} size={o.size * 0.5} color={o.fg} />
+                  </View>
+                )}
+              </Animated.View>
+            ))}
+          </Animated.View>
+
+          <Animated.View style={{ transform: [{ scale: coreScale }] }}>
+            <LinearGradient
+              colors={[T.rose, T.primaryMid, T.primary]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.radarCore}
+            >
+              {cooling ? (
+                <Text style={styles.radarCoreNum}>{cooldownSec}</Text>
+              ) : (
+                <Ionicons name={modeIcon} size={34} color="#fff" />
+              )}
+            </LinearGradient>
+          </Animated.View>
         </View>
-        <Text style={styles.stateTitle}>Finding someone</Text>
-        <Text style={styles.stateSub}>
-          {cooldownSec > 0
-            ? `Next ${mode === "video" ? "video" : "voice"} match in ${cooldownSec}s`
-            : `Matching you with an anonymous ${
-                mode === "video" ? "video" : "voice"
-              } partner…`}
+
+        <Text style={styles.stateTitle}>
+          {cooling ? "Get ready" : "Finding someone"}
+          <Text style={styles.stateTitleDots}>
+            {cooling ? "" : ".".repeat(dots).padEnd(3, " ")}
+          </Text>
         </Text>
+        <Text style={styles.stateSub}>
+          {cooling
+            ? `Your next ${mode} match starts in ${cooldownSec}s`
+            : `Looking for an anonymous ${mode} partner near you`}
+        </Text>
+
+        <Animated.View style={[styles.tipCard, { opacity: tipFade }]}>
+          <View style={styles.tipIcon}>
+            <Ionicons name={tip.icon} size={16} color={T.primary} />
+          </View>
+          <Text style={styles.tipText} numberOfLines={2}>
+            {tip.text}
+          </Text>
+        </Animated.View>
       </View>
 
       <View style={styles.stateActions}>
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={onSkip}
-          style={[styles.ghostBtn, cooldownSec > 0 && { opacity: 0.4 }]}
-          disabled={cooldownSec > 0}
+          style={[styles.skipBtn, cooling && { opacity: 0.45 }]}
+          disabled={cooling}
+          accessibilityRole="button"
+          accessibilityLabel="Skip to next person"
         >
-          <Ionicons name="play-skip-forward" size={18} color={T.text} />
-          <Text style={styles.ghostBtnText}>
-            {cooldownSec > 0 ? `${cooldownSec}s` : "Skip"}
+          <Ionicons name="play-skip-forward" size={18} color={T.primary} />
+          <Text style={styles.skipBtnText}>
+            {cooling ? `Wait ${cooldownSec}s` : "Try someone new"}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           activeOpacity={0.8}
           onPress={onLeave}
-          style={styles.textBtn}
+          style={styles.leaveBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Leave queue"
         >
-          <Text style={styles.textBtnLabel}>Leave queue</Text>
+          <Ionicons name="close-circle" size={18} color={T.roseDeep} />
+          <Text style={styles.leaveBtnText}>Leave queue</Text>
         </TouchableOpacity>
       </View>
     </TabPadded>
   );
 }
+
+const SEARCH_TIPS: {
+  icon: React.ComponentProps<typeof Ionicons>["name"];
+  text: string;
+}[] = [
+  { icon: "hand-left-outline", text: "Say hi first — a smile goes a long way" },
+  { icon: "sunny-outline", text: "Good lighting makes a great first impression" },
+  { icon: "shield-checkmark-outline", text: "Your name stays hidden — only your ID is shown" },
+  { icon: "play-skip-forward-outline", text: "Not a vibe? Skip anytime, no hard feelings" },
+  { icon: "heart-outline", text: "Be kind — everyone here is meeting someone new" },
+];
+
+const ORBIT_SIZE = 232;
+const ORBITERS: {
+  key: string;
+  size: number;
+  pos: object;
+  img?: number;
+  icon?: React.ComponentProps<typeof Ionicons>["name"];
+  bg?: string;
+  fg?: string;
+}[] = [
+  { key: "girl", size: 46, pos: { top: -23, left: ORBIT_SIZE / 2 - 23 }, img: GIRL_IMG },
+  { key: "boy", size: 42, pos: { bottom: 13, left: 13 }, img: BOY_IMG },
+  {
+    key: "heart",
+    size: 32,
+    pos: { bottom: 18, right: 18 },
+    icon: "heart",
+    bg: T.roseSoft,
+    fg: T.rose,
+  },
+  {
+    key: "chat",
+    size: 28,
+    pos: { top: ORBIT_SIZE / 2 - 14, left: -14 },
+    icon: "chatbubble-ellipses",
+    bg: T.primarySoft,
+    fg: T.primary,
+  },
+];
 
 function MatchedState({
   peer,
@@ -1415,12 +1583,134 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: T.primary,
   },
+  modeLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#22C55E",
+  },
+  modeLiveTimer: {
+    marginLeft: 4,
+    fontSize: 12,
+    fontWeight: "600",
+    color: T.muted,
+    fontVariant: ["tabular-nums"],
+  },
+  stateTitleDots: {
+    color: T.primary,
+  },
 
   radarWrap: {
-    width: 180,
-    height: 180,
+    width: 260,
+    height: 260,
     alignItems: "center",
     justifyContent: "center",
+  },
+  radarHalo: {
+    position: "absolute",
+    width: 168,
+    height: 168,
+    borderRadius: 84,
+    backgroundColor: "rgba(90, 47, 199, 0.08)",
+  },
+  orbitTrack: {
+    position: "absolute",
+    width: ORBIT_SIZE,
+    height: ORBIT_SIZE,
+    borderRadius: ORBIT_SIZE / 2,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "rgba(55, 3, 114, 0.14)",
+  },
+  orbit: {
+    position: "absolute",
+    width: ORBIT_SIZE,
+    height: ORBIT_SIZE,
+  },
+  orbiter: {
+    position: "absolute",
+    overflow: "hidden",
+    borderWidth: 2.5,
+    borderColor: "#FFFFFF",
+    backgroundColor: "#E8E0F5",
+    ...Platform.select({
+      ios: {
+        shadowColor: T.primary,
+        shadowOpacity: 0.18,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 3 },
+      },
+      android: { elevation: 3 },
+    }),
+  },
+  orbiterIcon: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radarCoreNum: {
+    fontSize: 36,
+    fontWeight: "800",
+    color: "#fff",
+    fontVariant: ["tabular-nums"],
+  },
+  tipCard: {
+    marginTop: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    maxWidth: 340,
+    alignSelf: "stretch",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.85)",
+    borderWidth: 1,
+    borderColor: T.border,
+  },
+  tipIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: T.primarySoft,
+  },
+  tipText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+    color: T.secondary,
+  },
+  skipBtn: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 15,
+    borderRadius: 18,
+    backgroundColor: T.surface,
+    borderWidth: 1.5,
+    borderColor: "rgba(55, 3, 114, 0.18)",
+  },
+  skipBtnText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: T.primary,
+  },
+  leaveBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  leaveBtnText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: T.roseDeep,
   },
   radarRing: {
     position: "absolute",

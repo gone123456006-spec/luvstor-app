@@ -21,7 +21,10 @@ const {
   suggestionDayKey,
   isSendWindow,
   localHour,
+  localWeekday,
+  lookbackDays,
   SEND_HOUR,
+  SEND_WEEKDAYS,
 } = require('../jobs/dailySuggestions');
 
 // ── Copy: what the user actually reads in the tray ────────────────────────
@@ -37,7 +40,7 @@ test('the strongest signal becomes the headline', () => {
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 3, nearby: 0 }).title,
-    '3 people viewed your profile today',
+    '3 people viewed your profile',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 0, nearby: 4 }).title,
@@ -56,7 +59,7 @@ test('singular and plural copy both read naturally', () => {
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 1, nearby: 0 }).title,
-    '1 person viewed your profile today',
+    '1 person viewed your profile',
   );
   assert.equal(
     composeDigest({ matches: 0, likes: 0, views: 0, nearby: 1 }).title,
@@ -103,6 +106,30 @@ test('the send window is exactly one hour a day', () => {
     }
   }
   assert.equal(matches, 1, 'the digest would fire more than once a day');
+});
+
+test('the digest goes out on the configured weekdays only, never daily', () => {
+  const start = new Date(Date.UTC(2025, 2, 2, 0, 0, 0));
+  let windows = 0;
+  for (let h = 0; h < 7 * 24; h += 1) {
+    const at = new Date(start.getTime() + h * 60 * 60 * 1000);
+    if (isSendWindow(at)) {
+      windows += 1;
+      assert.ok(SEND_WEEKDAYS.includes(localWeekday(at)));
+    }
+  }
+  assert.equal(windows, SEND_WEEKDAYS.length);
+  assert.ok(SEND_WEEKDAYS.length <= 3, 'more than three digests a week');
+});
+
+test('each digest covers everything since the previous send day', () => {
+  const start = new Date(Date.UTC(2025, 2, 2, 12, 0, 0));
+  let covered = 0;
+  for (let d = 0; d < 7; d += 1) {
+    const at = new Date(start.getTime() + d * 24 * 60 * 60 * 1000);
+    if (SEND_WEEKDAYS.includes(localWeekday(at))) covered += lookbackDays(at);
+  }
+  assert.equal(covered, 7, 'some days were skipped or counted twice');
 });
 
 // ── Delivery pipeline (requires MongoDB) ──────────────────────────────────
