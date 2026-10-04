@@ -11,6 +11,8 @@ function toObjectId(id) {
   }
 }
 
+const MAX_PROFILE_VIEW_PUSHES_PER_DAY = 3;
+
 /** UTC day key for once-per-day dedupe (YYYY-MM-DD). */
 function utcDayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
@@ -46,7 +48,21 @@ async function notifyProfileViewed(io, viewerId, targetId) {
     }
 
     const { createNotification } = require('./notifications');
+    const Notification = require('../models/Notification');
     const day = utcDayKey();
+
+    // Popular profiles: after a few pushes a day, further visits land in the
+    // in-app list silently instead of buzzing the phone again.
+    let pushedToday = 0;
+    try {
+      pushedToday = await Notification.countDocuments({
+        userId: targetId,
+        type: 'profile_view',
+        createdAt: { $gte: new Date(`${day}T00:00:00.000Z`) },
+      });
+    } catch {
+      /* count is best-effort */
+    }
 
     return await createNotification(io, {
       userId: String(targetId),
@@ -63,7 +79,7 @@ async function notifyProfileViewed(io, viewerId, targetId) {
       // One alert per viewer per day — re-views same day are silent
       dedupeKey: `profile_view:${viewerId}:${day}`,
       priority: 'normal',
-      push: true,
+      push: pushedToday < MAX_PROFILE_VIEW_PUSHES_PER_DAY,
     });
   } catch (err) {
     console.warn('[profileViews] notify failed:', err?.message || err);

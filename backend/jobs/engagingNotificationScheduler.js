@@ -31,6 +31,11 @@ const {
   CONFIG,
 } = require('../services/engagingNotifications');
 const { hasRealLocation } = require('../services/discovery');
+const {
+  canSendAuto,
+  isQuietHours,
+  recordAutoSent,
+} = require('../services/autoNotificationPolicy');
 
 const ENABLED = process.env.ENGAGING_NOTIFS_ENABLED !== 'false';
 
@@ -356,39 +361,22 @@ async function processConversationStarters(io) {
 
       if (hasMessages) continue;
 
-      // Send to both users (they're matched but haven't talked)
+      // One reminder per match, once it's a day old and still silent. The
+      // 24–48h window survives missed runs; the dedupe key keeps it single.
       const hoursSinceMatch = (Date.now() - match.matchedAt) / (1000 * 60 * 60);
+      if (hoursSinceMatch < 24 || hoursSinceMatch >= 48) continue;
 
-      // Send at specific intervals: 24h, 48h, 72h
-      if (
-        (hoursSinceMatch >= 24 && hoursSinceMatch < 26) ||
-        (hoursSinceMatch >= 48 && hoursSinceMatch < 50) ||
-        (hoursSinceMatch >= 72 && hoursSinceMatch < 74)
-      ) {
-        // Check if already sent today
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
+      for (const userId of [match.userA, match.userB]) {
+        const otherId = String(userId) === String(match.userA) ? match.userB : match.userA;
+        if (!(await canSendAuto(userId))) continue;
 
-        for (const userId of [match.userA, match.userB]) {
-          const otherId = userId === match.userA ? match.userB : match.userA;
+        const result = await sendConversationStarterNotification(io, userId, otherId, {
+          dedupeKey: `conversation-starter:${otherId}`,
+        });
 
-          const alreadySent = await NotificationHistory.exists({
-            userId,
-            type: 'suggestion',
-            'data.code': 'CONVERSATION_STARTER',
-            actorId: otherId,
-            createdAt: { $gte: todayStart },
-          });
-
-          if (alreadySent) continue;
-
-          const result = await sendConversationStarterNotification(
-            io,
-            userId,
-            otherId
-          );
-
-          if (result) stats.sent++;
+        if (result) {
+          stats.sent++;
+          await recordAutoSent([userId], 'CONVERSATION_STARTER');
         }
       }
     }
@@ -515,21 +503,15 @@ async function runEngagingNotifications(io) {
     duration: 0,
   };
 
-  try {
-    // Run all processors in parallel
-    const [nearby, activeNow, popular, conversation, streaks] = await Promise.allSettled([
-      processNearbyNotifications(io),
-      processActiveNowNotifications(io),
-      processPopularNearbyNotifications(io),
-      processConversationStarters(io),
-      processStreakNotifications(io),
-    ]);
+  if (isQuietHours()) {
+    return { ...results, skipped: 'quiet-hours' };
+  }
 
-    if (nearby.status === 'fulfilled') results.nearby = nearby.value;
-    if (activeNow.status === 'fulfilled') results.activeNow = activeNow.value;
-    if (popular.status === 'fulfilled') results.popular = popular.value;
-    if (conversation.status === 'fulfilled') results.conversationStarters = conversation.value;
-    if (streaks.status === 'fulfilled') results.streaks = streaks.value;
+  try {
+    // Only the match reminder runs. "Someone nearby came online", "someone
+    // you viewed is active", "popular nearby" and streak pings were noise —
+    // the 3×/week digest already covers likes, matches, visits and nearby.
+    results.conversationStarters = await processConversationStarters(io);
 
     results.duration = Date.now() - startTime;
 

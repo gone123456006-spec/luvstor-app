@@ -1230,7 +1230,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   cameraWarmup: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#000',

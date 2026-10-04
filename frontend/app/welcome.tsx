@@ -32,6 +32,7 @@ export default function WelcomeScreen() {
         style={styles.bg}
         imageStyle={styles.bgImage}
         resizeMode="cover"
+        resizeMethod="resize"
       >
         {/* Soft purple + black fade */}
         <View style={styles.purpleWash} pointerEvents="none" />
@@ -123,7 +124,7 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   purpleWash: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(55, 3, 114, 0.18)",
   },
   topFade: {

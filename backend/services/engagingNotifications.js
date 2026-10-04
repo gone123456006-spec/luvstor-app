@@ -216,7 +216,7 @@ async function sendPopularNearbyNotification(io, userId, popularUserId, stats = 
  * Send conversation starter reminder
  * WhatsApp-style: Encouraging engagement with matches
  */
-async function sendConversationStarterNotification(io, userId, matchedUserId) {
+async function sendConversationStarterNotification(io, userId, matchedUserId, opts = {}) {
   try {
     const matchedUser = await User.findById(matchedUserId)
       .select('publicId name photo')
@@ -270,6 +270,7 @@ async function sendConversationStarterNotification(io, userId, matchedUserId) {
       imageUrl: matchedUser.photo,
       deepLink: `/messages/${matchedUserId}`,
       groupKey: `conversation-starter:${matchedUserId}`,
+      dedupeKey: opts.dedupeKey,
       priority: 'normal',
       data: {
         code: 'CONVERSATION_STARTER',

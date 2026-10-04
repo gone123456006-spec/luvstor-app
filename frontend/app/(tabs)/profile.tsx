@@ -2794,7 +2794,7 @@ const styles = StyleSheet.create({
     borderColor: WA.white,
   },
   uploadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.45)",
     borderRadius: 39,
     justifyContent: "center",
@@ -2867,7 +2867,7 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   photoSlotEmpty: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: WA.bg,
@@ -2884,7 +2884,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#D1D7DB",
   },
   photoSlotBusy: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.45)",
     justifyContent: "center",
     alignItems: "center",
@@ -3059,7 +3059,7 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   igEditAvatarBusy: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 48,
     backgroundColor: "rgba(0,0,0,0.45)",
     alignItems: "center",
@@ -3189,7 +3189,7 @@ const styles = StyleSheet.create({
     }),
   },
   waEditHeaderFrost: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: WA.bg,
   },
   waEditHeaderFrostIos: {
@@ -3795,7 +3795,7 @@ const styles = StyleSheet.create({
 
   // Photo options sheet — full window, flush toward footer tabs
   photoSheetHost: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 100000,
     elevation: 100000,
     justifyContent: "flex-end",
@@ -3813,7 +3813,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
   },
   photoModalDimFill: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.5)",
   },
   photoSheetHandle: {

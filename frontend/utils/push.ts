@@ -11,7 +11,7 @@
  */
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import { AppState, Platform } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiRequest } from './api';
@@ -724,6 +724,34 @@ function profileRouteFromData(data: Record<string, any> = {}) {
   return userId ? `/profile/${userId}` : '/notifications';
 }
 
+/** Web links (e.g. a Play Store "update now") open outside the app router. */
+export function isExternalLink(href?: string | null): boolean {
+  return /^https?:\/\//i.test(String(href || '').trim());
+}
+
+/** Open a web link; Play Store pages go straight to the Play Store app. */
+export async function openExternalLink(href: string): Promise<void> {
+  const url = href.trim();
+  const playId =
+    Platform.OS === 'android' &&
+    /^https?:\/\/play\.google\.com\/store\/apps\/details\b/i.test(url)
+      ? url.match(/[?&]id=([\w.]+)/)?.[1]
+      : undefined;
+  if (playId) {
+    try {
+      await Linking.openURL(`market://details?id=${playId}`);
+      return;
+    } catch {
+      /* no Play Store app — fall back to the browser */
+    }
+  }
+  try {
+    await Linking.openURL(url);
+  } catch (err: any) {
+    console.warn('[Push] Could not open link:', err?.message);
+  }
+}
+
 /**
  * Turn FCM / history deep links into Expo Router paths.
  * Empty `luvstor:///` and missing `/profile` used to open Unmatched Route.
@@ -736,6 +764,7 @@ export function hrefToAppRoute(
   if (!href || /^luvstor:\/{0,3}$/i.test(href)) {
     return '';
   }
+  if (isExternalLink(href)) return href;
 
   let path = href;
   if (/^luvstor:/i.test(path)) {

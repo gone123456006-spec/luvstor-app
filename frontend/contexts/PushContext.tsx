@@ -34,6 +34,8 @@ import {
   getFcmToken,
   getLastNotificationResponseAsync,
   isExpoGo,
+  isExternalLink,
+  openExternalLink,
   requestPermission,
   routeForData,
   setBadge,
@@ -119,6 +121,10 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
         }
       }
       const route = routeForData(data);
+      if (isExternalLink(route)) {
+        void openExternalLink(route);
+        return;
+      }
       // Give the router a tick — a cold start tap can fire before mount
       setTimeout(() => {
         try {

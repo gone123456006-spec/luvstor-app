@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
-  InteractionManager,
   Platform,
   StyleSheet,
   Text,
@@ -15,6 +14,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
 import { useStableBottomInset } from '../../hooks/useStableBottomInset';
 import { tabScreenOptions, getTabBarBottomInset, getTabBarHeight } from '../../utils/navigation';
+import { runWhenIdle } from '../../utils/idle';
 import {
   checkProfileSetup,
   getAuthToken,
@@ -196,7 +196,7 @@ export default function TabLayout() {
   useEffect(() => {
     if (!user || profileGate !== 'ok') return;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    const task = InteractionManager.runAfterInteractions(() => {
+    const task = runWhenIdle(() => {
       TAB_PREFETCH.forEach(({ href, delayMs }) => {
         timers.push(
           setTimeout(() => {

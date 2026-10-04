@@ -1,28 +1,33 @@
-import { useRef } from "react";
-import { Platform } from "react-native";
+import { useEffect, useState } from "react";
 import {
   initialWindowMetrics,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 
-const BOOT_BOTTOM =
-  initialWindowMetrics?.insets?.bottom ??
-  (Platform.OS === "android" ? 48 : 34);
+/** A 0 inset that lasts this long is real (system bar doesn't overlap the app). */
+const ZERO_SETTLE_MS = 400;
 
 /**
  * WhatsApp-style: keep a stable system-nav bottom inset.
  *
  * Opening translucent Modals / KeyboardProvider often flashes `insets.bottom`
- * to 0, which makes an absolute tab bar jump ("teleport"). Ignore zero flashes
- * and only accept real non-zero updates (e.g. gesture ↔ 3-button nav).
+ * to 0, which makes an absolute tab bar jump ("teleport"). Brief zero flashes
+ * are ignored; a zero that persists is accepted, so devices whose nav bar sits
+ * outside the app window don't get a phantom gap.
  */
 export function useStableBottomInset(): number {
   const { bottom } = useSafeAreaInsets();
-  const latched = useRef(Math.max(BOOT_BOTTOM, bottom));
+  const [latched, setLatched] = useState(
+    () => bottom || initialWindowMetrics?.insets?.bottom || 0,
+  );
 
-  if (bottom > 0) {
-    latched.current = bottom;
-  }
+  if (bottom > 0 && bottom !== latched) setLatched(bottom);
 
-  return bottom > 0 ? bottom : latched.current;
+  useEffect(() => {
+    if (bottom > 0) return;
+    const t = setTimeout(() => setLatched(0), ZERO_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [bottom]);
+
+  return bottom > 0 ? bottom : latched;
 }

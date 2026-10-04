@@ -20,6 +20,7 @@ import { useAppAlert } from "../components/AppAlert";
 import { ListRowSkeleton } from "../components/ScreenSkeleton";
 import UserProfileModal from "../components/UserProfileModal";
 import WhatsAppAvatar, { getDisplayName } from "../components/WhatsAppAvatar";
+import { useAuth } from "../contexts/AuthContext";
 import { useSocket } from "../contexts/SocketContext";
 import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { resolveMediaUrl } from "../utils/media";
@@ -34,10 +35,19 @@ import {
     markNotificationsUnread,
 } from "../utils/notifications";
 import { getSheetBottomPadding } from "../utils/navigation";
-import { routeForData } from "../utils/push";
+import { isExternalLink, openExternalLink, routeForData } from "../utils/push";
 import { fetchSubscriptionStatus } from "../utils/subscriptions";
 
 const PAGE_SIZE = 25;
+
+/** Last "All" list per account, so reopening the screen is instant. */
+let allListCache: {
+  userId: string;
+  items: AppNotification[];
+  profileViewsUnlocked: boolean;
+  cursor: string | null;
+  hasMore: boolean;
+} | null = null;
 
 const C = {
   purple: "#370372",
@@ -257,11 +267,21 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const bottomInset = useStableBottomInset();
-  const { notifTick, refreshNotifUnread, notifUnreadCount } = useSocket();
+  const { notifTick, refreshNotifUnread, notifUnreadCount, setNotifUnreadLocal } =
+    useSocket();
   const { showAlert } = useAppAlert();
+  const { user } = useAuth();
+  const userId = user?.id || "";
+  const [cached] = useState(() =>
+    allListCache && userId && allListCache.userId === userId
+      ? allListCache
+      : null,
+  );
 
-  const [items, setItems] = useState<AppNotification[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<AppNotification[]>(
+    () => cached?.items || [],
+  );
+  const [loading, setLoading] = useState(!cached);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -271,7 +291,9 @@ export default function NotificationsScreen() {
   const [selected, setSelected] = useState<AppNotification | null>(null);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [likedActors, setLikedActors] = useState<Record<string, boolean>>({});
-  const [profileViewsUnlocked, setProfileViewsUnlocked] = useState(false);
+  const [profileViewsUnlocked, setProfileViewsUnlocked] = useState(
+    () => cached?.profileViewsUnlocked || false,
+  );
   const [viewerModalVisible, setViewerModalVisible] = useState(false);
   const [viewerProfile, setViewerProfile] = useState<{
     id: string;
@@ -283,8 +305,8 @@ export default function NotificationsScreen() {
     interests: string[];
   } | null>(null);
 
-  const cursor = useRef<string | null>(null);
-  const hasMore = useRef(true);
+  const cursor = useRef<string | null>(cached?.cursor ?? null);
+  const hasMore = useRef(cached?.hasMore ?? true);
   const loadingRef = useRef(false);
   const lastLoadAtRef = useRef(0);
   const itemsLenRef = useRef(0);
@@ -448,6 +470,17 @@ export default function NotificationsScreen() {
     }, []),
   );
 
+  useEffect(() => {
+    if (filter !== "All" || !userId || loading) return;
+    allListCache = {
+      userId,
+      items,
+      profileViewsUnlocked,
+      cursor: cursor.current,
+      hasMore: hasMore.current,
+    };
+  }, [filter, userId, loading, items, profileViewsUnlocked]);
+
   // All ↔ Unread ↔ Profile View — always fetch the matching page (never reuse All)
   const filterRef = useRef(filter);
   useEffect(() => {
@@ -520,7 +553,7 @@ export default function NotificationsScreen() {
         setItems((prev) =>
           prev.map((x) => (x._id === n._id ? { ...x, read: true } : x)),
         );
-        refreshNotifUnread();
+        void refreshNotifUnread(true);
       }
     } catch {
       /* navigation should still happen */
@@ -533,6 +566,11 @@ export default function NotificationsScreen() {
       deepLink: n.deepLink,
       actorId: n.actorId,
     });
+
+    if (isExternalLink(route)) {
+      void openExternalLink(route);
+      return;
+    }
 
     if (route.startsWith("/messages/")) {
       router.push({
@@ -596,7 +634,7 @@ export default function NotificationsScreen() {
       setItems((prev) =>
         prev.map((x) => (x._id === n._id ? { ...x, read: true } : x)),
       );
-      refreshNotifUnread();
+      void refreshNotifUnread(true);
     } catch {
       /* ignore */
     }
@@ -647,15 +685,20 @@ export default function NotificationsScreen() {
 
   const markAll = async () => {
     setMenuOpen(false);
+    // Optimistic — ticks and badge update before the server answers
+    const before = items;
+    setItems((prev) =>
+      filter === "Unread" ? [] : prev.map((x) => ({ ...x, read: true })),
+    );
+    setNotifUnreadLocal(0);
     try {
       const token = await getAuthToken();
       if (!token) return;
       await markNotificationsRead(token, { all: true });
-      setItems((prev) => prev.map((x) => ({ ...x, read: true })));
-      refreshNotifUnread();
-      if (filter === "Unread") load(true);
+      void refreshNotifUnread(true);
     } catch {
-      /* ignore */
+      setItems(before);
+      void refreshNotifUnread(true);
     }
   };
 
@@ -672,15 +715,27 @@ export default function NotificationsScreen() {
           text: "Clear all",
           style: "destructive",
           onPress: async () => {
+            // Optimistic — list and badge empty instantly; restored on failure
+            const before = {
+              items,
+              cursor: cursor.current,
+              hasMore: hasMore.current,
+            };
+            setItems([]);
+            cursor.current = null;
+            hasMore.current = false;
+            lastLoadAtRef.current = Date.now();
+            setNotifUnreadLocal(0);
             try {
               const token = await getAuthToken();
-              if (!token) return;
+              if (!token) throw new Error("Not signed in");
               await clearAllNotifications(token);
-              setItems([]);
-              cursor.current = null;
-              hasMore.current = false;
-              refreshNotifUnread();
+              void refreshNotifUnread(true);
             } catch {
+              setItems(before.items);
+              cursor.current = before.cursor;
+              hasMore.current = before.hasMore;
+              void refreshNotifUnread(true);
               showAlert({
                 title: "Could not clear",
                 message: "Please try again.",
@@ -700,7 +755,7 @@ export default function NotificationsScreen() {
       const token = await getAuthToken();
       if (!token) return;
       await deleteNotification(token, n._id);
-      refreshNotifUnread();
+      void refreshNotifUnread(true);
     } catch {
       load(true);
     }
@@ -720,7 +775,7 @@ export default function NotificationsScreen() {
       } else {
         await markNotificationsUnread(token, [n._id]);
       }
-      refreshNotifUnread();
+      void refreshNotifUnread(true);
     } catch {
       load(true);
     }
@@ -1428,7 +1483,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#DFE5E7",
   },
   lockedAvatarFrost: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(255,255,255,0.32)",
   },
   iconCircle: {
