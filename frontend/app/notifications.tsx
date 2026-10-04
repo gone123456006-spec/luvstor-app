@@ -20,6 +20,7 @@ import { useAppAlert } from "../components/AppAlert";
 import { ListRowSkeleton } from "../components/ScreenSkeleton";
 import UserProfileModal from "../components/UserProfileModal";
 import WhatsAppAvatar, { getDisplayName } from "../components/WhatsAppAvatar";
+import { useAuth } from "../contexts/AuthContext";
 import { useSocket } from "../contexts/SocketContext";
 import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { resolveMediaUrl } from "../utils/media";
@@ -38,6 +39,15 @@ import { isExternalLink, openExternalLink, routeForData } from "../utils/push";
 import { fetchSubscriptionStatus } from "../utils/subscriptions";
 
 const PAGE_SIZE = 25;
+
+/** Last "All" list per account, so reopening the screen is instant. */
+let allListCache: {
+  userId: string;
+  items: AppNotification[];
+  profileViewsUnlocked: boolean;
+  cursor: string | null;
+  hasMore: boolean;
+} | null = null;
 
 const C = {
   purple: "#370372",
@@ -259,9 +269,18 @@ export default function NotificationsScreen() {
   const bottomInset = useStableBottomInset();
   const { notifTick, refreshNotifUnread, notifUnreadCount } = useSocket();
   const { showAlert } = useAppAlert();
+  const { user } = useAuth();
+  const userId = user?.id || "";
+  const [cached] = useState(() =>
+    allListCache && userId && allListCache.userId === userId
+      ? allListCache
+      : null,
+  );
 
-  const [items, setItems] = useState<AppNotification[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<AppNotification[]>(
+    () => cached?.items || [],
+  );
+  const [loading, setLoading] = useState(!cached);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -271,7 +290,9 @@ export default function NotificationsScreen() {
   const [selected, setSelected] = useState<AppNotification | null>(null);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [likedActors, setLikedActors] = useState<Record<string, boolean>>({});
-  const [profileViewsUnlocked, setProfileViewsUnlocked] = useState(false);
+  const [profileViewsUnlocked, setProfileViewsUnlocked] = useState(
+    () => cached?.profileViewsUnlocked || false,
+  );
   const [viewerModalVisible, setViewerModalVisible] = useState(false);
   const [viewerProfile, setViewerProfile] = useState<{
     id: string;
@@ -283,8 +304,8 @@ export default function NotificationsScreen() {
     interests: string[];
   } | null>(null);
 
-  const cursor = useRef<string | null>(null);
-  const hasMore = useRef(true);
+  const cursor = useRef<string | null>(cached?.cursor ?? null);
+  const hasMore = useRef(cached?.hasMore ?? true);
   const loadingRef = useRef(false);
   const lastLoadAtRef = useRef(0);
   const itemsLenRef = useRef(0);
@@ -447,6 +468,17 @@ export default function NotificationsScreen() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
+
+  useEffect(() => {
+    if (filter !== "All" || !userId || loading) return;
+    allListCache = {
+      userId,
+      items,
+      profileViewsUnlocked,
+      cursor: cursor.current,
+      hasMore: hasMore.current,
+    };
+  }, [filter, userId, loading, items, profileViewsUnlocked]);
 
   // All ↔ Unread ↔ Profile View — always fetch the matching page (never reuse All)
   const filterRef = useRef(filter);

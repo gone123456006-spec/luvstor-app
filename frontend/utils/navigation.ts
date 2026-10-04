@@ -23,9 +23,13 @@ const TAB_BAR_CLEARANCE_FLOOR = Platform.OS === 'ios' ? 108 : 96;
 /** Boot-time bottom inset — survives Modal inset flashes to 0 */
 const BOOT_BOTTOM_INSET = initialWindowMetrics?.insets?.bottom ?? 0;
 
+/**
+ * Space under the tab icons: the live system-nav inset (3-button ≈48dp,
+ * gesture ≈16–24dp, 0 when the nav bar sits outside the app), with a small
+ * floor so labels never touch the screen edge.
+ */
 export function getTabBarBottomInset(safeBottom: number): number {
-  const resolved = Math.max(safeBottom, BOOT_BOTTOM_INSET);
-  return Math.max(resolved, Platform.OS === 'android' ? 12 : 8);
+  return Math.max(safeBottom, Platform.OS === 'android' ? 10 : 8);
 }
 
 /** Full tab bar height for style.height */

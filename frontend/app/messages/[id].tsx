@@ -42,8 +42,9 @@ import {
     View,
 } from "react-native";
 import {
+    Gesture,
+    GestureDetector,
     GestureHandlerRootView,
-    Swipeable,
 } from "react-native-gesture-handler";
 import {
     KeyboardAvoidingView,
@@ -53,8 +54,10 @@ import {
 import Reanimated, {
     Extrapolation,
     interpolate,
+    runOnJS,
     useAnimatedStyle,
     useSharedValue,
+    withSpring,
 } from "react-native-reanimated";
 import {
     SafeAreaView,
@@ -672,31 +675,104 @@ const WhatsAppFullScreenPhoto = React.memo(function WhatsAppFullScreenPhoto({
   );
 });
 
-const ReplySwipeAction = ({
-  dragX,
+const REPLY_TRIGGER_X = 56;
+const REPLY_MAX_X = 76;
+const REPLY_SPRING = { damping: 22, stiffness: 320, mass: 0.6 };
+
+/**
+ * WhatsApp-style swipe right to reply, driven on the UI thread: the bubble
+ * follows the finger, haptics fire when the trigger point is crossed, and
+ * the reply opens on release while the bubble springs back.
+ */
+const SwipeToReply = React.memo(function SwipeToReply({
+  enabled,
+  onTrigger,
+  children,
 }: {
-  dragX: Animated.AnimatedInterpolation<number>;
-}) => {
-  const scale = dragX.interpolate({
-    inputRange: [0, 36, 72],
-    outputRange: [0.35, 1, 1.08],
-    extrapolate: "clamp",
-  });
-  const opacity = dragX.interpolate({
-    inputRange: [0, 24, 56],
-    outputRange: [0, 0.85, 1],
-    extrapolate: "clamp",
-  });
+  enabled: boolean;
+  onTrigger: () => void;
+  children: React.ReactNode;
+}) {
+  const tx = useSharedValue(0);
+  const armed = useSharedValue(false);
+  const onTriggerRef = useRef(onTrigger);
+  useEffect(() => {
+    onTriggerRef.current = onTrigger;
+  }, [onTrigger]);
+  const fire = useCallback(() => onTriggerRef.current(), []);
+
+  const pan = useMemo(() => {
+    const buzz = () => {
+      try {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {
+        /* ignore */
+      }
+    };
+    return Gesture.Pan()
+      .enabled(enabled)
+      .activeOffsetX([-10000, 14])
+      .failOffsetY([-12, 12])
+      .onUpdate((e) => {
+        const x = Math.max(0, e.translationX);
+        const next =
+          x <= REPLY_TRIGGER_X
+            ? x
+            : Math.min(REPLY_MAX_X, REPLY_TRIGGER_X + (x - REPLY_TRIGGER_X) * 0.3);
+        tx.set(next);
+        if (!armed.get() && next >= REPLY_TRIGGER_X) {
+          armed.set(true);
+          runOnJS(buzz)();
+        } else if (armed.get() && next < REPLY_TRIGGER_X - 10) {
+          armed.set(false);
+        }
+      })
+      .onEnd(() => {
+        if (armed.get()) runOnJS(fire)();
+      })
+      .onFinalize(() => {
+        armed.set(false);
+        tx.set(withSpring(0, REPLY_SPRING));
+      });
+  }, [enabled, tx, armed, fire]);
+
+  const rowStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: tx.get() }],
+  }));
+  const iconStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(tx.get(), [0, 24, REPLY_TRIGGER_X], [0, 0.85, 1], Extrapolation.CLAMP),
+    transform: [
+      {
+        scale: interpolate(
+          tx.get(),
+          [0, REPLY_TRIGGER_X / 2, REPLY_TRIGGER_X, REPLY_MAX_X],
+          [0.35, 0.8, 1.08, 1.08],
+          Extrapolation.CLAMP,
+        ),
+      },
+    ],
+  }));
+
   return (
-    <View style={styles.replyActionContainer}>
-      <Animated.View
-        style={[styles.replyActionIcon, { opacity, transform: [{ scale }] }]}
-      >
-        <Ionicons name="arrow-undo" size={18} color="#fff" />
-      </Animated.View>
-    </View>
+    <GestureDetector gesture={pan}>
+      <View collapsable={false}>
+        <View pointerEvents="none" style={styles.replyActionContainer}>
+          <Reanimated.View style={[styles.replyActionIcon, iconStyle]}>
+            <Ionicons name="arrow-undo" size={18} color="#fff" />
+          </Reanimated.View>
+        </View>
+        {/* Keep native image layer alive during swipe transform (Android blank fix) */}
+        <Reanimated.View
+          collapsable={false}
+          renderToHardwareTextureAndroid
+          style={rowStyle}
+        >
+          {children}
+        </Reanimated.View>
+      </View>
+    </GestureDetector>
   );
-};
+});
 
 const MessageItem = React.memo(function MessageItem({
   item,
@@ -724,15 +800,13 @@ const MessageItem = React.memo(function MessageItem({
   otherName: string;
 }) {
   const isMe = item.sender === "me";
-  const swRef = useRef<Swipeable>(null);
-  const didReplyRef = useRef(false);
   const rowStyle = [
     styles.messageRow,
     isSelected && styles.selectedMessageRow,
     highlighted && styles.highlightedMessageRow,
   ];
 
-  const ReplyPreview = () => {
+  const renderReplyPreview = () => {
     if (!item.replyTo) return null;
     const isViewOnceReply = !!item.replyTo.viewOnce;
     const isVoiceReply = isAudioReply(item.replyTo);
@@ -816,41 +890,19 @@ const MessageItem = React.memo(function MessageItem({
   };
 
   const triggerReply = () => {
-    if (didReplyRef.current || selectionMode || item.isDeleted) return;
-    didReplyRef.current = true;
-    try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {
-      /* ignore */
-    }
-    // Fire reply after interactions so FlatList/image don't blank mid-swipe
-    swRef.current?.close();
-    InteractionManager.runAfterInteractions(() => {
-      onReply(item);
-      didReplyRef.current = false;
-    });
+    if (selectionMode || item.isDeleted) return;
+    onReply(item);
   };
 
-  const wrapSwipe = (node: React.ReactNode) => {
-    if (selectionMode || item.isDeleted) return <>{node}</>;
-    return (
-      <Swipeable
-        ref={swRef}
-        renderLeftActions={(_, dragX) => <ReplySwipeAction dragX={dragX} />}
-        onSwipeableOpen={triggerReply}
-        leftThreshold={56}
-        overshootLeft={false}
-        overshootFriction={8}
-        friction={2}
-        enableTrackpadTwoFingerGesture
-      >
-        {/* Keep native image layer alive during swipe transform (Android blank fix) */}
-        <View collapsable={false} renderToHardwareTextureAndroid>
-          {node}
-        </View>
-      </Swipeable>
-    );
-  };
+  // Same tree in selection mode (gesture just disabled) so rows don't remount
+  const wrapSwipe = (node: React.ReactNode) => (
+    <SwipeToReply
+      enabled={!selectionMode && !item.isDeleted}
+      onTrigger={triggerReply}
+    >
+      {node}
+    </SwipeToReply>
+  );
 
   // WhatsApp-style centered call event (Missed voice call / Voice call · 1:23)
   if (item.type === "call") {
@@ -967,7 +1019,7 @@ const MessageItem = React.memo(function MessageItem({
                   isMe ? styles.myBubbleBorder : styles.otherBubbleBorder,
                 ]}
               >
-                <ReplyPreview />
+                {renderReplyPreview()}
                 <View style={styles.viewOnceRow}>
                   <View
                     style={[
@@ -1057,7 +1109,7 @@ const MessageItem = React.memo(function MessageItem({
                   isSelected && styles.mediaSelected,
                 ]}
               >
-                <ReplyPreview />
+                {renderReplyPreview()}
                 <View style={styles.viewOnceRow}>
                   <View
                     style={[
@@ -1122,7 +1174,7 @@ const MessageItem = React.memo(function MessageItem({
                   needsOffscreenAlphaCompositing
                   style={{ borderRadius: 12, overflow: "hidden" }}
                 >
-                  <ReplyPreview />
+                  {renderReplyPreview()}
                   <ChatBubbleImage
                     uri={imgUri}
                     width={IMG_BUBBLE_WIDTH}
@@ -1202,7 +1254,7 @@ const MessageItem = React.memo(function MessageItem({
             ]}
           >
             <View>
-              <ReplyPreview />
+              {renderReplyPreview()}
               <VoiceMessage
                 messageId={item._id}
                 uri={voiceUri}
@@ -1260,7 +1312,7 @@ const MessageItem = React.memo(function MessageItem({
               isMe ? styles.myBubbleBorder : styles.otherBubbleBorder,
             ]}
           >
-            <ReplyPreview />
+            {renderReplyPreview()}
             <MessageBubbleText
               text={item.text}
               isMe={isMe}
@@ -2910,10 +2962,7 @@ export default function MessageScreen() {
 
   const handleReplyToMessage = useCallback((m: ChatMsg) => {
     setReplyingTo(sanitizeReplyQuote(m) || m);
-    // Defer focus so keyboard/layout doesn't blank the swiped image
-    InteractionManager.runAfterInteractions(() => {
-      setTimeout(() => inputRef.current?.focus(), 60);
-    });
+    requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
 
   const handleImagePress = useCallback((uri: string) => {
@@ -3197,52 +3246,65 @@ export default function MessageScreen() {
         }
       }
 
-      if (!hadLocal) setLoading(true);
-      try {
-        const history: any[] = await apiRequest(
-          `/api/chat/history/${id}?markRead=1`,
-          token,
-        );
-        if (cancelled) return;
-        if (!Array.isArray(history)) throw new Error("Bad history payload");
-        const mapped = history.map((m) => mapMsg(m, authUser.id));
-        oldestLoadedAtRef.current = mapped.length
-          ? mapped.reduce(
-              (min, m) => Math.min(min, m.createdAt || Infinity),
-              Infinity,
-            )
-          : null;
-        hasMoreOlderRef.current = history.length >= HISTORY_PAGE_SIZE;
-        // Merge instead of replace so messages sent while history was in flight survive
-        setMessages((prev) => {
-          if (!prev.length) return mapped;
-          const byId = new Map(prev.map((m) => [m._id, m]));
-          for (const m of mapped) {
-            byId.set(m._id, { ...byId.get(m._id), ...m });
-          }
-          return Array.from(byId.values()).sort(
-            (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+      // History loads alongside the live socket, never in front of it — a
+      // slow server must not hold back live messages, ticks or photo sends.
+      let historyLoaded = false;
+      let historyInFlight = false;
+      const loadHistory = async () => {
+        if (historyInFlight || historyLoaded || cancelled) return;
+        historyInFlight = true;
+        if (!hadLocal) setLoading(true);
+        try {
+          const history: any[] = await apiRequest(
+            `/api/chat/history/${id}?markRead=1`,
+            token,
           );
-        });
-        messagesLatestAtRef.current = mapped.reduce(
-          (max, m) => Math.max(max, m.createdAt || 0),
-          0,
-        );
-        schedulePersistThread(chatId, mapped as CachedChatMsg[]);
-        for (const raw of history.slice(-12)) {
-          if (raw?.type === "image" && raw.mediaUrl && !raw.viewOnce) {
-            prefetchChatImage(resolveMediaUrl(raw.mediaUrl) || raw.mediaUrl);
+          if (cancelled) return;
+          if (!Array.isArray(history)) throw new Error("Bad history payload");
+          historyLoaded = true;
+          const mapped = history.map((m) => mapMsg(m, authUser.id));
+          oldestLoadedAtRef.current = mapped.length
+            ? mapped.reduce(
+                (min, m) => Math.min(min, m.createdAt || Infinity),
+                Infinity,
+              )
+            : null;
+          hasMoreOlderRef.current = history.length >= HISTORY_PAGE_SIZE;
+          // Merge instead of replace so messages sent while history was in flight survive
+          setMessages((prev) => {
+            if (!prev.length) return mapped;
+            const byId = new Map(prev.map((m) => [m._id, m]));
+            for (const m of mapped) {
+              byId.set(m._id, { ...byId.get(m._id), ...m });
+            }
+            return Array.from(byId.values()).sort(
+              (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+            );
+          });
+          messagesLatestAtRef.current = mapped.reduce(
+            (max, m) => Math.max(max, m.createdAt || 0),
+            messagesLatestAtRef.current || 0,
+          );
+          schedulePersistThread(chatId, mapped as CachedChatMsg[]);
+          for (const raw of history.slice(-12)) {
+            if (raw?.type === "image" && raw.mediaUrl && !raw.viewOnce) {
+              prefetchChatImage(resolveMediaUrl(raw.mediaUrl) || raw.mediaUrl);
+            }
           }
+        } catch (e) {
+          if (!hadLocal) console.error("Failed to load history", e);
+        } finally {
+          historyInFlight = false;
+          if (!cancelled) setLoading(false);
         }
-      } catch (e) {
-        if (!hadLocal) console.error("Failed to load history", e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      };
 
       // WhatsApp: one shared socket (SocketContext) — no second connection
       const socket = globalSocket;
-      if (!socket) return;
+      if (!socket) {
+        void loadHistory();
+        return;
+      }
       socketRef.current = socket;
 
       const syncMissed = async () => {
@@ -3292,7 +3354,9 @@ export default function MessageScreen() {
         socket.emit("chat:join", { otherUserId: id });
         socket.emit("chat:read", { otherUserId: id });
         markChatAsRead(String(id));
-        void syncMissed();
+        // Until the first history page lands, (re)load it instead of polling
+        if (historyLoaded) void syncMissed();
+        else void loadHistory();
       };
 
       if (socket.connected) onConnect();
@@ -3648,6 +3712,8 @@ export default function MessageScreen() {
         if (String(userId) !== String(id)) return;
         applyPeerOffline(lastSeen ? String(lastSeen) : null);
       });
+
+      void loadHistory();
     };
 
     init();
@@ -7007,9 +7073,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   replyActionContainer: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
     justifyContent: "center",
     alignItems: "center",
-    width: 64,
+    width: 56,
     paddingLeft: 8,
   },
   replyActionIcon: {
