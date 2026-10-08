@@ -82,7 +82,14 @@ router.get('/:id', async (req, res) => {
     }
 
     setCors(res);
-    res.setHeader('Content-Type', meta.mimeType || 'application/octet-stream');
+    // Legacy rows kept whatever the client declared — never serve html / svg / script
+    const mime = String(meta.mimeType || '');
+    res.setHeader(
+      'Content-Type',
+      /^(image\/(jpeg|jpg|png|gif|webp|heic|heif|avif)|audio\/[a-z0-9.+-]+)$/i.test(mime)
+        ? mime
+        : 'application/octet-stream',
+    );
     res.setHeader('Accept-Ranges', 'bytes');
     // Private media must not sit in shared/CDN caches
     res.setHeader(

@@ -180,7 +180,7 @@ module.exports = function initSocket(io) {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
     if (!token) return next(new Error('Authentication error: No token'));
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
       if (!decoded.userId || !decoded.deviceId) {
         return next(new Error('Authentication error: Invalid token'));
       }

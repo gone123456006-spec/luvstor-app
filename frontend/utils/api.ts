@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import { getOrCreateDeviceId } from './device';
+import { readAuthToken, writeAuthToken } from './tokenStore';
 import { userFacingMessage, USER_ERROR } from './userFacingError';
 
 /** Production API (Render). Release APKs use this unless EXPO_PUBLIC_API_URL overrides. */
@@ -206,7 +207,7 @@ function bearerFrom(headers: RequestInit['headers']): string | null {
 
 async function isCurrentToken(token: string): Promise<boolean> {
   try {
-    return (await AsyncStorage.getItem(AUTH_TOKEN_KEY)) === token;
+    return (await readAuthToken()) === token;
   } catch {
     return false;
   }
@@ -216,11 +217,36 @@ async function isCurrentToken(token: string): Promise<boolean> {
 async function storeRenewedToken(usedToken: string, renewed: string): Promise<void> {
   try {
     if (await isCurrentToken(usedToken)) {
-      await AsyncStorage.setItem(AUTH_TOKEN_KEY, renewed);
+      await writeAuthToken(renewed);
     }
   } catch {
     /* next renewal retries */
   }
+}
+
+let appVersionHeadersCache: Record<string, string> | null = null;
+
+/** Lets the admin panel see which app version each user runs */
+function appVersionHeaders(): Record<string, string> {
+  if (appVersionHeadersCache) return appVersionHeadersCache;
+  const headers: Record<string, string> = {};
+  if (Platform.OS === 'ios' || Platform.OS === 'android') {
+    let version = '';
+    let build = '';
+    try {
+      const Application = require('expo-application');
+      version = Application.nativeApplicationVersion || '';
+      build = Application.nativeBuildVersion || '';
+    } catch {
+      /* fall back to app.json */
+    }
+    version = version || Constants.expoConfig?.version || '';
+    if (version) headers['X-App-Version'] = String(version).slice(0, 32);
+    if (build) headers['X-App-Build'] = String(build).slice(0, 32);
+    headers['X-App-Platform'] = Platform.OS;
+  }
+  appVersionHeadersCache = headers;
+  return headers;
 }
 
 async function apiFetchUncoalesced(
@@ -229,7 +255,12 @@ async function apiFetchUncoalesced(
   timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
 ) {
   const url = `${getApiBase()}${path}`;
-  const res = await fetchWithTimeout(url, options, timeoutMs);
+  const baseHeaders = options.headers;
+  const withVersion =
+    !baseHeaders || (typeof baseHeaders === 'object' && !Array.isArray(baseHeaders) && !(baseHeaders instanceof Headers))
+      ? { ...options, headers: { ...appVersionHeaders(), ...((baseHeaders as Record<string, string>) || {}) } }
+      : options;
+  const res = await fetchWithTimeout(url, withVersion, timeoutMs);
   const usedToken = bearerFrom(options.headers);
 
   const renewed = res.headers?.get?.('x-auth-token');
@@ -390,11 +421,8 @@ export async function apiSyncDevice(
 }
 
 export async function saveAuthSession(token: string, user: object): Promise<void> {
-  const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-  await AsyncStorage.multiSet([
-    [AUTH_TOKEN_KEY, token],
-    [AUTH_USER_KEY, JSON.stringify(user)],
-  ]);
+  await writeAuthToken(token);
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
 }
 
 export async function apiRequest(

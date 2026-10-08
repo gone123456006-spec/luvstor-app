@@ -82,6 +82,8 @@ function shouldUseBrevoApi() {
 }
 
 function shouldUseDevMode() {
+  // Fixed 123456 OTP must never be live in production when real email works
+  if (process.env.NODE_ENV === "production" && isEmailConfigured()) return false;
   if (smtpConfig.devMode) return true;
   if (!isEmailConfigured() && process.env.NODE_ENV !== "production") return true;
   return false;

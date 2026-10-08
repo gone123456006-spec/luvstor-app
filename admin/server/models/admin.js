@@ -18,6 +18,13 @@ const adminUserSchema = new Schema(
     lastLoginAt: { type: Date, default: null },
     lastLoginIp: { type: String, default: '' },
     mustChangePassword: { type: Boolean, default: false },
+    /** Authenticator-app MFA — secrets are AES-GCM encrypted (lib/totp.js) */
+    mfaEnabled: { type: Boolean, default: false },
+    mfaSecret: { type: String, default: '' },
+    mfaPendingSecret: { type: String, default: '' },
+    mfaRecoveryCodes: { type: [String], default: [] },
+    mfaLastStep: { type: Number, default: -1 },
+    mfaEnabledAt: { type: Date, default: null },
   },
   { timestamps: true, collection: 'admin_users' },
 );
@@ -77,9 +84,21 @@ const campaignSchema = new Schema(
 campaignSchema.index({ status: 1, sendAt: 1 });
 campaignSchema.index({ createdAt: -1 });
 
+/** Small key/value settings owned by the admin console (e.g. latest app version) */
+const adminSettingSchema = new Schema(
+  {
+    key: { type: String, required: true, unique: true, maxlength: 100 },
+    value: { type: Schema.Types.Mixed, default: null },
+    updatedBy: { type: Schema.Types.ObjectId, default: null },
+    updatedByEmail: { type: String, default: '' },
+  },
+  { timestamps: true, collection: 'admin_settings' },
+);
+
 const AdminUser = mongoose.model('AdminUser', adminUserSchema);
+const AdminSetting = mongoose.model('AdminSetting', adminSettingSchema);
 const AuditLog = mongoose.model('AuditLog', auditLogSchema);
 const TicketNote = mongoose.model('TicketNote', ticketNoteSchema);
 const Campaign = mongoose.model('Campaign', campaignSchema);
 
-module.exports = { AdminUser, AuditLog, TicketNote, Campaign, ROLES, CAMPAIGN_STATUSES };
+module.exports = { AdminUser, AuditLog, TicketNote, Campaign, AdminSetting, ROLES, CAMPAIGN_STATUSES };

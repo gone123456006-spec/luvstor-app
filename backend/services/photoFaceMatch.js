@@ -91,6 +91,27 @@ function verifyChallengeToken(token, expectedPose) {
   return { ok: true, pose };
 }
 
+/** SSRF guard: only https on our own API host or Google profile-photo hosts */
+function isFetchAllowed(url, apiBase) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const ownHosts = [apiBase, process.env.PUBLIC_API_URL, 'https://luvstor-api.onrender.com']
+    .map((b) => {
+      try {
+        return new URL(String(b || '')).host;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  if (ownHosts.includes(u.host)) return u.protocol === 'https:' || process.env.NODE_ENV !== 'production';
+  return u.protocol === 'https:' && /(^|\.)googleusercontent\.com$/i.test(u.hostname);
+}
+
 function profilePhotoUrls(user) {
   const list = [];
   const main = String(user.photo || '').trim();
@@ -150,8 +171,10 @@ async function loadImageBuffer(url, apiBase) {
     fetchUrl = `${base}${raw}`;
   }
 
+  if (!isFetchAllowed(fetchUrl, apiBase)) return null;
+
   try {
-    const res = await fetch(fetchUrl, { signal: AbortSignal.timeout(12_000) });
+    const res = await fetch(fetchUrl, { signal: AbortSignal.timeout(12_000), redirect: 'error' });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     return buf.length >= 2048 ? buf : null;

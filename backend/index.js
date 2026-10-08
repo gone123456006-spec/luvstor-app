@@ -53,6 +53,9 @@ server.headersTimeout = 66_000;
 
 // Probes first — no DB, no JSON body (Render /health + cron /ping)
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+const { securityHeaders, sanitizeInput, apiLimiter } = require('./middleware/security');
+app.use(securityHeaders);
 mountHeartbeatRoutes(app);
 
 app.get('/child-safety', (_req, res) => {
@@ -110,7 +113,11 @@ app.use(
   '/api/upload/audio-bin',
   express.raw({ type: '*/*', limit: process.env.JSON_BODY_LIMIT || '12mb' })
 );
-app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '10mb' }));
+// Base64 uploads need room; every other JSON body stays small
+app.use('/api/upload', express.json({ limit: process.env.JSON_BODY_LIMIT || '10mb' }));
+app.use(express.json({ limit: process.env.API_JSON_LIMIT || '1mb' }));
+app.use(sanitizeInput);
+app.use('/api', apiLimiter);
 
 // Fail fast while Mongo is reconnecting instead of hanging until a crash.
 app.use((req, res, next) => {

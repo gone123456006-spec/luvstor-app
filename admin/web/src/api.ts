@@ -34,7 +34,12 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   }
   if (!res.ok) {
     const err = new ApiError(res.status, data?.error || `Request failed (${res.status})`, data?.code);
-    if ((res.status === 401 && !path.startsWith('/auth/login')) || err.code === 'MUST_CHANGE_PASSWORD') {
+    const isSignInStep = path.startsWith('/auth/login') || path.startsWith('/auth/mfa/login');
+    if (
+      (res.status === 401 && !isSignInStep) ||
+      err.code === 'MUST_CHANGE_PASSWORD' ||
+      err.code === 'MFA_SETUP_REQUIRED'
+    ) {
       onAuthError?.(err);
     }
     throw err;

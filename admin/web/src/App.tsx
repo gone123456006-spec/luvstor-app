@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import { Loading } from './components/ui';
 import Login from './pages/Login';
 import ChangePassword from './pages/ChangePassword';
+import MfaSetupForced from './pages/MfaSetup';
 import Overview from './pages/Overview';
 import Users from './pages/Users';
 import UserDetail from './pages/UserDetail';
@@ -17,6 +18,7 @@ import Support from './pages/Support';
 import System from './pages/System';
 import Audit from './pages/Audit';
 import Admins from './pages/Admins';
+import AppVersions from './pages/AppVersions';
 
 function Guard({ permission, children }: { permission: string; children: ReactNode }) {
   const { can } = useAuth();
@@ -32,6 +34,7 @@ export default function App() {
   if (loading) return <Loading text="Checking session…" />;
   if (!admin) return <Login />;
   if (admin.mustChangePassword) return <ChangePassword forced />;
+  if (admin.mfaSetupRequired) return <MfaSetupForced />;
 
   return (
     <Layout>
@@ -43,6 +46,7 @@ export default function App() {
         <Route path="/money" element={<Guard permission="money.view"><Money /></Guard>} />
         <Route path="/subscriptions" element={<Guard permission="money.view"><Subscriptions /></Guard>} />
         <Route path="/engagement" element={<Guard permission="engagement.view"><Engagement /></Guard>} />
+        <Route path="/app-versions" element={<Guard permission="versions.view"><AppVersions /></Guard>} />
         <Route path="/notifications" element={<Guard permission="notifications.view"><Notifications /></Guard>} />
         <Route path="/support" element={<Guard permission="support.view"><Support /></Guard>} />
         <Route path="/system" element={<Guard permission="system.view"><System /></Guard>} />

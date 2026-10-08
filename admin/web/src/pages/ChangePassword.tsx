@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { useAuth, type Admin } from '../auth';
 import { Card, PageHeader, useToast } from '../components/ui';
+import { MfaAccountCard } from './MfaSetup';
 
 export default function ChangePassword({ forced }: { forced?: boolean }) {
   const { setAdmin, logout } = useAuth();
@@ -75,7 +76,10 @@ export default function ChangePassword({ forced }: { forced?: boolean }) {
   return (
     <>
       <PageHeader title="Your account" subtitle="Changing your password signs out every other session." />
-      <Card title="Change password">{form}</Card>
+      <div className="stack">
+        <Card title="Change password">{form}</Card>
+        <MfaAccountCard />
+      </div>
     </>
   );
 }

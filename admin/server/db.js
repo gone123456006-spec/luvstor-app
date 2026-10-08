@@ -17,8 +17,8 @@ async function connectDb() {
 }
 
 async function ensureAdminIndexes() {
-  const { AdminUser, AuditLog, TicketNote, Campaign } = require('./models/admin');
-  for (const model of [AdminUser, AuditLog, TicketNote, Campaign]) {
+  const { AdminUser, AuditLog, TicketNote, Campaign, AdminSetting } = require('./models/admin');
+  for (const model of [AdminUser, AuditLog, TicketNote, Campaign, AdminSetting]) {
     await model.createCollection().catch((err) => {
       if (err?.codeName !== 'NamespaceExists') throw err;
     });

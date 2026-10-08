@@ -20,6 +20,8 @@ const PERMISSIONS = {
   'support.act': ['owner', 'admin', 'moderator', 'support'],
   'system.view': ['owner', 'admin'],
   'audit.view': ['owner', 'admin'],
+  'versions.view': ['owner', 'admin', 'analyst', 'support'],
+  'versions.manage': ['owner', 'admin'],
   'admins.manage': ['owner'],
 };
 

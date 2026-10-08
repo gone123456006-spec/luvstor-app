@@ -14,6 +14,7 @@ const NAV: { to: string; label: string; permission: string; count?: (q: Queues) 
   { section: 'Business', to: '/subscriptions', label: 'Subscriptions', permission: 'money.view' },
   { to: '/money', label: 'Revenue', permission: 'money.view' },
   { to: '/engagement', label: 'Engagement', permission: 'engagement.view' },
+  { to: '/app-versions', label: 'App versions', permission: 'versions.view' },
   { section: 'Admin', to: '/system', label: 'System health', permission: 'system.view' },
   { to: '/audit', label: 'Audit log', permission: 'audit.view' },
   { to: '/admins', label: 'Admins', permission: 'admins.manage' },

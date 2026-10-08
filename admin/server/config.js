@@ -21,6 +21,10 @@ const config = {
   razorpayKeySecret: str('RAZORPAY_KEY_SECRET'),
   trustProxy: Number(str('TRUST_PROXY', isProd ? '1' : '0')) || 0,
   cookieName: 'lv_admin',
+  /** Authenticator-app codes required for every admin (set ADMIN_MFA_REQUIRED=false to make it optional) */
+  requireMfa: str('ADMIN_MFA_REQUIRED', 'true').toLowerCase() !== 'false',
+  /** Encrypts stored MFA secrets; defaults to ADMIN_JWT_SECRET. Keep it stable or MFA must be reset. */
+  mfaKey: str('ADMIN_MFA_KEY'),
 };
 
 function validateConfig() {

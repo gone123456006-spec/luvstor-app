@@ -15,6 +15,29 @@ function signSession(admin) {
   );
 }
 
+/** Proves the password step passed; only exchangeable for a session with a valid MFA code */
+function signMfaChallenge(admin) {
+  return jwt.sign({ sub: String(admin._id), v: admin.tokenVersion || 0 }, config.jwtSecret, {
+    expiresIn: '5m',
+    issuer: 'luvstor-admin-mfa',
+  });
+}
+
+function verifyMfaChallenge(token) {
+  try {
+    return jwt.verify(String(token || ''), config.jwtSecret, {
+      issuer: 'luvstor-admin-mfa',
+      algorithms: ['HS256'],
+    });
+  } catch {
+    return null;
+  }
+}
+
+function mfaSetupRequired(admin) {
+  return config.requireMfa && !admin?.mfaEnabled;
+}
+
 function cookieOptions() {
   return {
     httpOnly: true,
@@ -53,7 +76,10 @@ async function requireAdmin(req, res, next) {
     if (!token) throw new HttpError(401, 'Not signed in', 'NO_SESSION');
     let payload;
     try {
-      payload = jwt.verify(token, config.jwtSecret, { issuer: 'luvstor-admin' });
+      payload = jwt.verify(token, config.jwtSecret, {
+        issuer: 'luvstor-admin',
+        algorithms: ['HS256'],
+      });
     } catch {
       clearSessionCookie(res);
       throw new HttpError(401, 'Session expired', 'SESSION_EXPIRED');
@@ -79,6 +105,9 @@ function requirePermission(permission) {
     if (req.admin.mustChangePassword) {
       return next(new HttpError(403, 'Change your password to continue', 'MUST_CHANGE_PASSWORD'));
     }
+    if (mfaSetupRequired(req.admin)) {
+      return next(new HttpError(403, 'Set up two-factor authentication to continue', 'MFA_SETUP_REQUIRED'));
+    }
     return next();
   };
 }
@@ -91,4 +120,7 @@ module.exports = {
   requirePermission,
   setSessionCookie,
   clearSessionCookie,
+  signMfaChallenge,
+  verifyMfaChallenge,
+  mfaSetupRequired,
 };
