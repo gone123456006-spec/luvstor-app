@@ -102,6 +102,15 @@ const TOKEN_PACKS = [
   },
 ] as const;
 
+const TOKEN_MENU = [
+  { key: "buy", label: "Buy tokens" },
+  { key: "spin", label: "Lucky spin" },
+  { key: "premium", label: "Premium plans" },
+  { key: "refresh", label: "Refresh balance" },
+  { key: "help", label: "Help" },
+] as const;
+type TokenMenuKey = (typeof TOKEN_MENU)[number]["key"];
+
 function formatInr(n: number) {
   return `₹${Number(n).toLocaleString("en-IN")}`;
 }
@@ -851,7 +860,6 @@ export default function TokenScreen() {
   const insets = useSafeAreaInsets();
   const scrollRef = React.useRef<ScrollView>(null);
   const tokenSectionY = React.useRef(0);
-  const buyButtonY = React.useRef(0);
   const initialSnapshot = React.useMemo(() => getCachedTokenBalance(), []);
 
   const scrollToTokenPacks = React.useCallback(() => {
@@ -874,14 +882,6 @@ export default function TokenScreen() {
     }
   }, [section, router, scrollToTokenPacks]);
 
-  const scrollToBuyButton = React.useCallback(() => {
-    const y = tokenSectionY.current + buyButtonY.current - 24;
-    scrollRef.current?.scrollTo({
-      y: Math.max(y, 0),
-      animated: true,
-    });
-  }, []);
-
   const [balance, setBalance] = React.useState(
     initialSnapshot?.tokenBalance ?? 0,
   );
@@ -902,7 +902,6 @@ export default function TokenScreen() {
   const [spinModalOpen, setSpinModalOpen] = React.useState(false);
   const [selectedPackId, setSelectedPackId] = React.useState<string>("1000");
   const [buying, setBuying] = React.useState(false);
-  const [buyBtnPulse, setBuyBtnPulse] = React.useState(false);
   const [packOffers, setPackOffers] = React.useState<
     Record<string, TokenPackOffer>
   >({});
@@ -974,18 +973,23 @@ export default function TokenScreen() {
     return priceInr != null ? formatInr(priceInr) : selectedPack.price;
   }, [packOffers, selectedPack]);
 
-  const selectPackAndShowBuy = React.useCallback(
-    (packId: string) => {
-      setSelectedPackId(packId);
-      setBuyBtnPulse(true);
-      // Let layout settle, then scroll Buy Tokens into view
-      requestAnimationFrame(() => {
-        setTimeout(() => scrollToBuyButton(), 50);
-      });
-      setTimeout(() => setBuyBtnPulse(false), 1200);
-    },
-    [scrollToBuyButton],
-  );
+  const [buySheetOpen, setBuySheetOpen] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  const onMenuPick = (key: TokenMenuKey) => {
+    setMenuOpen(false);
+    if (key === "buy") scrollToTokenPacks();
+    else if (key === "spin") setSpinModalOpen(true);
+    else if (key === "premium") router.push("/subscription" as any);
+    else if (key === "refresh") void loadBalance();
+    else if (key === "help") router.push("/help-support" as any);
+  };
+
+  // WhatsApp-style: tap a row → confirm in a bottom sheet (no page jump)
+  const selectPackAndShowBuy = React.useCallback((packId: string) => {
+    setSelectedPackId(packId);
+    setBuySheetOpen(true);
+  }, []);
 
   const buySelectedPack = React.useCallback(async () => {
     const pack = TOKEN_PACKS.find((p) => p.id === selectedPackId);
@@ -1113,6 +1117,15 @@ export default function TokenScreen() {
                 publicId={userPublicId || undefined}
                 size={34}
               />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              activeOpacity={0.6}
+              onPress={() => setMenuOpen(true)}
+              accessibilityLabel="More options"
+              hitSlop={8}
+            >
+              <Ionicons name="ellipsis-vertical" size={20} color={tc("#111B21", "fg")} />
             </TouchableOpacity>
           </View>
         </View>
@@ -1305,17 +1318,10 @@ export default function TokenScreen() {
             </View>
 
             <TouchableOpacity
-              onLayout={(e) => {
-                buyButtonY.current = e.nativeEvent.layout.y;
-              }}
-              style={[
-                styles.continueBtn,
-                buyBtnPulse && styles.continueBtnPulse,
-                buying && styles.continueBtnDisabled,
-              ]}
+              style={[styles.continueBtn, buying && styles.continueBtnDisabled]}
               activeOpacity={0.85}
               disabled={buying}
-              onPress={buySelectedPack}
+              onPress={() => setBuySheetOpen(true)}
             >
               <Text style={fixedText.onBrand}>
                 {buying
@@ -1354,6 +1360,95 @@ export default function TokenScreen() {
           if (nextAt !== undefined) setNextSpinAt(nextAt);
         }}
       />
+
+      {/* ⋮ menu — WhatsApp overflow popup */}
+      <Modal
+        visible={menuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuOpen(false)}
+      >
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={() => setMenuOpen(false)}
+        />
+        <View style={[styles.menuCard, { top: insets.top + 6 }]}>
+          {TOKEN_MENU.map((item) => (
+            <TouchableOpacity
+              key={item.key}
+              style={styles.menuItem}
+              activeOpacity={0.6}
+              onPress={() => onMenuPick(item.key)}
+            >
+              <Text style={styles.menuText}>{item.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Modal>
+
+      {/* Buy confirmation — WhatsApp bottom sheet */}
+      <Modal
+        visible={buySheetOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setBuySheetOpen(false)}
+      >
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity
+            style={styles.modalDismiss}
+            activeOpacity={1}
+            onPress={() => setBuySheetOpen(false)}
+          />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Buy tokens</Text>
+            <View style={styles.sheetRow}>
+              <BonusCoin size={40} iconSize={20} />
+              <View style={styles.rowText}>
+                <Text style={styles.sheetPack}>
+                  {selectedPack.count.toLocaleString()} tokens
+                </Text>
+                <Text style={styles.rowSub}>
+                  New balance {(balance + selectedPack.count).toLocaleString()} tokens
+                </Text>
+              </View>
+              <Text style={styles.sheetPrice}>{selectedPackPriceLabel}</Text>
+            </View>
+            <View style={styles.sheetDivider} />
+            {[
+              { icon: "flash-outline" as const, text: "Added to your balance instantly" },
+              { icon: "chatbubbles-outline" as const, text: "Use tokens to start and continue chats" },
+              { icon: "lock-closed-outline" as const, text: "Secure payment via Razorpay" },
+            ].map((b) => (
+              <View key={b.text} style={styles.sheetBenefit}>
+                <Ionicons name={b.icon} size={20} color={tc("#667781", "fg")} />
+                <Text style={styles.sheetBenefitText}>{b.text}</Text>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={[styles.continueBtn, styles.sheetPayBtn, buying && styles.continueBtnDisabled]}
+              activeOpacity={0.85}
+              disabled={buying}
+              onPress={() => {
+                setBuySheetOpen(false);
+                void buySelectedPack();
+              }}
+            >
+              <Text style={fixedText.onBrand}>
+                {buying ? "Processing…" : `Pay ${selectedPackPriceLabel}`}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.sheetCancel}
+              activeOpacity={0.6}
+              onPress={() => setBuySheetOpen(false)}
+            >
+              <Text style={styles.sheetCancelText}>Not now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1372,11 +1467,11 @@ const styles = themedStyles(() =>
   StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F5F5F7",
+    backgroundColor: "#FFFFFF",
   },
   page: {
     flex: 1,
-    backgroundColor: "#F5F5F7",
+    backgroundColor: "#FFFFFF",
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -1396,10 +1491,17 @@ const styles = themedStyles(() =>
     minWidth: 0,
   },
   title: {
-    fontSize: 21,
-    fontWeight: "600",
+    fontSize: 22,
+    fontWeight: "700",
     color: "#111B21",
     letterSpacing: -0.2,
+  },
+  headerIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
   },
   headerSubtitle: {
     fontSize: 13,
@@ -1492,8 +1594,12 @@ const styles = themedStyles(() =>
     fontSize: 14,
     fontWeight: "500",
     color: "#667781",
-    paddingTop: 20,
-    paddingBottom: 8,
+    marginHorizontal: -20,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#E9EDEF",
   },
   group: {
     backgroundColor: "#FFFFFF",
@@ -1754,11 +1860,102 @@ const styles = themedStyles(() =>
     justifyContent: "center",
     marginTop: 4,
   },
-  continueBtnPulse: {
-    transform: [{ scale: 1.02 }],
-  },
   continueBtnDisabled: {
     opacity: 0.5,
+  },
+
+  // ⋮ overflow menu
+  menuCard: {
+    position: "absolute",
+    right: 10,
+    minWidth: 200,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  menuItem: {
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+  },
+  menuText: {
+    fontSize: 16,
+    color: "#111B21",
+  },
+
+  // Buy confirmation sheet
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  sheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  sheetHandle: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#D1D7DB",
+    marginBottom: 14,
+  },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111B21",
+    marginBottom: 14,
+  },
+  sheetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  sheetPack: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#111B21",
+  },
+  sheetPrice: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111B21",
+  },
+  sheetDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E9EDEF",
+    marginVertical: 14,
+  },
+  sheetBenefit: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 7,
+  },
+  sheetBenefitText: {
+    fontSize: 14,
+    color: "#3B4A54",
+    flex: 1,
+  },
+  sheetPayBtn: {
+    marginTop: 18,
+  },
+  sheetCancel: {
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+  sheetCancelText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#370372",
   },
   secureRow: {
     flexDirection: "row",
