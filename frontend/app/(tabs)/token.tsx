@@ -27,9 +27,7 @@ import {
 } from "react-native-safe-area-context";
 import { nativeAlert } from "../../components/AppAlert";
 import BonusCoin from "../../components/BonusCoin";
-import WhatsAppAvatar, {
-  VerifiedTick,
-} from "../../components/WhatsAppAvatar";
+import WhatsAppAvatar from "../../components/WhatsAppAvatar";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -50,7 +48,7 @@ import {
 } from "../../utils/tokenCache";
 import { apiRequest } from "../../utils/api";
 import { resolveMediaUrl } from "../../utils/media";
-import { D, tc, themeState, themedStyles } from "../../utils/theme";
+import { tc, themedStyles } from "../../utils/theme";
 
 // ─────────────────────────────────────────────
 // Wheel config
@@ -87,7 +85,6 @@ const { width: SCREEN_W } = Dimensions.get("window");
 const WHEEL_SIZE = Math.min(SCREEN_W - 56, 280);
 const TWO_PI = 2 * Math.PI;
 const SCROLL_H_PAD = 20;
-const AD_BANNER_H = 168;
 const TOKEN_PACKS = [
   { id: "10", count: 10, price: "₹10", listPriceInr: 10 },
   { id: "100", count: 100, price: "₹80", listPriceInr: 80 },
@@ -628,51 +625,6 @@ function SpinModal({
   );
 }
 
-/** The premium banner is always purple, so its colours don't follow the theme */
-const adFixed = StyleSheet.create({
-  cta: { backgroundColor: "#FFFFFF" },
-  ctaText: { color: "#24104F" },
-  tick: { backgroundColor: "#FFD166" },
-});
-
-function PremiumAdBanner({ onPress }: { onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      style={styles.adBannerWrap}
-      activeOpacity={0.92}
-      onPress={onPress}
-    >
-      <View style={styles.adMark} pointerEvents="none">
-        <Ionicons name="diamond" size={190} color="rgba(255,255,255,0.09)" />
-      </View>
-
-      <View style={styles.adCopy} pointerEvents="none">
-        <Text style={styles.adTitle}>Get Premium</Text>
-        <View style={styles.adPerks}>
-          {["Blue tick", "Extra spins", "Longer chats"].map((perk) => (
-            <View key={perk} style={styles.adPerk}>
-              {perk === "Blue tick" ? (
-                <View style={styles.adBlueTick}>
-                  <VerifiedTick avatarSize={0} />
-                </View>
-              ) : (
-                <View style={[styles.adTick, adFixed.tick]}>
-                  <Ionicons name="checkmark-sharp" size={11} color="#24104F" />
-                </View>
-              )}
-              <Text style={styles.adPerkText}>{perk}</Text>
-            </View>
-          ))}
-        </View>
-        <View style={[styles.adCta, adFixed.cta]}>
-          <Text style={[styles.adCtaText, adFixed.ctaText]}>View plans</Text>
-          <Ionicons name="arrow-forward" size={14} color="#24104F" />
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
 type PlanCompareCard = {
   id: "gold" | "platinum" | "black";
   name: string;
@@ -741,55 +693,6 @@ const PLAN_CARD_W = SCREEN_W - 64;
 const PLAN_CARD_GAP = 12;
 const PLAN_AUTO_SLIDE_MS = 4000;
 const PLAN_DRAG_PAUSE_MS = 7000;
-
-/** Purple banner that melts into the page behind the middle of the plan cards. */
-function PremiumSection({ onPress }: { onPress: () => void }) {
-  const [carouselY, setCarouselY] = React.useState(AD_BANNER_H);
-  const [cardH, setCardH] = React.useState(230);
-  const fadeStart = AD_BANNER_H - 40;
-  const fadeEnd = Math.max(fadeStart + 80, carouselY + cardH / 2);
-
-  return (
-    <View style={styles.premiumSection}>
-      <LinearGradient
-        colors={["#24104F", "#4B24B0"]}
-        start={{ x: 0, y: 0.5 }}
-        end={{ x: 1, y: 0.5 }}
-        style={[styles.premiumBg, { height: fadeEnd }]}
-        pointerEvents="none"
-      />
-      <LinearGradient
-        colors={
-          themeState.dark
-            ? [
-                "rgba(15,15,19,0)",
-                "rgba(15,15,19,0.18)",
-                "rgba(15,15,19,0.55)",
-                "rgba(15,15,19,0.85)",
-                D.page,
-              ]
-            : [
-                "rgba(245,245,247,0)",
-                "rgba(245,245,247,0.18)",
-                "rgba(245,245,247,0.55)",
-                "rgba(245,245,247,0.85)",
-                "#F5F5F7",
-              ]
-        }
-        locations={[0, 0.3, 0.6, 0.82, 1]}
-        style={[
-          styles.premiumBg,
-          { top: fadeStart, height: fadeEnd - fadeStart + 1 },
-        ]}
-        pointerEvents="none"
-      />
-      <PremiumAdBanner onPress={onPress} />
-      <View onLayout={(e) => setCarouselY(e.nativeEvent.layout.y)}>
-        <PlanCompareCarousel onPress={onPress} onCardHeight={setCardH} />
-      </View>
-    </View>
-  );
-}
 
 function PlanCompareCarousel({
   onPress,
@@ -1227,86 +1130,90 @@ export default function TokenScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.balanceCard}>
-            <View style={styles.balanceTopRow}>
-              <View style={styles.balanceTopLeft}>
-                <Text style={styles.balanceCardLabel}>Your Balance</Text>
-                <View style={styles.balanceAmountRow}>
-                  <BonusCoin size={22} iconSize={11} />
-                  <Text style={styles.balanceCardAmount}>
-                    {loadingBalance ? "…" : balance.toLocaleString()}
-                  </Text>
-                  <Text style={styles.balanceCardUnit}>tokens</Text>
-                </View>
-              </View>
+            <Text style={styles.balanceCardLabel}>Your balance</Text>
+            <View style={styles.balanceAmountRow}>
+              <BonusCoin size={30} iconSize={15} />
+              <Text style={styles.balanceCardAmount}>
+                {loadingBalance ? "…" : balance.toLocaleString()}
+              </Text>
             </View>
+            <Text style={styles.balanceCardUnit}>tokens</Text>
 
             <View style={styles.balanceActions}>
               <TouchableOpacity
-                style={styles.balanceBtnOutline}
+                style={styles.balanceBtnFilled}
                 activeOpacity={0.85}
                 onPress={scrollToTokenPacks}
               >
-                <Text style={styles.balanceBtnOutlineText}>Get Coin</Text>
+                <Ionicons name="add" size={18} color="#FFFFFF" />
+                <Text style={fixedText.onBrand}>Buy tokens</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.balanceBtnFilled}
+                style={styles.balanceBtnOutline}
                 activeOpacity={0.85}
                 onPress={() => router.push("/subscription" as any)}
               >
-                <Text style={styles.balanceBtnFilledText}>Buy Pro</Text>
+                <Ionicons name="diamond-outline" size={16} color={tc("#370372", "fg")} />
+                <Text style={styles.balanceBtnOutlineText}>Premium</Text>
               </TouchableOpacity>
             </View>
           </View>
 
-          <PremiumSection
-            onPress={() => router.push("/subscription" as any)}
-          />
-
-          {/* Daily Lucky Spin */}
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => setSpinModalOpen(true)}
-            style={styles.spinCardWrap}
-          >
-            <LinearGradient
-              colors={["#6B1245", "#C23A22", "#E07A14"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.spinCard}
+          <Text style={styles.groupCaption}>Free tokens</Text>
+          <View style={styles.group}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => setSpinModalOpen(true)}
+              style={styles.groupRow}
             >
-              <View style={styles.spinIconBg}>
-                <BonusCoin size={44} iconSize={22} />
+              <View style={[styles.rowIcon, { backgroundColor: tc("#FFF3E0", "bg") }]}>
+                <BonusCoin size={26} iconSize={13} />
               </View>
-              <View style={styles.spinTextContainer}>
-                <Text style={styles.spinCardTitle}>Lucky Spin</Text>
-                <Text
-                  style={styles.spinCardSub}
-                  numberOfLines={1}
-                  {...(Platform.OS === "android"
-                    ? {
-                        adjustsFontSizeToFit: true,
-                        minimumFontScale: 0.82,
-                      }
-                    : {})}
-                >
-                  Get free tokens — spin to win!
+              <View style={styles.rowText}>
+                <Text style={styles.rowTitle}>Lucky Spin</Text>
+                <Text style={styles.rowSub} numberOfLines={1}>
+                  {canSpinToday
+                    ? spinsRemaining > 1
+                      ? `${spinsRemaining} free spins ready`
+                      : "Your free spin is ready"
+                    : (() => {
+                        const { hours, minutes } = waitParts(msUntilNextSpin(nextSpinAt));
+                        return hours || minutes
+                          ? `Next free spin in ${hours ? `${hours}h ` : ""}${minutes}m`
+                          : "Come back later for another spin";
+                      })()}
                 </Text>
               </View>
-              <Text
-                style={[
-                  styles.spinStatus,
-                  !canSpinToday && styles.spinStatusUsed,
-                ]}
-              >
-                {canSpinToday
-                  ? spinsRemaining > 1
-                    ? `${spinsRemaining} left`
-                    : "Open"
-                  : "Used"}
-              </Text>
-              <Ionicons name="chevron-forward" size={18} color="#FFE7B8" />
-            </LinearGradient>
-          </TouchableOpacity>
+              <View style={[styles.statusPill, !canSpinToday && styles.statusPillMuted]}>
+                <Text style={[fixedText.statusOn, !canSpinToday && styles.statusTextMuted]}>
+                  {canSpinToday ? "Spin" : "Used"}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.groupCaption}>Premium</Text>
+          <View style={styles.group}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => router.push("/subscription" as any)}
+              style={styles.groupRow}
+            >
+              <View style={[styles.rowIcon, fixedText.premiumIcon]}>
+                <Ionicons name="diamond" size={20} color="#FFFFFF" />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowTitle}>Get Premium</Text>
+                <Text style={styles.rowSub} numberOfLines={1}>
+                  Blue tick · Extra spins · Longer chats
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={tc("#8696A0", "fg")} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.carouselWrap}>
+            <PlanCompareCarousel onPress={() => router.push("/subscription" as any)} />
+          </View>
 
           <View
             onLayout={(e) => {
@@ -1318,10 +1225,7 @@ export default function TokenScreen() {
               }
             }}
           >
-            <Text style={styles.sectionTitle}>Get more tokens</Text>
-            <Text style={styles.sectionSubtitle}>
-              Select a pack and add tokens to your balance
-            </Text>
+            <Text style={styles.groupCaption}>Buy tokens</Text>
 
             <View style={styles.planList}>
               {TOKEN_PACKS.map((pack, index) => {
@@ -1349,6 +1253,9 @@ export default function TokenScreen() {
                     activeOpacity={0.7}
                     onPress={() => selectPackAndShowBuy(pack.id)}
                   >
+                    <View style={[styles.planRadio, selected && styles.planRadioSelected]}>
+                      {selected ? <View style={styles.planRadioDot} /> : null}
+                    </View>
                     <View style={styles.planInfo}>
                       <View style={styles.planTitleRow}>
                         <BonusCoin size={18} />
@@ -1410,12 +1317,16 @@ export default function TokenScreen() {
               disabled={buying}
               onPress={buySelectedPack}
             >
-              <Text style={styles.continueBtnText}>
+              <Text style={fixedText.onBrand}>
                 {buying
                   ? "Processing…"
                   : `Buy ${selectedPack.count.toLocaleString()} tokens · ${selectedPackPriceLabel}`}
               </Text>
             </TouchableOpacity>
+            <View style={styles.secureRow}>
+              <Ionicons name="lock-closed" size={12} color={tc("#8696A0", "fg")} />
+              <Text style={styles.secureText}>Secure payment · Tokens are added instantly</Text>
+            </View>
           </View>
         </ScrollView>
       </View>
@@ -1450,6 +1361,13 @@ export default function TokenScreen() {
 // ─────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────
+/** Text/icons that sit on brand-coloured fills stay white in both themes */
+const fixedText = StyleSheet.create({
+  onBrand: { color: "#FFFFFF", fontSize: 15, fontWeight: "600" },
+  statusOn: { color: "#FFFFFF", fontSize: 13, fontWeight: "600" },
+  premiumIcon: { backgroundColor: "#6D3FD6" },
+});
+
 const styles = themedStyles(() =>
   StyleSheet.create({
   container: {
@@ -1505,158 +1423,125 @@ const styles = themedStyles(() =>
     justifyContent: "center",
   },
 
-  // Balance — full-bleed card
+  // Balance — WhatsApp-style flat header card
   balanceCard: {
     backgroundColor: "#FFFFFF",
     marginHorizontal: -20,
     paddingHorizontal: 20,
-    paddingVertical: 12,
-    marginBottom: 12,
-  },
-  balanceTopRow: {
-    flexDirection: "row",
+    paddingTop: 18,
+    paddingBottom: 18,
     alignItems: "center",
-    justifyContent: "space-between",
-  },
-  balanceTopLeft: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: 8,
   },
   balanceCardLabel: {
     fontSize: 13,
     color: "#667781",
-    marginBottom: 4,
+    marginBottom: 6,
   },
   balanceAmountRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 6,
+    alignItems: "center",
+    gap: 8,
   },
   balanceCardAmount: {
-    fontSize: 26,
+    fontSize: 36,
     fontWeight: "700",
     color: "#111B21",
-    letterSpacing: -0.5,
+    letterSpacing: -0.8,
   },
   balanceCardUnit: {
     fontSize: 14,
     color: "#667781",
-    fontWeight: "500",
-    marginBottom: 2,
+    marginTop: 2,
   },
   balanceActions: {
     flexDirection: "row",
     gap: 10,
-    marginTop: 12,
+    marginTop: 16,
+    alignSelf: "stretch",
+  },
+  balanceBtnFilled: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 6,
+    backgroundColor: "#370372",
+    borderRadius: 22,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
   },
   balanceBtnOutline: {
     flex: 1,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 8,
-    paddingVertical: 10,
+    flexDirection: "row",
+    gap: 6,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E9EDEF",
+    borderRadius: 22,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
   },
   balanceBtnOutlineText: {
-    color: "#374151",
-    fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-  },
-  balanceBtnFilled: {
-    flex: 1,
-    backgroundColor: "#111B21",
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  balanceBtnFilledText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-  },
-
-  premiumSection: {
-    marginHorizontal: -SCROLL_H_PAD,
-    marginBottom: 22,
-  },
-  premiumBg: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
-  },
-  adBannerWrap: {
-    height: AD_BANNER_H,
-    overflow: "hidden",
-  },
-  adMark: {
-    position: "absolute",
-    right: -34,
-    top: -14,
-    transform: [{ rotate: "-14deg" }],
-  },
-  adCopy: {
-    position: "absolute",
-    left: 20,
-    right: 20,
-    top: 0,
-    bottom: 0,
-    justifyContent: "center",
-  },
-  adTitle: {
-    color: "#fff",
-    fontSize: 30,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-  },
-  adPerks: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    columnGap: 12,
-    rowGap: 4,
-    marginTop: 6,
-    marginBottom: 14,
-  },
-  adPerk: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  adBlueTick: {
-    width: 16,
-    height: 16,
-  },
-  adTick: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: "#FFD166",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  adPerkText: {
-    color: "#fff",
-    fontSize: 13,
+    color: "#370372",
+    fontSize: 15,
     fontWeight: "600",
   },
-  adCta: {
-    alignSelf: "flex-start",
+
+  // Grouped list (WhatsApp settings look)
+  groupCaption: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#667781",
+    paddingTop: 20,
+    paddingBottom: 8,
+  },
+  group: {
+    backgroundColor: "#FFFFFF",
+    marginHorizontal: -20,
+  },
+  groupRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "#fff",
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 14,
   },
-  adCtaText: {
-    color: "#24104F",
+  rowIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowTitle: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#111B21",
+  },
+  rowSub: {
     fontSize: 13,
-    fontWeight: "800",
+    color: "#667781",
+    marginTop: 2,
+  },
+  statusPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: "#370372",
+  },
+  statusPillMuted: {
+    backgroundColor: "#F0F2F5",
+  },
+  statusTextMuted: {
+    color: "#667781",
+  },
+  carouselWrap: {
+    marginHorizontal: -20,
+    marginTop: 12,
   },
 
   planCarouselContent: {
@@ -1752,74 +1637,12 @@ const styles = themedStyles(() =>
     backgroundColor: "#4B24B0",
   },
 
-  // Daily Lucky Spin
-  spinCardWrap: {
-    marginHorizontal: -20,
-    marginBottom: 24,
-    overflow: "hidden",
-  },
-  spinCard: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255, 209, 102, 0.45)",
-  },
-  spinIconBg: {
-    marginRight: 12,
-    backgroundColor: "transparent",
-  },
-  spinTextContainer: {
-    flex: 1,
-    minWidth: 0,
-  },
-  spinCardTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#FFF6D6",
-    marginBottom: 2,
-  },
-  spinCardSub: {
-    fontSize: 13,
-    color: "rgba(255,246,214,0.82)",
-    ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
-  },
-  spinFree: {
-    color: "#FFD166",
-    fontWeight: "800",
-  },
-  spinStatus: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#FFD166",
-    marginRight: 4,
-  },
-  spinStatusUsed: {
-    color: "rgba(255,246,214,0.7)",
-    fontWeight: "600",
-  },
-
-  // Subscription-style token packs
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: "#111B21",
-    marginBottom: 4,
-    textAlign: "center",
-  },
-  sectionSubtitle: {
-    fontSize: 13,
-    color: "#667781",
-    marginBottom: 14,
-    lineHeight: 18,
-    textAlign: "center",
-  },
+  // Token packs — radio list
   planList: {
-    backgroundColor: "#fff",
+    backgroundColor: "#FFFFFF",
     marginHorizontal: -20,
     overflow: "hidden",
-    marginBottom: 14,
+    marginBottom: 16,
   },
   planRow: {
     flexDirection: "row",
@@ -1828,33 +1651,33 @@ const styles = themedStyles(() =>
     paddingHorizontal: 20,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#E9EDEF",
-    backgroundColor: "#fff",
+    backgroundColor: "#FFFFFF",
   },
   planRowFirst: {
     borderTopWidth: 0,
   },
   planRowLast: {},
   planRowSelected: {
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#F5F5F7",
   },
   planRadio: {
     width: 22,
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: "#C5C5C5",
+    borderColor: "#79747E",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
+    marginRight: 14,
   },
   planRadioSelected: {
-    borderColor: "#111B21",
+    borderColor: "#370372",
   },
   planRadioDot: {
-    width: 12,
-    height: 12,
+    width: 11,
+    height: 11,
     borderRadius: 6,
-    backgroundColor: "#111B21",
+    backgroundColor: "#370372",
   },
   planInfo: {
     flex: 1,
@@ -1863,45 +1686,46 @@ const styles = themedStyles(() =>
   planTitleRow: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
   },
   planTitle: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#111",
+    fontWeight: "500",
+    color: "#111B21",
   },
   planPopularTag: {
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#EFE8F8",
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 6,
+    borderRadius: 10,
   },
   planPopularText: {
     fontSize: 11,
     fontWeight: "600",
-    color: "#6B7280",
+    color: "#370372",
   },
   planBiggestTag: {
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#E7F8EF",
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 6,
+    borderRadius: 10,
   },
   planBiggestText: {
     fontSize: 11,
     fontWeight: "600",
-    color: "#6B7280",
+    color: "#1E8E4E",
   },
   planOfferTag: {
-    backgroundColor: "#E8F5E9",
+    backgroundColor: "#E7F8EF",
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 6,
+    borderRadius: 10,
   },
   planOfferText: {
     fontSize: 11,
     fontWeight: "700",
-    color: "#2E7D32",
+    color: "#1E8E4E",
   },
   planPriceCol: {
     alignItems: "flex-end",
@@ -1909,26 +1733,26 @@ const styles = themedStyles(() =>
   },
   planPriceStrike: {
     fontSize: 12,
-    color: "#9CA3AF",
+    color: "#8696A0",
     textDecorationLine: "line-through",
     marginBottom: 1,
   },
   planPrice: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#111",
-  },
-  planPriceSelected: {
+    fontWeight: "500",
     color: "#111B21",
   },
+  planPriceSelected: {
+    fontWeight: "700",
+    color: "#370372",
+  },
   continueBtn: {
-    height: 46,
-    borderRadius: 10,
-    backgroundColor: "#111B21",
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#370372",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
-    marginBottom: 8,
   },
   continueBtnPulse: {
     transform: [{ scale: 1.02 }],
@@ -1936,10 +1760,17 @@ const styles = themedStyles(() =>
   continueBtnDisabled: {
     opacity: 0.5,
   },
-  continueBtnText: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "600",
+  secureRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  secureText: {
+    fontSize: 12,
+    color: "#8696A0",
   },
 
   // Modal — festival fair (half-screen sheet)

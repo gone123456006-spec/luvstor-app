@@ -299,22 +299,6 @@ export default function AccountSettingsScreen() {
               <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
             ) : null}
           </ListRowTouchable>
-
-          <View style={styles.divider} />
-
-          <ListRowTouchable
-            style={styles.listRow}
-            activeOpacity={0.7}
-            onPress={() => router.push('/settings/account-deletion' as any)}
-          >
-            <View style={[styles.iconCircle, { backgroundColor: '#EA4335' }]}>
-              <Ionicons name="information-circle" size={20} color="#fff" />
-            </View>
-            <Text style={styles.rowLabelFlex}>Account Deletion Policy</Text>
-            {SHOW_ROW_CHEVRON ? (
-              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-            ) : null}
-          </ListRowTouchable>
         </View>
 
         <Text style={styles.sectionHint}>About</Text>
@@ -356,6 +340,25 @@ export default function AccountSettingsScreen() {
               <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
             ) : null}
           </ListRowTouchable>
+
+          <View style={styles.divider} />
+
+          <ListRowTouchable
+            style={styles.listRow}
+            activeOpacity={0.7}
+            onPress={() => router.push('/settings/personal-details' as any)}
+          >
+            <View style={[styles.iconCircle, { backgroundColor: '#6B7280' }]}>
+              <Ionicons name="person-circle-outline" size={22} color="#fff" />
+            </View>
+            <View style={styles.rowContent}>
+              <Text style={styles.rowLabel}>Personal details</Text>
+              <Text style={styles.rowSub}>Contact info, name</Text>
+            </View>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
         </View>
 
         <Text style={styles.sectionHint}>Session</Text>
@@ -370,28 +373,6 @@ export default function AccountSettingsScreen() {
             </View>
             <Text style={[styles.rowLabelFlex, { color: WA.danger }]}>
               Logout
-            </Text>
-            {SHOW_ROW_CHEVRON ? (
-              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-            ) : null}
-          </ListRowTouchable>
-        </View>
-
-        <Text style={[styles.sectionHint, { paddingTop: 28 }]}>
-          Deleting your account will permanently remove your profile and data from Luvstor.
-        </Text>
-
-        <View style={styles.listGroup}>
-          <ListRowTouchable
-            style={styles.listRow}
-            activeOpacity={0.7}
-            onPress={() => router.push('/delete-account/warning' as any)}
-          >
-            <View style={[styles.iconCircle, { backgroundColor: WA.danger }]}>
-              <Ionicons name="trash" size={20} color="#fff" />
-            </View>
-            <Text style={[styles.rowLabelFlex, { color: WA.danger }]}>
-              Delete account
             </Text>
             {SHOW_ROW_CHEVRON ? (
               <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
