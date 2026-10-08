@@ -4966,7 +4966,7 @@ export default function MessageScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="More options"
               >
-                <Ionicons name={NAV_ICON.more} size={22} color={tc("#111B21", "fg")} />
+                <Ionicons name="ellipsis-vertical" size={22} color={tc("#111B21", "fg")} />
               </TouchableOpacity>
             </View>
           </View>

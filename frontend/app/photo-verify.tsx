@@ -26,7 +26,8 @@ import {
   submitPhotoVerification,
 } from '../utils/verification';
 import { NAV_ICON } from "../utils/platformIcons";
-import { statusBarStyle, tc, themeState, themedStyles } from "../utils/theme";
+import { statusBarStyle, tc, themedStyles } from "../utils/theme";
+import { useAccessibility } from "../contexts/AccessibilityContext";
 
 const ANALYSIS_MS = 30 * 60 * 1000;
 const POLL_MS = 20_000;
@@ -303,6 +304,7 @@ function LiveAutoCaptureModal({
  */
 export default function PhotoVerifyScreen() {
   const router = useRouter();
+  const { isDark } = useAccessibility();
   const [status, setStatus] = useState<PhotoVerification | null>(null);
   const [challenge, setChallenge] = useState<PhotoChallenge | null>(null);
   const [loading, setLoading] = useState(true);
@@ -601,11 +603,11 @@ export default function PhotoVerifyScreen() {
           keyboardShouldPersistTaps="handled"
         >
           {!isApproved ? (
-            <View style={styles.badge}>
+            <View style={[styles.badge, isDark && fixed.badgeDark]}>
               <Ionicons
                 name="shield-outline"
                 size={40}
-                color={themeState.dark ? '#C4B5FD' : BRAND}
+                color={isDark ? '#D8CCFF' : BRAND}
               />
             </View>
           ) : null}
@@ -909,4 +911,5 @@ const styles = themedStyles(() =>
 
 const fixed = StyleSheet.create({
   verifiedHeading: { color: '#22C55E' },
+  badgeDark: { backgroundColor: '#3A2E5C' },
 });
