@@ -1,3 +1,4 @@
+const { publicErrorMessage } = require('../utils/publicError');
 const express = require('express');
 const router = express.Router();
 const Razorpay = require('razorpay');
@@ -224,8 +225,8 @@ router.post('/create-order', auth, async (req, res) => {
   } catch (err) {
     console.error('subscriptions/create-order error:', err);
     res.status(err.status || 500).json({
-      error: err.message || 'Failed to create subscription order',
-      code: err.code || 'CREATE_ORDER_FAILED',
+      error: publicErrorMessage(err, 'Failed to create subscription order'),
+      code: (typeof err.code === 'string' && err.code) || 'CREATE_ORDER_FAILED',
     });
   }
 });
@@ -302,8 +303,8 @@ router.post('/verify', auth, async (req, res) => {
   } catch (err) {
     console.error('subscriptions/verify error:', err);
     res.status(err.status || 500).json({
-      error: err.message || 'Subscription verification failed',
-      code: err.code || 'VERIFY_FAILED',
+      error: publicErrorMessage(err, 'Subscription verification failed'),
+      code: (typeof err.code === 'string' && err.code) || 'VERIFY_FAILED',
     });
   }
 });
@@ -375,8 +376,8 @@ router.post('/recover', auth, async (req, res) => {
   } catch (err) {
     console.error('subscriptions/recover error:', err);
     res.status(err.status || 500).json({
-      error: err.message || 'Could not recover subscription',
-      code: err.code || 'RECOVER_FAILED',
+      error: publicErrorMessage(err, 'Could not recover subscription'),
+      code: (typeof err.code === 'string' && err.code) || 'RECOVER_FAILED',
     });
   }
 });

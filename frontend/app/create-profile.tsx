@@ -23,7 +23,7 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { apiRequest, AUTH_TOKEN_KEY } from "../utils/api";
+import { apiRequest } from "../utils/api";
 import {
     getAuthToken,
     getCurrentAuthUser,
@@ -45,6 +45,7 @@ import {
     type ShowMeValue,
 } from "../utils/showMe";
 import { NAV_ICON } from "../utils/platformIcons";
+import { checkBio, maskPhones } from "../utils/bioFilter";
 import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
 // ── Luvstor brand (WhatsApp-style, clean) ───────────────────
@@ -345,13 +346,13 @@ export default function CreateProfileScreen() {
       city: "San Francisco, CA",
       distance: "10",
       tagline,
-      bio,
+      bio: maskPhones(bio.trim()),
       interests,
       relationshipGoal,
       userId: authUser.id,
     };
     try {
-      const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      const token = await getAuthToken();
       if (!token) {
         router.replace("/login");
         return;
@@ -438,6 +439,8 @@ export default function CreateProfileScreen() {
     age.trim() !== "" && !(ageNum >= 18 && ageNum <= 100)
       ? "You must be 18 or older."
       : null;
+  const bioCheck = checkBio(bio);
+  const bioError = bioCheck.ok ? null : bioCheck.error;
   const heightNum = Number(height);
   const heightError =
     height.trim() !== "" && !(heightNum >= 100 && heightNum <= 250)
@@ -455,7 +458,7 @@ export default function CreateProfileScreen() {
         !heightError
       );
     if (step === 2)
-      return bio.trim() !== "" && interests.length > 0 && !!relationshipGoal;
+      return bio.trim() !== "" && !bioError && interests.length > 0 && !!relationshipGoal;
     return true;
   };
 
@@ -609,6 +612,7 @@ export default function CreateProfileScreen() {
           value={bio}
           onChangeText={setBio}
           placeholder="Tell people about yourself"
+          error={bioError}
           maxLength={300}
           multiline
           numberOfLines={4}

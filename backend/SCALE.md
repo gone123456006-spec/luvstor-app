@@ -35,11 +35,8 @@ Clients ──► LB ──► API/Socket nodes (N)
 ## Env knobs
 
 ```bash
-REDIS_URL=rediss://...
+REDIS_URL=redis://...
 MONGO_POOL_SIZE=50
-MEDIA_URL_SECRET=...
-MEDIA_PRIVATE_ENFORCE=log    # → on after the new app is out
-CACHE_MEM_MAX_ITEMS=5000     # in-memory cache size when Redis is down
 PUSH_CONCURRENCY=20          # FCM workers per process
 PUSH_MAX_ATTEMPTS=5
 NOTIFICATION_TTL_DAYS=90     # prune read rows
@@ -111,3 +108,5 @@ Code alone is not infinite capacity. For sustained millions of MAU also plan:
 - Regional FCM + multi-region Mongo only if latency requires it
 
 Local `npm run dev` without Redis still works (single-node fallback).
+
+Now chekc these are working or not and also my app not getting hacked anyhow 
