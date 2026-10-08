@@ -11,6 +11,7 @@ import {
 
 import { MAX_PROFILE_GALLERY } from "../constants/profile";
 import MediaImage from "./MediaImage";
+import { tc, themedPalette, themedStyles } from "../utils/theme";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const GRID_COLS = 3;
@@ -21,13 +22,13 @@ const GRID_CELL = Math.floor(
   (SCREEN_WIDTH - GRID_PAD * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS,
 );
 
-const IG = {
+const IG = themedPalette({
   bg: "#FFFFFF",
   text: "#262626",
   secondary: "#8E8E8E",
   border: "#DBDBDB",
   chipBg: "#FAFAFA",
-};
+});
 
 const INTEREST_EMOJIS: Record<string, string> = {
   Travel: "✈️",
@@ -148,7 +149,7 @@ export default function ProfileInstagramSection({
               <Ionicons
                 name="information-circle-outline"
                 size={18}
-                color="#6750A4"
+                color={tc("#6750A4", "fg")}
               />
             </TouchableOpacity>
           ) : null}
@@ -253,7 +254,8 @@ export default function ProfileInstagramSection({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   root: {
     backgroundColor: IG.bg,
   },
@@ -416,4 +418,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-});
+}),
+);

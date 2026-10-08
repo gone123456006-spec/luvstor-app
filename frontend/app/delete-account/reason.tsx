@@ -11,8 +11,11 @@ import {
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON } from "../../utils/platformIcons";
+import ListRowTouchable from "../../components/ListRowTouchable";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -22,7 +25,7 @@ const WA = {
   teal: '#6750A4',
   danger: '#FF4B6E',
   header: '#FDF8FF',
-};
+});
 
 const REASONS = [
   { id: 'found_someone', label: 'Found someone', icon: 'heart' as const, color: '#FF4B6E' },
@@ -30,7 +33,7 @@ const REASONS = [
   { id: 'notifications', label: 'Too many notifications', icon: 'notifications-off' as const, color: '#FF9800' },
   { id: 'no_matches', label: "Didn't get matches", icon: 'sad-outline' as const, color: '#9C27B0' },
   { id: 'break', label: 'Taking a break', icon: 'pause' as const, color: '#00A884' },
-  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal' as const, color: '#667781' },
+  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal' as const, color: tc('#667781', "fg") },
 ];
 
 export default function DeleteReasonScreen() {
@@ -44,11 +47,11 @@ export default function DeleteReasonScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Why are you leaving?</Text>
       </View>
@@ -64,7 +67,7 @@ export default function DeleteReasonScreen() {
             const selected = selectedReason === reason.id;
             return (
               <View key={reason.id}>
-                <TouchableOpacity
+                <ListRowTouchable
                   style={styles.listRow}
                   activeOpacity={0.7}
                   onPress={() => setSelectedReason(reason.id)}
@@ -76,7 +79,7 @@ export default function DeleteReasonScreen() {
                   <View style={[styles.radio, selected && styles.radioOn]}>
                     {selected && <View style={styles.radioDot} />}
                   </View>
-                </TouchableOpacity>
+                </ListRowTouchable>
                 {index < REASONS.length - 1 && <View style={styles.divider} />}
               </View>
             );
@@ -117,7 +120,8 @@ export default function DeleteReasonScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -236,4 +240,5 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   continueText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-});
+}),
+);

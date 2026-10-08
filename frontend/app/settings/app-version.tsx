@@ -11,15 +11,17 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const C = {
+const C = themedPalette({
   bg: '#F5F5F7',
   text: '#1C1B1F',
   secondary: '#49454F',
   border: '#E7E0EC',
   purple: '#370372',
   header: '#F5F5F7',
-};
+});
 
 const LOGO = require('../../assets/images/luvstoer logo.png');
 
@@ -33,7 +35,7 @@ export default function AppVersionScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={C.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -41,7 +43,7 @@ export default function AppVersionScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={C.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={C.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>App version</Text>
       </View>
@@ -58,7 +60,8 @@ export default function AppVersionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   header: {
     flexDirection: 'row',
@@ -96,4 +99,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: C.secondary,
   },
-});
+}),
+);

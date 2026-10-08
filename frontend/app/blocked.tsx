@@ -22,8 +22,10 @@ import {
   getBlockedUsers,
   unblockUser,
 } from '../utils/friends';
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -33,7 +35,7 @@ const WA = {
   primary: '#6750A4',
   danger: '#EA4335',
   header: '#FDF8FF',
-};
+});
 
 function resolvePhoto(photo?: string) {
   if (!photo) return '';
@@ -151,7 +153,7 @@ export default function BlockedUsersScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -160,7 +162,7 @@ export default function BlockedUsersScreen() {
           activeOpacity={0.7}
           hitSlop={10}
         >
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Blocked</Text>
       </View>
@@ -208,7 +210,8 @@ export default function BlockedUsersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -318,4 +321,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
   },
-});
+}),
+);

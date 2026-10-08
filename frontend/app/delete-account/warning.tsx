@@ -10,8 +10,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON } from "../../utils/platformIcons";
+import ListRowTouchable from "../../components/ListRowTouchable";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -20,7 +23,7 @@ const WA = {
   green: '#6750A4',
   danger: '#FF4B6E',
   header: '#FDF8FF',
-};
+});
 
 const WARNING_ITEMS = [
   { icon: 'heart-dislike' as const, label: 'All Matches', color: '#FF4B6E' },
@@ -36,11 +39,11 @@ export default function DeleteWarningScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Delete account</Text>
       </View>
@@ -73,7 +76,7 @@ export default function DeleteWarningScreen() {
 
         {/* Checkbox row — WhatsApp list style */}
         <View style={[styles.listGroup, { marginTop: 8 }]}>
-          <TouchableOpacity
+          <ListRowTouchable
             style={styles.listRow}
             activeOpacity={0.7}
             onPress={() => setAgreed(!agreed)}
@@ -82,7 +85,7 @@ export default function DeleteWarningScreen() {
               {agreed && <Ionicons name="checkmark" size={16} color="#fff" />}
             </View>
             <Text style={styles.rowLabel}>I understand this action is permanent</Text>
-          </TouchableOpacity>
+          </ListRowTouchable>
         </View>
       </ScrollView>
 
@@ -103,7 +106,8 @@ export default function DeleteWarningScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -214,4 +218,5 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   continueText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-});
+}),
+);

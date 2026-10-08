@@ -4,6 +4,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from './../contexts/AuthContext';
 import { consumePendingProfileId } from '../utils/pendingProfileLink';
 import { captureInstallReferrerOnce } from '../utils/pendingReferral';
+import { tc } from '../utils/theme';
 
 export default function Index() {
   const { user } = useAuth();
@@ -42,12 +43,12 @@ export default function Index() {
       <View
         style={{
           flex: 1,
-          backgroundColor: '#FDF8FF',
+          backgroundColor: tc('#FDF8FF', "bg"),
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        <ActivityIndicator size="large" color="#6750A4" />
+        <ActivityIndicator size="large" color={tc("#6750A4", "fg")} />
       </View>
     );
   }

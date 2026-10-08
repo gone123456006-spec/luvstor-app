@@ -17,6 +17,8 @@ import WhatsAppAvatar, {
   PhotoVerifiedBadge,
 } from "./WhatsAppAvatar";
 import { isValidPublicId } from "../utils/auth";
+import { NAV_ICON } from "../utils/platformIcons";
+import { tc, themedStyles } from "../utils/theme";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.92);
@@ -150,7 +152,7 @@ export default function ProfileInfoModal({
     },
     {
       icon: "locate" as const,
-      color: "#6750A4",
+      color: tc("#6750A4", "fg"),
       title: "Discovery distance",
       value: info.distanceLabel,
     },
@@ -183,7 +185,7 @@ export default function ProfileInfoModal({
               hitSlop={12}
               activeOpacity={0.7}
             >
-              <Ionicons name="chevron-back" size={24} color="#262626" />
+              <Ionicons name={NAV_ICON.back} size={24} color={tc("#262626", "fg")} />
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Profile info</Text>
             <View style={styles.backBtn} />
@@ -306,7 +308,8 @@ export default function ProfileInfoModal({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   overlay: {
     flex: 1,
     justifyContent: "flex-end",
@@ -317,7 +320,7 @@ const styles = StyleSheet.create({
   },
   sheet: {
     height: SHEET_HEIGHT,
-    backgroundColor: "#E4E6EB",
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: SHEET_RADIUS,
     borderTopRightRadius: SHEET_RADIUS,
     overflow: "hidden",
@@ -389,7 +392,7 @@ const styles = StyleSheet.create({
   section: {
     marginHorizontal: 16,
     borderRadius: 12,
-    backgroundColor: "#FAFAFA",
+    backgroundColor: "#FFFFFF",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#EFEFEF",
     overflow: "hidden",
@@ -435,7 +438,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: "#FAFAFA",
+    backgroundColor: "#FFFFFF",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#EFEFEF",
   },
@@ -485,4 +488,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
-});
+}),
+);

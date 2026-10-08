@@ -43,6 +43,7 @@ import {
     SubscriptionPlanId,
     SubscriptionStatus,
 } from "../utils/subscriptions";
+import { NAV_ICON } from "../utils/platformIcons";
 
 const PAGE = {
   bg: "#000000",
@@ -992,7 +993,7 @@ export default function SubscriptionScreen() {
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color={PAGE.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={PAGE.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Subscription</Text>
       </View>

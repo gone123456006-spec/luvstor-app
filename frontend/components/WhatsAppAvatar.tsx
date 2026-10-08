@@ -5,6 +5,7 @@ import { mediaIdentity } from "../utils/media";
 import { useLiveSubscriptionBadge } from "../utils/subscriptions";
 import { Ionicons } from "@expo/vector-icons";
 import MediaImage from "./MediaImage";
+import { tc, themedStyles } from "../utils/theme";
 
 const IG_BLUE = "#0095F6";
 /** Photo verification shield — green (separate from subscription blue tick) */
@@ -211,7 +212,7 @@ export function WhatsAppDefaultDp({ size }: { size: number }) {
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: WA_DEFAULT_BG,
+          backgroundColor: tc(WA_DEFAULT_BG, "bg"),
         },
       ]}
     >
@@ -322,7 +323,8 @@ function WhatsAppAvatarInner({
 const WhatsAppAvatar = React.memo(WhatsAppAvatarInner);
 export default WhatsAppAvatar;
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   initialsCircle: {
     alignItems: "center",
     justifyContent: "center",
@@ -334,4 +336,5 @@ const styles = StyleSheet.create({
     backgroundColor: "#25D366",
     borderColor: "#FFF",
   },
-});
+}),
+);

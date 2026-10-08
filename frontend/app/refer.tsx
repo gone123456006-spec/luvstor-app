@@ -25,8 +25,10 @@ import {
   ReferralDashboard,
 } from '../utils/referrals';
 import { shareOptsForPlatform } from '../utils/profileLinks';
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
-const C = {
+const C = themedPalette({
   purple: '#370372',
   purpleSoft: '#EFE8F8',
   rose: '#FF4B6E',
@@ -40,7 +42,7 @@ const C = {
   bg: '#F5F5F7',
   bgMid: '#EFE8F8',
   bgBot: '#FFE8EE',
-};
+});
 
 function GiftHeroArt({ size = 200 }: { size?: number }) {
   const accent = C.purple;
@@ -173,7 +175,7 @@ export default function ReferScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={C.bg} />
       <LinearGradient
         colors={[C.bg, C.bgMid, C.bg, C.bgBot]}
         locations={[0, 0.28, 0.62, 1]}
@@ -189,7 +191,7 @@ export default function ReferScreen() {
             hitSlop={12}
             style={styles.backBtn}
           >
-            <Ionicons name="arrow-back" size={24} color={C.ink} />
+            <Ionicons name={NAV_ICON.back} size={24} color={C.ink} />
           </TouchableOpacity>
           <View style={styles.topRight}>
             <TouchableOpacity
@@ -275,7 +277,7 @@ export default function ReferScreen() {
                 disabled={busy || !shareUrl}
                 activeOpacity={0.8}
               >
-                <Ionicons name="share-social-outline" size={18} color={C.link} />
+                <Ionicons name={NAV_ICON.share} size={18} color={C.link} />
                 <Text style={styles.linkBtnText}>SHARE LINK</Text>
               </TouchableOpacity>
             </View>
@@ -354,7 +356,8 @@ export default function ReferScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   safe: { flex: 1, backgroundColor: 'transparent' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -546,4 +549,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   termsOkText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-});
+}),
+);

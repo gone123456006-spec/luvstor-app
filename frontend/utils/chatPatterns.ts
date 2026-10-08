@@ -247,6 +247,317 @@ CHAT_PATTERNS.push(
   },
 );
 
+export type GradientId =
+  | "g-sunset"
+  | "g-aurora"
+  | "g-ocean"
+  | "g-peach"
+  | "g-lavender"
+  | "g-mint"
+  | "g-candy"
+  | "g-golden"
+  | "g-berry"
+  | "g-nightsky"
+  | "g-forest"
+  | "g-steel"
+  | "a-love"
+  | "a-galaxy"
+  | "a-bloom"
+  | "a-city"
+  | "a-melody"
+  | "a-summer"
+  | "t-cars"
+  | "t-flowers"
+  | "t-ocean"
+  | "t-space"
+  | "t-food"
+  | "t-love"
+  | "t-travel"
+  | "t-sports"
+  | "t-music"
+  | "t-pets"
+  | "t-nature"
+  | "t-party";
+
+/** A full-colour sticker on a "Themes" wallpaper */
+export type Sticker = { icon: PatternIcon; color: string };
+
+export type ChatGradient = {
+  id: GradientId;
+  label: string;
+  colors: [string, string, ...string[]];
+  /** Diagonal by default */
+  start?: { x: number; y: number };
+  end?: { x: number; y: number };
+  bubble: string;
+  /** Already dark, so it is not dimmed in dark mode */
+  dark?: boolean;
+  /** "Art": doodles drawn on top in a soft white ink */
+  pattern?: ChatPatternId;
+  ink?: string;
+  /** "Themes": large full-colour stickers with a drop shadow */
+  stickers?: Sticker[];
+};
+
+/** Gradient and art wallpapers */
+export const CHAT_GRADIENTS: ChatGradient[] = [
+  { id: "g-sunset", label: "Sunset", colors: ["#FFB199", "#FF7E5F", "#C9516E"], bubble: "#B23A48" },
+  { id: "g-aurora", label: "Aurora", colors: ["#A8EDEA", "#7FD8C9", "#6A82FB"], bubble: "#3949AB" },
+  { id: "g-ocean", label: "Ocean", colors: ["#D4F1FF", "#7CC6F0", "#2E86C1"], bubble: "#1565C0" },
+  { id: "g-peach", label: "Peach", colors: ["#FFF1E6", "#FFD3B6", "#FFAAA5"], bubble: "#D84315" },
+  { id: "g-lavender", label: "Lavender", colors: ["#F3E8FF", "#D9C2F0", "#B39DDB"], bubble: "#5B2A9E" },
+  { id: "g-mint", label: "Mint", colors: ["#E8FFF3", "#B8F1D5", "#7ED6B0"], bubble: "#00796B" },
+  { id: "g-candy", label: "Cotton candy", colors: ["#FFD1E8", "#E2D1FF", "#C2E9FF"], bubble: "#AD1457" },
+  { id: "g-golden", label: "Golden hour", colors: ["#FFF3B0", "#FFCF71", "#F4A259"], bubble: "#E65100" },
+  { id: "g-berry", label: "Berry", colors: ["#8E2DE2", "#C33764", "#4A00E0"], bubble: "#4A148C", dark: true },
+  { id: "g-nightsky", label: "Night sky", colors: ["#0F2027", "#203A43", "#2C5364"], bubble: "#0277BD", dark: true },
+  { id: "g-forest", label: "Deep forest", colors: ["#0B3D2E", "#135E46", "#1E8C5A"], bubble: "#2E7D32", dark: true },
+  { id: "g-steel", label: "Steel", colors: ["#232526", "#414345", "#5C6066"], bubble: "#546E7A", dark: true },
+  {
+    id: "a-love",
+    label: "Love sunset",
+    colors: ["#FF9A9E", "#F6416C", "#A8277A"],
+    bubble: "#8E1B4A",
+    pattern: "hearts",
+    ink: "rgba(255,255,255,0.22)",
+  },
+  {
+    id: "a-galaxy",
+    label: "Galaxy",
+    colors: ["#1A0B3B", "#3A1C71", "#5F2C82"],
+    bubble: "#7C4DFF",
+    dark: true,
+    pattern: "space",
+    ink: "rgba(255,255,255,0.20)",
+  },
+  {
+    id: "a-bloom",
+    label: "Bloom",
+    colors: ["#FFDDE1", "#FBB6CE", "#F78CA0"],
+    bubble: "#C2185B",
+    pattern: "flowers",
+    ink: "rgba(255,255,255,0.35)",
+  },
+  {
+    id: "a-city",
+    label: "Hero city",
+    colors: ["#C62828", "#6A1B9A", "#1565C0"],
+    bubble: "#0D47A1",
+    dark: true,
+    pattern: "webhero",
+    ink: "rgba(255,255,255,0.18)",
+  },
+  {
+    id: "a-melody",
+    label: "Melody",
+    colors: ["#4FACFE", "#6A5AE0", "#8E54E9"],
+    bubble: "#4527A0",
+    dark: true,
+    pattern: "music",
+    ink: "rgba(255,255,255,0.20)",
+  },
+  {
+    id: "a-summer",
+    label: "Summer",
+    colors: ["#FFF6B7", "#F6D365", "#FDA085"],
+    bubble: "#E65100",
+    pattern: "clouds",
+    ink: "rgba(255,255,255,0.40)",
+  },
+  {
+    id: "t-cars",
+    label: "Cars",
+    colors: ["#E3F2FD", "#BBDEFB", "#90CAF9"],
+    bubble: "#1565C0",
+    stickers: [
+      { icon: "mci:car-sports", color: "#E53935" },
+      { icon: "mci:car-convertible", color: "#FDD835" },
+      { icon: "mci:car-hatchback", color: "#1E88E5" },
+      { icon: "mci:traffic-light", color: "#43A047" },
+      { icon: "mci:steering", color: "#37474F" },
+      { icon: "mci:gas-station", color: "#FB8C00" },
+      { icon: "mci:flag-checkered", color: "#212121" },
+      { icon: "mci:car-side", color: "#8E24AA" },
+    ],
+  },
+  {
+    id: "t-flowers",
+    label: "Flowers",
+    colors: ["#FFF0F5", "#FFD6E7", "#FBC2D9"],
+    bubble: "#C2185B",
+    stickers: [
+      { icon: "mci:flower-tulip", color: "#EC407A" },
+      { icon: "mci:flower", color: "#AB47BC" },
+      { icon: "mci:flower-poppy", color: "#FF7043" },
+      { icon: "mci:butterfly", color: "#26A69A" },
+      { icon: "mci:bee", color: "#FBC02D" },
+      { icon: "mci:leaf", color: "#66BB6A" },
+      { icon: "mci:flower-tulip", color: "#7E57C2" },
+    ],
+  },
+  {
+    id: "t-ocean",
+    label: "Ocean",
+    colors: ["#E0F7FA", "#80DEEA", "#4DD0E1"],
+    bubble: "#00838F",
+    stickers: [
+      { icon: "mci:fish", color: "#FF7043" },
+      { icon: "mci:jellyfish", color: "#BA68C8" },
+      { icon: "mci:turtle", color: "#43A047" },
+      { icon: "mci:dolphin", color: "#1E88E5" },
+      { icon: "mci:sail-boat", color: "#F4511E" },
+      { icon: "mci:waves", color: "#0288D1" },
+      { icon: "mci:anchor", color: "#37474F" },
+      { icon: "mci:shark-fin", color: "#546E7A" },
+    ],
+  },
+  {
+    id: "t-space",
+    label: "Space",
+    colors: ["#0B0F2B", "#1A1F4B", "#2E1A47"],
+    bubble: "#7C4DFF",
+    dark: true,
+    stickers: [
+      { icon: "mci:rocket-launch", color: "#FF7043" },
+      { icon: "mci:orbit", color: "#FFCA28" },
+      { icon: "mci:ufo", color: "#4DD0E1" },
+      { icon: "mci:star-shooting", color: "#FFF176" },
+      { icon: "mci:moon-waning-crescent", color: "#FFE082" },
+      { icon: "mci:star", color: "#FFFFFF" },
+    ],
+  },
+  {
+    id: "t-food",
+    label: "Food",
+    colors: ["#FFF8E1", "#FFECB3", "#FFE0B2"],
+    bubble: "#E65100",
+    stickers: [
+      { icon: "mci:pizza", color: "#F4511E" },
+      { icon: "mci:hamburger", color: "#8D6E63" },
+      { icon: "mci:ice-cream", color: "#F06292" },
+      { icon: "mci:food-croissant", color: "#FFA726" },
+      { icon: "mci:cupcake", color: "#BA68C8" },
+      { icon: "mci:coffee", color: "#6D4C41" },
+      { icon: "mci:fruit-watermelon", color: "#E53935" },
+      { icon: "mci:fruit-cherries", color: "#C62828" },
+    ],
+  },
+  {
+    id: "t-love",
+    label: "Love",
+    colors: ["#FFE4EC", "#FFC1D6", "#FF9BBF"],
+    bubble: "#AD1457",
+    stickers: [
+      { icon: "mci:heart", color: "#E53935" },
+      { icon: "mci:heart-multiple", color: "#EC407A" },
+      { icon: "mci:gift", color: "#8E24AA" },
+      { icon: "mci:ring", color: "#FFB300" },
+      { icon: "mci:cards-heart", color: "#D81B60" },
+      { icon: "mci:balloon", color: "#F06292" },
+      { icon: "mci:candle", color: "#FF8F00" },
+    ],
+  },
+  {
+    id: "t-travel",
+    label: "Travel",
+    colors: ["#E0F7FA", "#FFF3E0", "#FFE0B2"],
+    bubble: "#00897B",
+    stickers: [
+      { icon: "mci:airplane", color: "#1E88E5" },
+      { icon: "mci:beach", color: "#FFB300" },
+      { icon: "mci:palm-tree", color: "#43A047" },
+      { icon: "mci:camera", color: "#37474F" },
+      { icon: "mci:map-marker", color: "#E53935" },
+      { icon: "mci:bag-suitcase", color: "#8D6E63" },
+      { icon: "mci:island", color: "#26A69A" },
+      { icon: "mci:lighthouse", color: "#F4511E" },
+    ],
+  },
+  {
+    id: "t-sports",
+    label: "Sports",
+    colors: ["#E8F5E9", "#C8E6C9", "#A5D6A7"],
+    bubble: "#2E7D32",
+    stickers: [
+      { icon: "mci:soccer", color: "#212121" },
+      { icon: "mci:basketball", color: "#FB8C00" },
+      { icon: "mci:tennis", color: "#C0CA33" },
+      { icon: "mci:trophy", color: "#FFB300" },
+      { icon: "mci:bike", color: "#1E88E5" },
+      { icon: "mci:flag-checkered", color: "#424242" },
+    ],
+  },
+  {
+    id: "t-music",
+    label: "Music",
+    colors: ["#EDE7F6", "#D1C4E9", "#B39DDB"],
+    bubble: "#4527A0",
+    stickers: [
+      { icon: "mci:guitar-acoustic", color: "#8D6E63" },
+      { icon: "mci:headphones", color: "#E53935" },
+      { icon: "mci:piano", color: "#212121" },
+      { icon: "mci:microphone-variant", color: "#1E88E5" },
+      { icon: "mci:music", color: "#8E24AA" },
+      { icon: "mci:star", color: "#FFB300" },
+    ],
+  },
+  {
+    id: "t-pets",
+    label: "Pets",
+    colors: ["#FFF3E0", "#FFE0B2", "#FFCC80"],
+    bubble: "#6D4C41",
+    stickers: [
+      { icon: "mci:cat", color: "#FF8A65" },
+      { icon: "mci:dog", color: "#8D6E63" },
+      { icon: "mci:paw", color: "#5D4037" },
+      { icon: "mci:bone", color: "#BDBDBD" },
+      { icon: "mci:fish", color: "#29B6F6" },
+      { icon: "mci:heart", color: "#EF5350" },
+    ],
+  },
+  {
+    id: "t-nature",
+    label: "Nature",
+    colors: ["#F1F8E9", "#DCEDC8", "#C5E1A5"],
+    bubble: "#33691E",
+    stickers: [
+      { icon: "mci:pine-tree", color: "#2E7D32" },
+      { icon: "mci:tree", color: "#43A047" },
+      { icon: "mci:mushroom", color: "#E53935" },
+      { icon: "mci:weather-sunny", color: "#FFB300" },
+      { icon: "mci:cloud", color: "#90CAF9" },
+      { icon: "mci:butterfly", color: "#AB47BC" },
+      { icon: "mci:leaf", color: "#7CB342" },
+    ],
+  },
+  {
+    id: "t-party",
+    label: "Party",
+    colors: ["#F3E5F5", "#E1BEE7", "#FFCDD2"],
+    bubble: "#8E24AA",
+    stickers: [
+      { icon: "mci:party-popper", color: "#FF7043" },
+      { icon: "mci:glass-cocktail", color: "#26C6DA" },
+      { icon: "mci:cake", color: "#EC407A" },
+      { icon: "mci:firework", color: "#FFCA28" },
+      { icon: "mci:balloon", color: "#7E57C2" },
+      { icon: "mci:crown", color: "#FFB300" },
+      { icon: "mci:emoticon-cool", color: "#FDD835" },
+      { icon: "mci:diamond-stone", color: "#29B6F6" },
+    ],
+  },
+];
+
+export function findGradient(id: string): ChatGradient | undefined {
+  return CHAT_GRADIENTS.find((g) => g.id === id);
+}
+
+/** Gradient colours for the current theme (light gradients are dimmed in dark mode) */
+export function gradientColors(g: ChatGradient, dark: boolean): [string, string, ...string[]] {
+  if (!dark || g.dark) return g.colors;
+  return g.colors.map((c) => mixHex(c, "#0B0B10", 0.62)) as [string, string, ...string[]];
+}
+
 export function findPattern(id: string): ChatPattern | undefined {
   return CHAT_PATTERNS.find((p) => p.id === id);
 }

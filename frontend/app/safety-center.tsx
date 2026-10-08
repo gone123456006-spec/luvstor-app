@@ -13,8 +13,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PRODUCTION_API_URL } from '../utils/api';
+import { NAV_ICON, SHOW_ROW_CHEVRON } from "../utils/platformIcons";
+import ListRowTouchable from "../components/ListRowTouchable";
+import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -24,7 +27,7 @@ const WA = {
   primaryContainer: '#EADDFF',
   accent: '#FF4B6E',
   header: '#F5F5F7',
-};
+});
 
 const SAFETY_RULES = [
   {
@@ -80,11 +83,11 @@ export default function SafetyCenterScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Safety Center</Text>
       </View>
@@ -115,7 +118,7 @@ export default function SafetyCenterScreen() {
           <>
             <Text style={styles.sectionHint}>Emergency</Text>
             <View style={styles.listGroup}>
-              <TouchableOpacity
+              <ListRowTouchable
                 style={styles.listRow}
                 activeOpacity={0.7}
                 onPress={() => {
@@ -140,8 +143,10 @@ export default function SafetyCenterScreen() {
                   <Text style={[styles.rowLabel, { color: '#EA4335' }]}>SOS Helpline</Text>
                   <Text style={styles.rowSub}>Need immediate help?</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-              </TouchableOpacity>
+                {SHOW_ROW_CHEVRON ? (
+                  <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+                ) : null}
+              </ListRowTouchable>
             </View>
 
             <Text style={styles.sectionHint}>Dating safety rules</Text>
@@ -162,7 +167,7 @@ export default function SafetyCenterScreen() {
               ))}
             </View>
             <View style={styles.listGroup}>
-              <TouchableOpacity
+              <ListRowTouchable
                 style={styles.listRow}
                 activeOpacity={0.7}
                 onPress={() => Linking.openURL(`${PRODUCTION_API_URL}/child-safety`)}
@@ -175,7 +180,7 @@ export default function SafetyCenterScreen() {
                   <Text style={styles.rowSub}>Luvstor’s standards and reporting process</Text>
                 </View>
                 <Ionicons name="open-outline" size={18} color={WA.secondary} />
-              </TouchableOpacity>
+              </ListRowTouchable>
             </View>
           </>
         ) : (
@@ -188,7 +193,7 @@ export default function SafetyCenterScreen() {
                 const on = checked.includes(item.key);
                 return (
                   <View key={item.key}>
-                    <TouchableOpacity
+                    <ListRowTouchable
                       style={styles.listRow}
                       activeOpacity={0.7}
                       onPress={() => toggle(item.key)}
@@ -216,7 +221,7 @@ export default function SafetyCenterScreen() {
                       <View style={[styles.checkbox, on && styles.checkboxOn]}>
                         {on && <Ionicons name="checkmark" size={14} color="#fff" />}
                       </View>
-                    </TouchableOpacity>
+                    </ListRowTouchable>
                     {i < CHECKLIST.length - 1 && <View style={styles.divider} />}
                   </View>
                 );
@@ -229,7 +234,8 @@ export default function SafetyCenterScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -322,4 +328,5 @@ const styles = StyleSheet.create({
     backgroundColor: WA.primary,
     borderColor: WA.primary,
   },
-});
+}),
+);

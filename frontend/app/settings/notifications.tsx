@@ -23,8 +23,10 @@ import {
   updateNotificationPreferences,
 } from '../../utils/notifications';
 import { isExpoGo } from '../../utils/push';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -33,7 +35,7 @@ const WA = {
   border: '#E8E8ED',
   primary: '#370372',
   header: '#F5F5F7',
-};
+});
 
 const DEFAULT_PREFS: NotificationPreferences = {
   chat: true,
@@ -94,7 +96,7 @@ const ROWS: ToggleRow[] = [
     label: 'Updates',
     sub: 'App announcements and reminders',
     icon: 'information-circle',
-    color: '#370372',
+    color: tc('#370372', "fg"),
   },
   {
     key: 'promotions',
@@ -178,11 +180,11 @@ export default function NotificationSettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
       </View>
 
@@ -235,7 +237,7 @@ export default function NotificationSettingsScreen() {
                     disabled={savingKey === row.key}
                     trackColor={{ false: '#D0C4DC', true: '#B8A1E3' }}
                     thumbColor={prefs[row.key] ? WA.primary : '#f4f3f4'}
-                    {...(Platform.OS === 'ios' ? { ios_backgroundColor: '#D0C4DC' } : {})}
+                    {...(Platform.OS === 'ios' ? { ios_backgroundColor: tc('#D0C4DC', "bg") } : {})}
                   />
                 </View>
               </View>
@@ -252,7 +254,8 @@ export default function NotificationSettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -317,4 +320,5 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     lineHeight: 18,
   },
-});
+}),
+);

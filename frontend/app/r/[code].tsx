@@ -8,6 +8,7 @@ import {
 } from '../../utils/pendingReferral';
 import { resolvePostLoginRoute } from '../../utils/auth';
 import { useAuth } from '../../contexts/AuthContext';
+import { themedStyles } from '../../utils/theme';
 
 /**
  * Deep link: luvstor://r/CODE or https://…/r/CODE
@@ -51,7 +52,8 @@ export default function ReferralDeepLinkScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   wrap: {
     flex: 1,
     alignItems: 'center',
@@ -60,4 +62,5 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   text: { color: '#6B6B6B', fontSize: 15 },
-});
+}),
+);

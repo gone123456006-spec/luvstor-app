@@ -15,8 +15,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { apiRequest } from '../../utils/api';
 import { getAuthToken } from '../../utils/auth';
 import { useAuth } from '../../contexts/AuthContext';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -25,7 +27,7 @@ const WA = {
   teal: '#6750A4',
   danger: '#FF4B6E',
   header: '#FDF8FF',
-};
+});
 
 const TIMELINE = [
   {
@@ -120,7 +122,7 @@ export default function FinalConfirmationScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -129,7 +131,7 @@ export default function FinalConfirmationScreen() {
           activeOpacity={0.7}
           disabled={isDeleting}
         >
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Final step</Text>
       </View>
@@ -185,7 +187,8 @@ export default function FinalConfirmationScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -269,4 +272,5 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.6 },
   deleteText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-});
+}),
+);

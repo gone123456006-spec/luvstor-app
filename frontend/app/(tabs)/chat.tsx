@@ -85,9 +85,10 @@ import {
     warmThreadsFromDisk,
 } from "../../utils/threadCache";
 import { formatChatListTime } from "../../utils/timeFormat";
+import { tc, themedPalette, themedStyles } from "../../utils/theme";
 
 /** Discover-matched theme — deep purple + black */
-const C = {
+const C = themedPalette({
   purple: "#370372",
   purpleSoft: "#EFE8F8",
   purpleMid: "#EADDFF",
@@ -99,7 +100,7 @@ const C = {
   secondary: "#49454F",
   pill: "#E4E6EB",
   pillActive: "#111111",
-};
+});
 
 /**
  * Convert relative photo URL to absolute URL.
@@ -2139,7 +2140,7 @@ export default function ChatScreen() {
             <Ionicons
               name="search"
               size={18}
-              color="#65676B"
+              color={tc("#65676B", "fg")}
               style={styles.searchIcon}
             />
             <Text style={styles.searchPlaceholder}>Search</Text>
@@ -2333,7 +2334,8 @@ export default function ChatScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
   container: { flex: 1, backgroundColor: C.bg },
   header: {
@@ -2606,4 +2608,5 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: "700",
   },
-});
+}),
+);

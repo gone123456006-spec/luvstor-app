@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, View, ViewStyle } from 'react-native';
+import { tc, themedStyles } from '../utils/theme';
 
 const BONE = 'rgba(11, 20, 26, 0.08)';
 
@@ -21,7 +22,7 @@ function Bone({
           width,
           height,
           borderRadius: radius,
-          backgroundColor: BONE,
+          backgroundColor: tc(BONE, "bg"),
         },
         style,
       ]}
@@ -88,7 +89,8 @@ export function ChatThreadSkeleton() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   listWrap: {
     flex: 1,
     paddingTop: 8,
@@ -143,4 +145,5 @@ const styles = StyleSheet.create({
   bubbleRight: {
     alignItems: 'flex-end',
   },
-});
+}),
+);

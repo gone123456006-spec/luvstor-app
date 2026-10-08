@@ -14,8 +14,10 @@ import { ListRowSkeleton } from '../components/ScreenSkeleton';
 import WhatsAppAvatar, { getDisplayName } from '../components/WhatsAppAvatar';
 import { apiRequest } from '../utils/api';
 import { getAuthToken } from '../utils/auth';
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -24,7 +26,7 @@ const WA = {
   primary: '#6750A4',
   danger: '#FF4B6E',
   green: '#25D366',
-};
+});
 
 type HistoryItem = {
   callId: string;
@@ -77,14 +79,14 @@ export default function CallHistoryScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.bg} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.bg} />
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Calls</Text>
       </View>
@@ -157,7 +159,8 @@ export default function CallHistoryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -193,4 +196,5 @@ const styles = StyleSheet.create({
   name: { fontSize: 17, color: WA.text, fontWeight: '500' },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   meta: { fontSize: 13, color: WA.secondary },
-});
+}),
+);

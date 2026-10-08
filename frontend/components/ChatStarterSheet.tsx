@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../utils/api';
+import { SHOW_ROW_CHEVRON } from "../utils/platformIcons";
+import { tc, themedStyles } from "../utils/theme";
 
 const PURPLE = '#370372';
 
@@ -104,7 +106,7 @@ export function ChatStarterSheet({
 
           {loading ? (
             <View style={styles.loaderContainer}>
-              <ActivityIndicator size="large" color={PURPLE} />
+              <ActivityIndicator size="large" color={tc(PURPLE, "fg")} />
             </View>
           ) : (
             <ScrollView style={styles.scrollView}>
@@ -119,14 +121,16 @@ export function ChatStarterSheet({
                     <Ionicons
                       name={getIconForType(starter.type) as any}
                       size={20}
-                      color={PURPLE}
+                      color={tc(PURPLE, "fg")}
                     />
                   </View>
                   <View style={styles.starterContent}>
                     <Text style={styles.starterText}>{starter.text}</Text>
                     <Text style={styles.starterContext}>{starter.context}</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color="#ccc" />
+                  {SHOW_ROW_CHEVRON ? (
+                    <Ionicons name="chevron-forward" size={20} color="#ccc" />
+                  ) : null}
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -145,14 +149,15 @@ export function ChatStarterSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: '#E4E6EB',
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingBottom: 34,
@@ -189,6 +194,7 @@ const styles = StyleSheet.create({
     maxHeight: 400,
   },
   starterCard: {
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -232,4 +238,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#666',
   },
-});
+}),
+);

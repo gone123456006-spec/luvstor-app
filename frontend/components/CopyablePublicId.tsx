@@ -17,6 +17,8 @@ import {
   buildProfileShareMessageAsync,
   fetchBrandedProfileShareUrl,
 } from "../utils/profileLinks";
+import { NAV_ICON } from "../utils/platformIcons";
+import { tc, themedStyles } from "../utils/theme";
 
 type Props = {
   publicId?: string | null;
@@ -126,7 +128,7 @@ export default function CopyablePublicId({
         <Ionicons
           name={copied ? "checkmark-circle" : "copy-outline"}
           size={14}
-          color={copied ? "#25D366" : "#8E8E8E"}
+          color={copied ? "#25D366" : tc("#8E8E8E", "fg")}
           style={styles.icon}
         />
         {copied ? <Text style={styles.copied}>Copied</Text> : null}
@@ -141,7 +143,7 @@ export default function CopyablePublicId({
           accessibilityRole="button"
           accessibilityLabel="Share profile"
         >
-          <Ionicons name="share-social-outline" size={15} color="#6750A4" />
+          <Ionicons name={NAV_ICON.share} size={15} color={tc("#6750A4", "fg")} />
           <Text style={styles.shareText}>Share</Text>
         </TouchableOpacity>
       ) : null}
@@ -149,7 +151,8 @@ export default function CopyablePublicId({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   wrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -191,4 +194,5 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#6750A4",
   },
-});
+}),
+);

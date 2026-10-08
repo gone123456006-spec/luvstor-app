@@ -16,6 +16,8 @@ import { getDisplayName } from "../../components/WhatsAppAvatar";
 import { getCachedProfile, preloadProfile } from "../../utils/profileCache";
 import { NAV_ICON, SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
 import ListRowTouchable from "../../components/ListRowTouchable";
+import ThemePickerDialog, { THEME_LABELS } from "../../components/ThemePickerDialog";
+import { useAccessibility } from "../../contexts/AccessibilityContext";
 import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
 const WA = themedPalette({
@@ -73,6 +75,8 @@ export default function SettingsScreen() {
   const router = useRouter();
   const [publicId, setPublicId] = useState("");
   const [name, setName] = useState("");
+  const [themeOpen, setThemeOpen] = useState(false);
+  const { prefs } = useAccessibility();
 
   useFocusEffect(
     useCallback(() => {
@@ -128,7 +132,7 @@ export default function SettingsScreen() {
             icon="person"
             color={WA.primary}
             label="Account"
-            sub="Login details, logout, delete account"
+            sub="Login details, privacy, logout"
             onPress={() => router.push("/settings/account" as any)}
           />
         </View>
@@ -162,8 +166,8 @@ export default function SettingsScreen() {
             icon="moon"
             color="#5856D6"
             label="Theme"
-            sub="Light, dark or follow your phone"
-            onPress={() => router.push("/settings/theme" as any)}
+            sub={THEME_LABELS[prefs.themeMode]}
+            onPress={() => setThemeOpen(true)}
             showDivider
           />
           <SettingsRow
@@ -203,6 +207,12 @@ export default function SettingsScreen() {
           />
         </View>
       </ScrollView>
+
+      <ThemePickerDialog
+        visible={themeOpen}
+        onClose={() => setThemeOpen(false)}
+        returnTo="/settings"
+      />
     </SafeAreaView>
   );
 }

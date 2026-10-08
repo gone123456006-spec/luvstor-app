@@ -600,15 +600,15 @@ export default function PhotoVerifyScreen() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          <View
-            style={[styles.badge, isApproved && { backgroundColor: tc('#E7F8EF', 'bg') }]}
-          >
-            <Ionicons
-              name={isApproved ? 'shield-checkmark' : 'shield-outline'}
-              size={40}
-              color={isApproved ? '#22C55E' : themeState.dark ? '#C4B5FD' : BRAND}
-            />
-          </View>
+          {!isApproved ? (
+            <View style={styles.badge}>
+              <Ionicons
+                name="shield-outline"
+                size={40}
+                color={themeState.dark ? '#C4B5FD' : BRAND}
+              />
+            </View>
+          ) : null}
           <Text style={[styles.heading, isApproved && fixed.verifiedHeading]}>{heading}</Text>
           <Text style={styles.copy}>
             {isApproved

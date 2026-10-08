@@ -30,11 +30,13 @@ import ProfilePhotoViewer from "./ProfilePhotoViewer";
 import WhatsAppAvatar, {
   getDisplayName,
 } from "./WhatsAppAvatar";
+import { NAV_ICON } from "../utils/platformIcons";
+import { tc, themedPalette, themedStyles } from "../utils/theme";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 /** Same theme as Profile tab */
-const WA = {
+const WA = themedPalette({
   bg: "#FDF8FF",
   white: "#FFFFFF",
   text: "#1C1B1F",
@@ -43,7 +45,7 @@ const WA = {
   teal: "#6750A4",
   primaryContainer: "#EADDFF",
   danger: "#B3261E",
-};
+});
 
 const REPORT_REASONS: { key: ReportReason; label: string }[] = [
   { key: "spam", label: "Spam" },
@@ -499,7 +501,7 @@ function UserProfileModal({
               activeOpacity={0.8}
               hitSlop={8}
             >
-              <Ionicons name="arrow-back" size={22} color="#fff" />
+              <Ionicons name={NAV_ICON.back} size={22} color="#fff" />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -510,7 +512,7 @@ function UserProfileModal({
               accessibilityRole="button"
               accessibilityLabel="More options"
             >
-              <Ionicons name="ellipsis-vertical" size={20} color="#fff" />
+              <Ionicons name={NAV_ICON.more} size={20} color="#fff" />
             </TouchableOpacity>
           </View>
 
@@ -677,7 +679,7 @@ function UserProfileModal({
                   activeOpacity={0.7}
                   hitSlop={8}
                 >
-                  <Ionicons name="arrow-back" size={24} color="#262626" />
+                  <Ionicons name={NAV_ICON.back} size={24} color={tc("#262626", "fg")} />
                 </TouchableOpacity>
 
                 <Text style={styles.optionsTitle} numberOfLines={1}>
@@ -719,7 +721,7 @@ function UserProfileModal({
                     activeOpacity={0.65}
                   >
                     <Text style={styles.optionsRowText}>Share</Text>
-                    <Ionicons name="share-outline" size={22} color="#262626" />
+                    <Ionicons name={NAV_ICON.share} size={22} color={tc("#262626", "fg")} />
                   </TouchableOpacity>
                   <View style={styles.optionsDivider} />
                   <TouchableOpacity
@@ -1008,7 +1010,7 @@ function UserProfileModal({
                   activeOpacity={0.7}
                   hitSlop={8}
                 >
-                  <Ionicons name="arrow-back" size={24} color="#262626" />
+                  <Ionicons name={NAV_ICON.back} size={24} color={tc("#262626", "fg")} />
                 </TouchableOpacity>
 
                 <Text style={styles.optionsTitle} numberOfLines={1}>
@@ -1140,7 +1142,8 @@ const PHOTO_GAP = 8;
 const PHOTO_PAD = 16;
 const PHOTO_SIZE = (SCREEN_WIDTH - PHOTO_PAD * 2 - PHOTO_GAP * 3) / 4;
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: WA.bg,
@@ -1386,7 +1389,7 @@ const styles = StyleSheet.create({
   },
   waSheet: {
     width: "100%",
-    backgroundColor: WA.bg,
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 14,
@@ -1437,11 +1440,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   waActionCard: {
-    backgroundColor: WA.white,
-    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
     overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WA.border,
   },
   waActionRow: {
     flexDirection: "row",
@@ -1530,8 +1531,8 @@ const styles = StyleSheet.create({
     zIndex: 41,
   },
   alertCard: {
-    backgroundColor: WA.white,
-    borderRadius: 14,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 26,
     overflow: "hidden",
   },
   alertStick: {
@@ -1569,6 +1570,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
+    backgroundColor: "#FFFFFF",
   },
   alertBtnDefault: {
     fontSize: 17,
@@ -1577,8 +1579,8 @@ const styles = StyleSheet.create({
   },
   alertCancel: {
     minHeight: 56,
-    borderRadius: 14,
-    backgroundColor: WA.white,
+    borderRadius: 28,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1594,8 +1596,8 @@ const styles = StyleSheet.create({
     zIndex: 41,
   },
   reasonCard: {
-    backgroundColor: WA.white,
-    borderRadius: 14,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 26,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: WA.border,
@@ -1635,6 +1637,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
+    backgroundColor: "#FFFFFF",
   },
   reasonBtnText: {
     fontSize: 17,
@@ -1644,12 +1647,10 @@ const styles = StyleSheet.create({
   },
   reasonCancel: {
     minHeight: 56,
-    borderRadius: 14,
-    backgroundColor: WA.white,
+    borderRadius: 28,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WA.border,
   },
   reasonWhyText: {
     fontSize: 15,
@@ -1664,6 +1665,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
+    backgroundColor: "#FFFFFF",
   },
   reasonRowDivider: {
     height: StyleSheet.hairlineWidth,
@@ -1677,12 +1679,10 @@ const styles = StyleSheet.create({
   },
   reasonCancelCard: {
     minHeight: 54,
-    borderRadius: 18,
-    backgroundColor: WA.white,
+    borderRadius: 28,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: WA.border,
   },
   reasonCancelText: {
     fontSize: 16,
@@ -1738,8 +1738,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sheetCard: {
-    backgroundColor: "#E4E6EB",
-    borderRadius: 16,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 22,
     overflow: "hidden",
   },
   sheetRow: {
@@ -1748,6 +1748,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 16,
     paddingHorizontal: 18,
+    backgroundColor: "#FFFFFF",
   },
   sheetRowText: {
     flex: 1,
@@ -1764,8 +1765,8 @@ const styles = StyleSheet.create({
     marginLeft: 18,
   },
   sheetCancel: {
-    backgroundColor: "#E4E6EB",
-    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
     paddingVertical: 16,
     alignItems: "center",
   },
@@ -1823,4 +1824,5 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 14,
   },
-});
+}),
+);

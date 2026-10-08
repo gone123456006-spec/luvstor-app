@@ -14,9 +14,12 @@ import {
   BUBBLE_COLORS,
   type BubbleColorId,
   type ChatPatternId,
+  findGradient,
   findPattern,
+  type GradientId,
   mixHex,
 } from "../utils/chatPatterns";
+import { findPaper, findScene, type PaperId, type SceneId } from "../utils/chatScenes";
 import { themeState } from "../utils/theme";
 
 export type ChatTextSize = "small" | "default" | "large" | "xlarge";
@@ -44,6 +47,9 @@ export type ChatWallpaperId =
   | "navy"
   | "charcoal"
   | ChatPatternId
+  | GradientId
+  | PaperId
+  | SceneId
   | "custom"
   | "photo";
 
@@ -82,7 +88,10 @@ export const CHAT_TEXT_SIZES: Record<
 };
 
 export const CHAT_WALLPAPERS: {
-  id: Exclude<ChatWallpaperId, "photo" | "custom" | ChatPatternId>;
+  id: Exclude<
+    ChatWallpaperId,
+    "photo" | "custom" | ChatPatternId | GradientId | PaperId | SceneId
+  >;
   label: string;
   color: string;
   /** Used while the app is in dark mode */
@@ -161,6 +170,9 @@ type Ctx = {
   /** Screen to reopen after the remount */
   returnTo: string | null;
   remountApp: (returnTo?: string | null) => void;
+  /** True while the navigator is rebuilding after a remount; transitions stay off */
+  restoring: boolean;
+  finishRestore: () => void;
 };
 
 const AccessibilityContext = createContext<Ctx | null>(null);
@@ -185,6 +197,8 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
   const [systemReduceMotion, setSystemReduceMotion] = useState(false);
   const [uiKey, setUiKey] = useState(0);
   const [returnTo, setReturnTo] = useState<string | null>(null);
+  const [restoredKey, setRestoredKey] = useState(0);
+  const restoring = !!returnTo && restoredKey !== uiKey;
   const [isDark, setIsDark] = useState(() => resolveDark(DEFAULTS.themeMode));
 
   useEffect(() => {
@@ -277,6 +291,8 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
     setUiKey((k) => k + 1);
   }, []);
 
+  const finishRestore = useCallback(() => setRestoredKey(uiKey), [uiKey]);
+
   const value = useMemo<Ctx>(
     () => ({
       prefs,
@@ -288,8 +304,21 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
       uiKey,
       returnTo,
       remountApp,
+      restoring,
+      finishRestore,
     }),
-    [prefs, systemReduceMotion, setPref, reset, isDark, uiKey, returnTo, remountApp],
+    [
+      prefs,
+      systemReduceMotion,
+      setPref,
+      reset,
+      isDark,
+      uiKey,
+      returnTo,
+      remountApp,
+      restoring,
+      finishRestore,
+    ],
   );
 
   return (
@@ -313,6 +342,15 @@ export function patternIsDark(prefs: A11yPrefs): boolean {
 export function wallpaperColor(prefs: A11yPrefs): string {
   const pattern = findPattern(prefs.chatWallpaper);
   if (pattern) return patternIsDark(prefs) ? pattern.darkBg : pattern.bg;
+  const paper = findPaper(prefs.chatWallpaper);
+  if (paper) return themeState.dark ? paper.darkBg : paper.bg;
+  const scene = findScene(prefs.chatWallpaper);
+  if (scene) return scene.color;
+  const gradient = findGradient(prefs.chatWallpaper);
+  if (gradient) {
+    const c = gradient.colors[gradient.colors.length - 1];
+    return themeState.dark && !gradient.dark ? mixHex(c, "#0B0B10", 0.62) : c;
+  }
   if (prefs.chatWallpaper === "custom") {
     return themeState.dark ? mixHex(prefs.wallpaperCustom, "#0F0F13", 0.82) : prefs.wallpaperCustom;
   }
@@ -325,6 +363,12 @@ export function wallpaperColor(prefs: A11yPrefs): string {
 export function autoBubbleColor(prefs: A11yPrefs): string {
   const pattern = findPattern(prefs.chatWallpaper);
   if (pattern) return patternIsDark(prefs) ? pattern.darkBubble : pattern.bubble;
+  const gradient = findGradient(prefs.chatWallpaper);
+  if (gradient) return gradient.bubble;
+  const paper = findPaper(prefs.chatWallpaper);
+  if (paper) return paper.bubble;
+  const scene = findScene(prefs.chatWallpaper);
+  if (scene) return scene.bubble;
   if (prefs.chatWallpaper === "custom") return mixHex(prefs.wallpaperCustom, "#000000", 0.55);
   const w = CHAT_WALLPAPERS.find((x) => x.id === prefs.chatWallpaper);
   if (!w) return themeState.dark ? "#2B2738" : "#111111";

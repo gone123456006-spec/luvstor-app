@@ -26,6 +26,8 @@ import {
 } from "../utils/userFacingError";
 import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { useTabBarOverlayInset } from "../hooks/useTabBarOverlayInset";
+import { NAV_ICON } from "../utils/platformIcons";
+import { themedPalette, themedStyles } from "../utils/theme";
 
 export type AlertButtonStyle = "default" | "cancel" | "destructive" | "primary";
 
@@ -57,17 +59,17 @@ type AppAlertContextValue = {
 const AppAlertContext = createContext<AppAlertContextValue | null>(null);
 
 /** Same look as the chat Block / Report sheets */
-const C = {
+const C = themedPalette({
   accent: "#6750A4",
   danger: "#B3261E",
   title: "#1C1B1F",
   message: "#1C1B1F",
   divider: "#E7E0EC",
-  sheet: "#E4E6EB",
+  sheet: "#F5F6F8",
   card: "#FFFFFF",
   closeBg: "#EADDFF",
   backdrop: "rgba(0, 0, 0, 0.5)",
-};
+});
 
 const SHEET_HIDDEN_Y = 420;
 
@@ -111,7 +113,7 @@ function defaultIcon(btn: AlertButton): keyof typeof Ionicons.glyphMap {
   if (/setting/.test(t)) return "settings-outline";
   if (/retry|try again|refresh/.test(t)) return "refresh-outline";
   if (/buy|purchase|pay|upgrade|subscribe/.test(t)) return "diamond-outline";
-  if (/share/.test(t)) return "share-outline";
+  if (/share/.test(t)) return NAV_ICON.share;
   if (/call/.test(t)) return "call-outline";
   if (/camera/.test(t)) return "camera-outline";
   if (/gallery|photo|library/.test(t)) return "images-outline";
@@ -349,7 +351,8 @@ export function useAppAlert() {
   return ctx;
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   root: {
     flex: 1,
   },
@@ -420,11 +423,9 @@ const styles = StyleSheet.create({
     color: C.message,
   },
   actionCard: {
-    backgroundColor: C.card,
-    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
     overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.divider,
   },
   actionRow: {
     flexDirection: "row",
@@ -444,4 +445,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
   },
-});
+}),
+);
