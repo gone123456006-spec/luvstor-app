@@ -50,6 +50,7 @@ import {
 } from "../../utils/tokenCache";
 import { apiRequest } from "../../utils/api";
 import { resolveMediaUrl } from "../../utils/media";
+import { D, tc, themeState, themedStyles } from "../../utils/theme";
 
 // ─────────────────────────────────────────────
 // Wheel config
@@ -627,6 +628,13 @@ function SpinModal({
   );
 }
 
+/** The premium banner is always purple, so its colours don't follow the theme */
+const adFixed = StyleSheet.create({
+  cta: { backgroundColor: "#FFFFFF" },
+  ctaText: { color: "#24104F" },
+  tick: { backgroundColor: "#FFD166" },
+});
+
 function PremiumAdBanner({ onPress }: { onPress: () => void }) {
   return (
     <TouchableOpacity
@@ -648,7 +656,7 @@ function PremiumAdBanner({ onPress }: { onPress: () => void }) {
                   <VerifiedTick avatarSize={0} />
                 </View>
               ) : (
-                <View style={styles.adTick}>
+                <View style={[styles.adTick, adFixed.tick]}>
                   <Ionicons name="checkmark-sharp" size={11} color="#24104F" />
                 </View>
               )}
@@ -656,8 +664,8 @@ function PremiumAdBanner({ onPress }: { onPress: () => void }) {
             </View>
           ))}
         </View>
-        <View style={styles.adCta}>
-          <Text style={styles.adCtaText}>View plans</Text>
+        <View style={[styles.adCta, adFixed.cta]}>
+          <Text style={[styles.adCtaText, adFixed.ctaText]}>View plans</Text>
           <Ionicons name="arrow-forward" size={14} color="#24104F" />
         </View>
       </View>
@@ -698,7 +706,7 @@ const PLAN_COMPARE_CARDS: PlanCompareCard[] = [
   {
     id: "platinum",
     name: "Platinum",
-    bg: ["#FFFFFF", "#D5DDE4", "#9AA8B4"],
+    bg: [tc("#FFFFFF", "bg"), "#D5DDE4", "#9AA8B4"],
     text: "#152028",
     muted: "rgba(21,32,40,0.55)",
     divider: "rgba(21,32,40,0.12)",
@@ -751,13 +759,23 @@ function PremiumSection({ onPress }: { onPress: () => void }) {
         pointerEvents="none"
       />
       <LinearGradient
-        colors={[
-          "rgba(245,245,247,0)",
-          "rgba(245,245,247,0.18)",
-          "rgba(245,245,247,0.55)",
-          "rgba(245,245,247,0.85)",
-          "#F5F5F7",
-        ]}
+        colors={
+          themeState.dark
+            ? [
+                "rgba(15,15,19,0)",
+                "rgba(15,15,19,0.18)",
+                "rgba(15,15,19,0.55)",
+                "rgba(15,15,19,0.85)",
+                D.page,
+              ]
+            : [
+                "rgba(245,245,247,0)",
+                "rgba(245,245,247,0.18)",
+                "rgba(245,245,247,0.55)",
+                "rgba(245,245,247,0.85)",
+                "#F5F5F7",
+              ]
+        }
         locations={[0, 0.3, 0.6, 0.82, 1]}
         style={[
           styles.premiumBg,
@@ -1432,7 +1450,8 @@ export default function TokenScreen() {
 // ─────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F5F5F7",
@@ -2235,4 +2254,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
-});
+}),
+);

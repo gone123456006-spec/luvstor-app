@@ -1,9 +1,9 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import React from "react";
-import { StyleSheet, View } from "react-native";
+import { type StyleProp, StyleSheet, type TextStyle, View } from "react-native";
 import type { ChatPattern, PatternIcon } from "../utils/chatPatterns";
 
-function PatternGlyph({ name, ...rest }: { name: PatternIcon; size: number; color: string; style: object }) {
+export function PatternGlyph({ name, ...rest }: { name: PatternIcon; size: number; color: string; style: StyleProp<TextStyle> }) {
   if (name.startsWith("mci:")) {
     return (
       <MaterialCommunityIcons
@@ -15,7 +15,7 @@ function PatternGlyph({ name, ...rest }: { name: PatternIcon; size: number; colo
   return <Ionicons name={name as keyof typeof Ionicons.glyphMap} {...rest} />;
 }
 
-function hash(n: number): number {
+export function hash(n: number): number {
   const x = Math.sin(n * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
@@ -27,17 +27,19 @@ type Props = {
   dark: boolean;
   /** Grid spacing; icons scale with it */
   cell?: number;
+  /** Draw only the doodles, in this ink, over whatever is behind */
+  overlayInk?: string;
 };
 
 /**
  * Static doodle wallpaper: a staggered grid of tilted icons in two inks, with
  * tiny filler marks in the gaps. Seeded, so it looks the same on every render.
  */
-function ChatWallpaperPattern({ pattern, width, height, dark, cell = 62 }: Props) {
+function ChatWallpaperPattern({ pattern, width, height, dark, cell = 62, overlayInk }: Props) {
   const cols = Math.ceil(width / cell) + 1;
   const rows = Math.ceil(height / cell) + 1;
-  const ink = dark ? pattern.darkInk : pattern.ink;
-  const ink2 = dark ? pattern.darkInk2 : pattern.ink2;
+  const ink = overlayInk ?? (dark ? pattern.darkInk : pattern.ink);
+  const ink2 = overlayInk ?? (dark ? pattern.darkInk2 : pattern.ink2);
   const nodes: React.ReactNode[] = [];
 
   for (let r = 0; r < rows; r++) {
@@ -82,10 +84,12 @@ function ChatWallpaperPattern({ pattern, width, height, dark, cell = 62 }: Props
   return (
     <View
       pointerEvents="none"
+      renderToHardwareTextureAndroid
+      shouldRasterizeIOS
       style={[
         StyleSheet.absoluteFill,
         styles.clip,
-        { backgroundColor: dark ? pattern.darkBg : pattern.bg },
+        { backgroundColor: overlayInk ? "transparent" : dark ? pattern.darkBg : pattern.bg },
       ]}
     >
       {nodes}

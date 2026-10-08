@@ -124,6 +124,11 @@ if (process.env.NOTIFICATION_TTL_DAYS !== '0') {
   );
 }
 
+notificationSchema.plugin(require('../utils/cacheVersionPlugin'), {
+  scope: 'notif',
+  fields: ['userId'],
+});
+
 const Notification = mongoose.model('Notification', notificationSchema);
 
 module.exports = Notification;

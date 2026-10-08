@@ -6,6 +6,7 @@ import { fetchWithTimeout, getApiBase } from '../../utils/api';
 import { setPendingReferralCode } from '../../utils/pendingReferral';
 import { useAuth } from '../../contexts/AuthContext';
 import { resolvePostLoginRoute } from '../../utils/auth';
+import { themedStyles } from '../../utils/theme';
 
 /**
  * App Link: https://luvstor-api.onrender.com/go/SLUG
@@ -75,7 +76,8 @@ export default function GoShortLinkScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   wrap: {
     flex: 1,
     alignItems: 'center',
@@ -84,4 +86,5 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   text: { color: '#6B6B6B', fontSize: 15 },
-});
+}),
+);

@@ -90,4 +90,10 @@ friendshipSchema.methods.getOtherUser = function(userId) {
   return String(this.userA) === id ? this.userB : this.userA;
 };
 
+// Online Nearby strip cache is keyed on this version (likes / blocks)
+friendshipSchema.plugin(require('../utils/cacheVersionPlugin'), {
+  scope: 'social',
+  fields: ['userA', 'userB'],
+});
+
 module.exports = mongoose.model('Friendship', friendshipSchema);

@@ -65,4 +65,11 @@ messageSchema.pre('save', function () {
   }
 });
 
+// Unread counts / conversation list cache is keyed on this version
+messageSchema.plugin(require('../utils/cacheVersionPlugin'), {
+  scope: 'msg',
+  fields: ['senderId', 'receiverId'],
+  roomField: 'roomId',
+});
+
 module.exports = mongoose.model('Message', messageSchema);

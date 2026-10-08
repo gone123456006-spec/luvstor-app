@@ -30,6 +30,7 @@ const RECOMMENDED = [
   'CALL_HEARTBEAT_TIMEOUT_MS',
   'CALL_RING_TIMEOUT_MS',
   'JSON_BODY_LIMIT',
+  'MEDIA_URL_SECRET',
 ];
 
 const fail = [];
@@ -83,6 +84,16 @@ if (isProd && !process.env.REDIS_URL) {
   warn.push('REDIS_URL unset — required for multi-instance / reliable presence on Render');
 }
 
+const mediaMode = String(process.env.MEDIA_PRIVATE_ENFORCE || 'log').toLowerCase();
+if (!present('MEDIA_URL_SECRET') && !present('JWT_SECRET')) {
+  fail.push('MEDIA_URL_SECRET (or JWT_SECRET) needed to sign private chat media links');
+} else if (!present('MEDIA_URL_SECRET')) {
+  warn.push('MEDIA_URL_SECRET unset — chat media links are signed with JWT_SECRET (rotating it expires all links)');
+}
+if (isProd && mediaMode !== 'on') {
+  warn.push(`MEDIA_PRIVATE_ENFORCE=${mediaMode} — switch to "on" once old app versions are gone`);
+}
+
 const publicApi = String(process.env.PUBLIC_API_URL || '');
 if (publicApi && /localhost|127\.0\.0\.1/i.test(publicApi)) {
   fail.push('PUBLIC_API_URL must be your https production host, not localhost');
@@ -93,6 +104,8 @@ console.log(`NODE_ENV=${process.env.NODE_ENV || '(unset)'}`);
 console.log(`PUBLIC_API_URL=${publicApi || '(unset)'}`);
 console.log(`CALL_HEARTBEAT_TIMEOUT_MS=${process.env.CALL_HEARTBEAT_TIMEOUT_MS || '(default)'}`);
 console.log(`UPLOADS_DIR=${process.env.UPLOADS_DIR || '(default ./uploads)'}`);
+console.log(`MEDIA_PRIVATE_ENFORCE=${mediaMode}`);
+console.log(`REDIS_URL=${present('REDIS_URL') ? '(set)' : '(unset — in-memory cache, single process only)'}`);
 console.log(`ok keys: ${ok.length}`);
 if (warn.length) {
   console.log('\nWarnings:');

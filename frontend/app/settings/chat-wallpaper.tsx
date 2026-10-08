@@ -17,8 +17,11 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import ChatGradientWallpaper from "../../components/ChatGradientWallpaper";
+import { PaperWallpaper, SceneWallpaper } from "../../components/ChatSceneWallpaper";
 import ChatWallpaperPattern from "../../components/ChatWallpaperPattern";
 import ColorPickerSheet from "../../components/ColorPickerSheet";
+import DeferredMount from "../../components/DeferredMount";
 import ListRowTouchable from "../../components/ListRowTouchable";
 import {
   type A11yPrefs,
@@ -29,12 +32,23 @@ import {
 } from "../../contexts/AccessibilityContext";
 import {
   BUBBLE_COLORS,
+  CHAT_GRADIENTS,
   CHAT_PATTERNS,
   type ChatPatternId,
+  findGradient,
   findPattern,
+  type GradientId,
   isLightColor,
   mixHex,
 } from "../../utils/chatPatterns";
+import {
+  CHAT_PAPERS,
+  CHAT_SCENES,
+  findPaper,
+  findScene,
+  type PaperId,
+  type SceneId,
+} from "../../utils/chatScenes";
 import * as Haptics from "../../utils/haptics";
 import { NAV_ICON, SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
 import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
@@ -58,10 +72,35 @@ type SolidId = (typeof CHAT_WALLPAPERS)[number]["id"];
 type Candidate =
   | { kind: "solid"; id: SolidId }
   | { kind: "pattern"; id: ChatPatternId; dark: boolean }
+  | { kind: "gradient"; id: GradientId }
+  | { kind: "paper"; id: PaperId }
+  | { kind: "scene"; id: SceneId }
   | { kind: "custom"; color: string }
   | { kind: "photo"; uri: string };
 
-type View_ = "home" | "categories" | "bright" | "dark" | "solid" | "bubbles";
+type View_ =
+  | "home"
+  | "categories"
+  | "bright"
+  | "dark"
+  | "solid"
+  | "gradients"
+  | "art"
+  | "themes"
+  | "illustrated"
+  | "paper"
+  | "bubbles";
+
+const SUB_VIEWS: View_[] = [
+  "bright",
+  "dark",
+  "solid",
+  "gradients",
+  "art",
+  "themes",
+  "illustrated",
+  "paper",
+];
 
 const TITLES: Record<View_, string> = {
   home: "Chat wallpaper",
@@ -69,6 +108,11 @@ const TITLES: Record<View_, string> = {
   bright: "Bright",
   dark: "Dark",
   solid: "Solid colours",
+  gradients: "Gradients",
+  art: "Art",
+  themes: "Themes",
+  illustrated: "Illustrated",
+  paper: "Paper",
   bubbles: "Bubble colour",
 };
 
@@ -86,6 +130,12 @@ function currentCandidate(prefs: A11yPrefs): Candidate {
   if (prefs.chatWallpaper === "custom") return { kind: "custom", color: prefs.wallpaperCustom };
   const p = findPattern(prefs.chatWallpaper);
   if (p) return { kind: "pattern", id: p.id, dark: prefs.wallpaperDark };
+  const g = findGradient(prefs.chatWallpaper);
+  if (g) return { kind: "gradient", id: g.id };
+  const paper = findPaper(prefs.chatWallpaper);
+  if (paper) return { kind: "paper", id: paper.id };
+  const scene = findScene(prefs.chatWallpaper);
+  if (scene) return { kind: "scene", id: scene.id };
   const solid = CHAT_WALLPAPERS.find((w) => w.id === prefs.chatWallpaper);
   return { kind: "solid", id: solid?.id ?? "classic" };
 }
@@ -93,10 +143,160 @@ function currentCandidate(prefs: A11yPrefs): Candidate {
 function candidateLabel(c: Candidate): string {
   if (c.kind === "photo") return "My photo";
   if (c.kind === "custom") return "Custom colour";
+  if (c.kind === "gradient") return findGradient(c.id)?.label ?? "Gradient";
+  if (c.kind === "paper") return findPaper(c.id)?.label ?? "Paper";
+  if (c.kind === "scene") return findScene(c.id)?.label ?? "Illustrated";
   if (c.kind === "pattern") {
     return `${findPattern(c.id)?.label ?? "Doodle"} · ${c.dark ? "Dark" : "Bright"}`;
   }
   return CHAT_WALLPAPERS.find((w) => w.id === c.id)?.label ?? "Solid colour";
+}
+
+const QUICK_PICKS: Candidate[] = [
+  { kind: "solid", id: "classic" },
+  { kind: "scene", id: "i-sakura-breeze" },
+  { kind: "pattern", id: "doodle", dark: false },
+  { kind: "gradient", id: "g-sunset" },
+  { kind: "paper", id: "p-notebook" },
+  { kind: "scene", id: "i-cozy-cat" },
+  { kind: "gradient", id: "t-flowers" },
+  { kind: "scene", id: "i-neon-night" },
+  { kind: "gradient", id: "g-aurora" },
+];
+
+const GRID_ITEMS: Partial<Record<View_, Candidate[]>> = {
+  bright: CHAT_PATTERNS.map((p): Candidate => ({
+    kind: "pattern",
+    id: p.id,
+    dark: false,
+  })),
+  dark: CHAT_PATTERNS.map((p): Candidate => ({
+    kind: "pattern",
+    id: p.id,
+    dark: true,
+  })),
+  gradients: CHAT_GRADIENTS.filter((g) => !g.pattern && !g.stickers).map((g): Candidate => ({
+    kind: "gradient",
+    id: g.id,
+  })),
+  art: CHAT_GRADIENTS.filter((g) => !!g.pattern).map((g): Candidate => ({
+    kind: "gradient",
+    id: g.id,
+  })),
+  themes: CHAT_GRADIENTS.filter((g) => !!g.stickers).map((g): Candidate => ({
+    kind: "gradient",
+    id: g.id,
+  })),
+  illustrated: CHAT_SCENES.map((sc): Candidate => ({
+    kind: "scene",
+    id: sc.id,
+  })),
+  paper: CHAT_PAPERS.map((pp): Candidate => ({ kind: "paper", id: pp.id })),
+  solid: CHAT_WALLPAPERS.map((w): Candidate => ({ kind: "solid", id: w.id })),
+};
+
+function candidateKey(c: Candidate): string {
+  if (c.kind === "photo") return `photo:${c.uri}`;
+  if (c.kind === "custom") return `custom:${c.color}`;
+  if (c.kind === "pattern") return `${c.id}:${c.dark ? "d" : "l"}`;
+  return c.id;
+}
+
+function thumbLabel(c: Candidate): string {
+  return c.kind === "pattern" ? (findPattern(c.id)?.label ?? "Doodle") : candidateLabel(c);
+}
+
+/** Flat colour shown until the detailed thumbnail is drawn */
+function candidateSwatch(c: Candidate, dark: boolean): string {
+  if (c.kind === "custom") return c.color;
+  if (c.kind === "photo") return "#D1D1D6";
+  if (c.kind === "pattern") {
+    const p = findPattern(c.id);
+    return (dark || c.dark ? p?.darkBg : p?.bg) ?? "#ECE5DD";
+  }
+  if (c.kind === "gradient") return findGradient(c.id)?.colors[0] ?? "#ECE5DD";
+  if (c.kind === "scene") return findScene(c.id)?.color ?? "#ECE5DD";
+  if (c.kind === "paper") {
+    const pp = findPaper(c.id);
+    return (dark ? pp?.darkBg : pp?.bg) ?? "#ECE5DD";
+  }
+  const w = CHAT_WALLPAPERS.find((x) => x.id === c.id) ?? CHAT_WALLPAPERS[0];
+  return dark ? w.darkColor : w.color;
+}
+
+/**
+ * One wallpaper tile. Memoized so tapping elsewhere doesn't redraw it, and the
+ * detailed fill appears after `delay` so opening a grid stays smooth.
+ */
+const Thumb = React.memo(function Thumb({
+  c,
+  label,
+  selected,
+  width,
+  dark,
+  delay,
+  onPick,
+  compact = false,
+}: {
+  c: Candidate;
+  label: string;
+  selected: boolean;
+  width: number;
+  dark: boolean;
+  delay: number;
+  onPick: (c: Candidate) => void;
+  compact?: boolean;
+}) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setReady(true), delay);
+    return () => clearTimeout(t);
+  }, [delay]);
+
+  const height = compact ? width * 1.56 : width * 1.78;
+  return (
+    <TouchableOpacity
+      activeOpacity={0.8}
+      onPress={() => onPick(c)}
+      style={[compact ? styles.quickItem : styles.thumbItem, { width }]}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={label}
+    >
+      <View
+        style={[
+          compact ? styles.quickThumb : styles.thumb,
+          { width, height, backgroundColor: candidateSwatch(c, dark) },
+          selected && styles.thumbOn,
+        ]}
+        renderToHardwareTextureAndroid
+        shouldRasterizeIOS
+      >
+        {ready ? (
+          <WallpaperFill c={c} width={width} height={height} dark={dark} cell={compact ? 26 : 34} />
+        ) : null}
+        {selected ? (
+          <View style={styles.thumbCheck}>
+            <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+          </View>
+        ) : null}
+      </View>
+      <Text
+        style={compact ? styles.quickLabel : [styles.thumbLabel, selected && styles.thumbLabelOn]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
+function sameCandidate(a: Candidate, b: Candidate): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "photo" || b.kind === "photo") return false;
+  if (a.kind === "custom" || b.kind === "custom") return false;
+  if (a.kind === "pattern" && b.kind === "pattern") return a.id === b.id && a.dark === b.dark;
+  return a.id === b.id;
 }
 
 /** Bubble colour this candidate would give when bubbles are on "auto" */
@@ -107,8 +307,15 @@ function candidateBubble(c: Candidate, prefs: A11yPrefs): string {
       : c.kind === "custom"
         ? { ...prefs, chatWallpaper: "custom", wallpaperCustom: c.color }
         : { ...prefs, chatWallpaper: c.id };
+  if (c.kind === "gradient") return findGradient(c.id)?.bubble ?? myBubbleColor(prefs);
+  if (c.kind === "paper") return findPaper(c.id)?.bubble ?? myBubbleColor(prefs);
+  if (c.kind === "scene") return findScene(c.id)?.bubble ?? myBubbleColor(prefs);
   if (c.kind === "pattern") {
-    return autoBubbleColor({ ...next, bubbleColor: "auto", wallpaperDark: c.dark });
+    return autoBubbleColor({
+      ...next,
+      bubbleColor: "auto",
+      wallpaperDark: c.dark,
+    });
   }
   return myBubbleColor(next);
 }
@@ -128,6 +335,28 @@ function WallpaperFill({
 }) {
   if (c.kind === "photo") {
     return <Image source={{ uri: c.uri }} style={StyleSheet.absoluteFill} contentFit="cover" />;
+  }
+  if (c.kind === "scene") {
+    const sc = findScene(c.id);
+    return sc ? <SceneWallpaper scene={sc} dark={dark} /> : null;
+  }
+  if (c.kind === "paper") {
+    const pp = findPaper(c.id);
+    return pp ? (
+      <PaperWallpaper
+        paper={pp}
+        width={width}
+        height={height}
+        dark={dark}
+        scale={Math.min(1, width / 260)}
+      />
+    ) : null;
+  }
+  if (c.kind === "gradient") {
+    const g = findGradient(c.id);
+    return g ? (
+      <ChatGradientWallpaper gradient={g} width={width} height={height} dark={dark} cell={cell} />
+    ) : null;
   }
   if (c.kind === "pattern") {
     const p = findPattern(c.id);
@@ -174,34 +403,52 @@ function PhonePreview({
       <WallpaperFill c={c} width={width} height={height} dark={dark} cell={34 * s} />
       {showChrome ? (
         <View style={[styles.phoneBar, { height: 30 * s, paddingHorizontal: 8 * s, gap: 6 * s }]}>
-          <View style={[styles.phoneAvatar, { width: 16 * s, height: 16 * s, borderRadius: 8 * s }]} />
+          <View
+            style={[styles.phoneAvatar, { width: 16 * s, height: 16 * s, borderRadius: 8 * s }]}
+          />
           <View style={[styles.phoneLine, { width: 52 * s, height: 6 * s, borderRadius: 3 * s }]} />
         </View>
       ) : null}
       <View style={[styles.phoneBody, { padding: 8 * s, gap: 6 * s }]}>
-        <View
-          style={[
-            styles.mockBubble,
-            styles.mockOther,
-            { width: 92 * s, height: 22 * s, borderRadius: 8 * s },
-          ]}
-        />
-        <View
-          style={[
-            styles.mockBubble,
-            { backgroundColor: bubble, width: 78 * s, height: 22 * s, borderRadius: 8 * s },
-          ]}
-        />
-        <View
-          style={[
-            styles.mockBubble,
-            styles.mockOther,
-            { width: 64 * s, height: 22 * s, borderRadius: 8 * s },
-          ]}
-        />
+        {(
+          [
+            { me: false, w: 92, line: 64 },
+            { me: true, w: 78, line: 50 },
+            { me: false, w: 64, line: 40 },
+            { me: true, w: 96, line: 70 },
+          ] as const
+        ).map((b, i) => (
+          <View
+            key={i}
+            style={[
+              styles.mockBubble,
+              !b.me && styles.mockOther,
+              b.me && { backgroundColor: bubble },
+              {
+                width: b.w * s,
+                height: 22 * s,
+                borderRadius: 8 * s,
+                justifyContent: "center",
+                paddingHorizontal: 8 * s,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.mockText,
+                {
+                  width: b.line * s,
+                  backgroundColor: b.me ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.14)",
+                },
+              ]}
+            />
+          </View>
+        ))}
       </View>
       {showChrome ? (
-        <View style={[styles.phoneInput, { height: 20 * s, margin: 8 * s, borderRadius: 10 * s }]} />
+        <View
+          style={[styles.phoneInput, { height: 20 * s, margin: 8 * s, borderRadius: 10 * s }]}
+        />
       ) : null}
     </View>
   );
@@ -218,10 +465,12 @@ export default function ChatWallpaperScreen() {
   const [picker, setPicker] = useState<"wallpaper" | "bubble" | null>(null);
 
   const current = currentCandidate(prefs);
-  const thumbW = (winW - 32 - 24) / 3;
+  const gridItems = GRID_ITEMS[view];
+  const [contentW, setContentW] = useState(0);
+  const thumbW = Math.floor(((contentW || winW) - 32 - 24) / 3) - 1;
 
   const goBack = () => {
-    if (view === "bright" || view === "dark" || view === "solid") setView("categories");
+    if (SUB_VIEWS.includes(view)) setView("categories");
     else if (view !== "home") setView("home");
     else router.back();
   };
@@ -229,7 +478,7 @@ export default function ChatWallpaperScreen() {
   useEffect(() => {
     if (view === "home") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      setView(view === "bright" || view === "dark" || view === "solid" ? "categories" : "home");
+      setView(SUB_VIEWS.includes(view) ? "categories" : "home");
       return true;
     });
     return () => sub.remove();
@@ -240,7 +489,9 @@ export default function ChatWallpaperScreen() {
     if (c.kind === "photo") {
       setBusy(true);
       try {
-        await FileSystem.makeDirectoryAsync(WALLPAPER_DIR, { intermediates: true }).catch(() => {});
+        await FileSystem.makeDirectoryAsync(WALLPAPER_DIR, {
+          intermediates: true,
+        }).catch(() => {});
         const dest = `${WALLPAPER_DIR}${Date.now()}.jpg`;
         await FileSystem.copyAsync({ from: c.uri, to: dest });
         setPref("chatWallpaperUri", dest);
@@ -259,7 +510,7 @@ export default function ChatWallpaperScreen() {
         setPref("chatWallpaper", "custom");
       } else {
         setPref("chatWallpaper", c.id);
-        if (c.kind === "pattern") setPref("bubbleColor", "auto");
+        if (c.kind !== "solid") setPref("bubbleColor", "auto");
       }
       setPref("chatWallpaperUri", null);
       void deleteQuietly(oldPhoto);
@@ -279,38 +530,29 @@ export default function ChatWallpaperScreen() {
     setCandidate({ kind: "photo", uri: result.assets[0].uri });
   };
 
-  const renderThumb = (c: Candidate, key: string, label: string, selected: boolean) => (
-    <TouchableOpacity
-      key={key}
-      activeOpacity={0.8}
-      onPress={() => setCandidate(c)}
-      style={styles.thumbItem}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      accessibilityLabel={label}
-    >
-      <View style={[styles.thumb, { width: thumbW, height: thumbW * 1.78 }, selected && styles.thumbOn]}>
-        <WallpaperFill c={c} width={thumbW} height={thumbW * 1.78} dark={isDark} cell={30} />
-        {selected ? (
-          <View style={styles.thumbCheck}>
-            <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-          </View>
-        ) : null}
-      </View>
-      <Text style={[styles.thumbLabel, selected && styles.thumbLabelOn]} numberOfLines={1}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-
-  const bubbleOptions: { id: A11yPrefs["bubbleColor"]; label: string; color: string; icon?: keyof typeof Ionicons.glyphMap }[] = [
-    { id: "auto", label: "Auto", color: autoBubbleColor(prefs), icon: "sparkles" },
+  const bubbleOptions: {
+    id: A11yPrefs["bubbleColor"];
+    label: string;
+    color: string;
+    icon?: keyof typeof Ionicons.glyphMap;
+  }[] = [
+    {
+      id: "auto",
+      label: "Auto",
+      color: autoBubbleColor(prefs),
+      icon: "sparkles",
+    },
     ...BUBBLE_COLORS.map((b) => ({
       id: b.id,
       label: b.label,
       color: isDark ? (b.darkColor ?? b.color) : b.color,
     })),
-    { id: "custom", label: "Custom", color: prefs.bubbleCustom, icon: "color-palette" },
+    {
+      id: "custom",
+      label: "Custom",
+      color: prefs.bubbleCustom,
+      icon: "color-palette",
+    },
   ];
 
   return (
@@ -334,18 +576,27 @@ export default function ChatWallpaperScreen() {
 
       <ScrollView
         key={view}
+        onLayout={(e) => setContentW(Math.round(e.nativeEvent.layout.width))}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}
       >
         {view === "home" ? (
           <>
             <View style={styles.previewWrap}>
-              <PhonePreview
-                c={current}
-                width={Math.min(200, winW * 0.48)}
-                bubble={myBubbleColor(prefs)}
-                dark={isDark}
-              />
+              <View
+                style={[
+                  styles.phoneShadow,
+                  { borderRadius: (22 * Math.min(190, winW * 0.46)) / 180 },
+                ]}
+              >
+                <PhonePreview
+                  c={current}
+                  width={Math.min(190, winW * 0.46)}
+                  bubble={myBubbleColor(prefs)}
+                  dark={isDark}
+                />
+              </View>
+              <Text style={styles.currentCaption}>CURRENT WALLPAPER</Text>
               <Text style={styles.currentLabel}>{candidateLabel(current)}</Text>
               <TouchableOpacity
                 activeOpacity={0.85}
@@ -353,37 +604,77 @@ export default function ChatWallpaperScreen() {
                 style={styles.changeBtn}
                 accessibilityRole="button"
               >
-                <Text style={styles.changeText}>Change</Text>
+                <Ionicons name="color-palette-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.changeText}>Change wallpaper</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.listGroup}>
+            <Text style={styles.sectionTitle}>Quick picks</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.quickRow}
+            >
+              {QUICK_PICKS.map((c, i) => (
+                <Thumb
+                  key={candidateKey(c)}
+                  c={c}
+                  label={thumbLabel(c)}
+                  selected={sameCandidate(c, current)}
+                  width={72}
+                  dark={isDark}
+                  delay={60 + i * 30}
+                  onPick={setCandidate}
+                  compact
+                />
+              ))}
+            </ScrollView>
+
+            <View style={styles.card}>
               <ListRowTouchable
                 style={styles.listRow}
                 onPress={() => setView("bubbles")}
                 accessibilityRole="button"
               >
+                <View style={[styles.iconCircleSm, { backgroundColor: myBubbleColor(prefs) }]}>
+                  <Ionicons name="chatbubble" size={16} color="#FFFFFF" />
+                </View>
                 <View style={styles.rowContent}>
                   <Text style={styles.rowLabel}>Bubble colour</Text>
                   <Text style={styles.rowSub}>
                     {bubbleOptions.find((b) => b.id === prefs.bubbleColor)?.label ?? "Black"}
                   </Text>
                 </View>
-                <View style={[styles.rowSwatch, { backgroundColor: myBubbleColor(prefs) }]} />
-                {SHOW_ROW_CHEVRON ? (
-                  <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-                ) : null}
+                <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+              </ListRowTouchable>
+              <View style={styles.cardDivider} />
+              <ListRowTouchable
+                style={styles.listRow}
+                onPress={() => void pickPhoto()}
+                accessibilityRole="button"
+              >
+                <View style={[styles.iconCircleSm, { backgroundColor: "#34A853" }]}>
+                  <Ionicons name="images" size={16} color="#FFFFFF" />
+                </View>
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowLabel}>Choose from photos</Text>
+                  <Text style={styles.rowSub}>Use your own picture</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
               </ListRowTouchable>
               {current.kind !== "solid" || current.id !== "classic" ? (
                 <>
-                  <View style={styles.dividerFull} />
+                  <View style={styles.cardDivider} />
                   <ListRowTouchable
                     style={styles.listRow}
                     onPress={() => void applyCandidate({ kind: "solid", id: "classic" })}
                     accessibilityRole="button"
                   >
+                    <View style={[styles.iconCircleSm, { backgroundColor: "#FF3B30" }]}>
+                      <Ionicons name="refresh" size={16} color="#FFFFFF" />
+                    </View>
                     <View style={styles.rowContent}>
-                      <Text style={styles.rowLabel}>Reset wallpaper</Text>
+                      <Text style={[styles.rowLabel, styles.resetLabel]}>Reset wallpaper</Text>
                       <Text style={styles.rowSub}>Back to the classic look</Text>
                     </View>
                   </ListRowTouchable>
@@ -397,10 +688,50 @@ export default function ChatWallpaperScreen() {
           <View style={[styles.listGroup, styles.groupTop]}>
             {(
               [
-                { key: "bright", label: "Bright", icon: "sunny", color: "#FF9500" },
+                {
+                  key: "bright",
+                  label: "Bright",
+                  icon: "sunny",
+                  color: "#FF9500",
+                },
                 { key: "dark", label: "Dark", icon: "moon", color: "#5856D6" },
-                { key: "solid", label: "Solid colours", icon: "color-fill", color: "#0A84FF" },
-                { key: "photo", label: "My photos", icon: "images", color: "#34A853" },
+                {
+                  key: "illustrated",
+                  label: "Illustrated",
+                  icon: "image",
+                  color: "#FF9500",
+                },
+                {
+                  key: "themes",
+                  label: "Themes",
+                  icon: "sparkles",
+                  color: "#34C759",
+                },
+                {
+                  key: "paper",
+                  label: "Paper",
+                  icon: "document-text",
+                  color: "#8E8E93",
+                },
+                {
+                  key: "solid",
+                  label: "Solid colours",
+                  icon: "color-fill",
+                  color: "#0A84FF",
+                },
+                {
+                  key: "gradients",
+                  label: "Gradients",
+                  icon: "color-filter",
+                  color: "#AF52DE",
+                },
+                { key: "art", label: "Art", icon: "brush", color: "#FF2D55" },
+                {
+                  key: "photo",
+                  label: "My photos",
+                  icon: "images",
+                  color: "#34A853",
+                },
               ] as const
             ).map((row, i) => (
               <React.Fragment key={row.key}>
@@ -423,56 +754,51 @@ export default function ChatWallpaperScreen() {
           </View>
         ) : null}
 
-        {view === "bright" || view === "dark" ? (
+        {gridItems ? (
           <View style={styles.grid}>
-            {CHAT_PATTERNS.map((p) =>
-              renderThumb(
-                { kind: "pattern", id: p.id, dark: view === "dark" },
-                p.id,
-                p.label,
-                current.kind === "pattern" &&
-                  current.id === p.id &&
-                  current.dark === (view === "dark"),
-              ),
-            )}
-          </View>
-        ) : null}
-
-        {view === "solid" ? (
-          <View style={styles.grid}>
-            {CHAT_WALLPAPERS.map((w) =>
-              renderThumb(
-                { kind: "solid", id: w.id },
-                w.id,
-                w.label,
-                current.kind === "solid" && current.id === w.id,
-              ),
-            )}
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => setPicker("wallpaper")}
-              style={styles.thumbItem}
-              accessibilityRole="button"
-              accessibilityLabel="Custom colour"
-            >
-              <View
-                style={[
-                  styles.thumb,
-                  styles.thumbCustom,
-                  { width: thumbW, height: thumbW * 1.78, backgroundColor: prefs.wallpaperCustom },
-                  current.kind === "custom" && styles.thumbOn,
-                ]}
+            {gridItems.map((c, i) => (
+              <Thumb
+                key={candidateKey(c)}
+                c={c}
+                label={thumbLabel(c)}
+                selected={sameCandidate(c, current)}
+                width={thumbW}
+                dark={isDark}
+                delay={30 + i * 22}
+                onPick={setCandidate}
+              />
+            ))}
+            {view === "solid" ? (
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setPicker("wallpaper")}
+                style={[styles.thumbItem, { width: thumbW }]}
+                accessibilityRole="button"
+                accessibilityLabel="Custom colour"
               >
-                <Ionicons
-                  name="color-palette"
-                  size={26}
-                  color={isLightColor(prefs.wallpaperCustom) ? "#370372" : "#FFFFFF"}
-                />
-              </View>
-              <Text style={[styles.thumbLabel, current.kind === "custom" && styles.thumbLabelOn]}>
-                Custom
-              </Text>
-            </TouchableOpacity>
+                <View
+                  style={[
+                    styles.thumb,
+                    styles.thumbCustom,
+                    {
+                      width: thumbW,
+                      height: thumbW * 1.78,
+                      backgroundColor: prefs.wallpaperCustom,
+                    },
+                    current.kind === "custom" && styles.thumbOn,
+                  ]}
+                >
+                  <Ionicons
+                    name="color-palette"
+                    size={26}
+                    color={isLightColor(prefs.wallpaperCustom) ? "#370372" : "#FFFFFF"}
+                  />
+                </View>
+                <Text style={[styles.thumbLabel, current.kind === "custom" && styles.thumbLabelOn]}>
+                  Custom
+                </Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
 
@@ -506,7 +832,13 @@ export default function ChatWallpaperScreen() {
                     accessibilityState={{ selected: on }}
                     accessibilityLabel={`${b.label} bubbles`}
                   >
-                    <View style={[styles.bubbleSwatch, { backgroundColor: b.color }, on && styles.bubbleSwatchOn]}>
+                    <View
+                      style={[
+                        styles.bubbleSwatch,
+                        { backgroundColor: b.color },
+                        on && styles.bubbleSwatchOn,
+                      ]}
+                    >
                       {on ? (
                         <Ionicons name="checkmark" size={22} color="#FFFFFF" />
                       ) : b.icon ? (
@@ -519,7 +851,8 @@ export default function ChatWallpaperScreen() {
               })}
             </View>
             <Text style={styles.footHint}>
-              Auto matches your wallpaper. Picking a Bright or Dark wallpaper turns it on.
+              Auto matches your wallpaper. Picking any wallpaper except a solid colour or photo
+              turns it on.
             </Text>
           </>
         ) : null}
@@ -534,8 +867,16 @@ export default function ChatWallpaperScreen() {
       >
         {candidate ? (
           <View style={styles.fullPreview}>
-            <WallpaperFill c={candidate} width={winW} height={winH} dark={isDark} />
-            <View style={[styles.fullHeader, { paddingTop: insets.top + 8 }]}>
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: candidateSwatch(candidate, isDark) },
+              ]}
+            />
+            <DeferredMount key={candidateKey(candidate)} delay={120}>
+              <WallpaperFill c={candidate} width={winW} height={winH} dark={isDark} />
+            </DeferredMount>
+            <View style={[styles.fullHeader, { paddingTop: insets.top + 2 }]}>
               <TouchableOpacity
                 onPress={() => setCandidate(null)}
                 style={styles.fullClose}
@@ -555,7 +896,9 @@ export default function ChatWallpaperScreen() {
                 <Text style={styles.fullBubbleText}>Hey! Did you change the wallpaper?</Text>
               </View>
               <View style={[styles.fullBubble, styles.fullBubbleOther]}>
-                <Text style={styles.fullBubbleText}>This is how {candidateLabel(candidate)} looks 👀</Text>
+                <Text style={styles.fullBubbleText}>
+                  This is how {candidateLabel(candidate)} looks 👀
+                </Text>
               </View>
               <View
                 style={[
@@ -564,7 +907,9 @@ export default function ChatWallpaperScreen() {
                   { backgroundColor: candidateBubble(candidate, prefs) },
                 ]}
               >
-                <Text style={[styles.fullBubbleText, styles.fullBubbleTextMe]}>Looks great, setting it now</Text>
+                <Text style={[styles.fullBubbleText, styles.fullBubbleTextMe]}>
+                  Looks great, setting it now
+                </Text>
               </View>
             </View>
 
@@ -614,7 +959,8 @@ const styles = themedStyles(() =>
       alignItems: "center",
       gap: 16,
       paddingHorizontal: 12,
-      paddingVertical: 12,
+      paddingTop: 2,
+      paddingBottom: 8,
       backgroundColor: WA.bg,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: WA.border,
@@ -628,20 +974,84 @@ const styles = themedStyles(() =>
       alignItems: "center",
     },
     headerTitle: { fontSize: 22, fontWeight: "700", color: WA.text },
-    scroll: { paddingTop: 8 },
+    scroll: { paddingTop: 4 },
 
-    previewWrap: { alignItems: "center", paddingTop: 20, paddingBottom: 24 },
-    currentLabel: { marginTop: 14, fontSize: 14, color: WA.secondary },
+    previewWrap: { alignItems: "center", paddingTop: 10, paddingBottom: 22 },
+    phoneShadow: {
+      borderRadius: 26,
+      shadowColor: "#000000",
+      shadowOpacity: 0.16,
+      shadowRadius: 18,
+      shadowOffset: { width: 0, height: 8 },
+      elevation: 10,
+      backgroundColor: WA.white,
+    },
+    currentCaption: {
+      marginTop: 18,
+      fontSize: 11,
+      fontWeight: "600",
+      letterSpacing: 1,
+      color: WA.secondary,
+    },
+    currentLabel: {
+      marginTop: 4,
+      fontSize: 18,
+      fontWeight: "700",
+      color: WA.text,
+    },
     changeBtn: {
-      marginTop: 12,
-      paddingHorizontal: 32,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: WA.primarySoft,
+      marginTop: 14,
+      flexDirection: "row",
+      gap: 8,
+      paddingHorizontal: 26,
+      height: 46,
+      borderRadius: 23,
+      backgroundColor: "#111111",
       justifyContent: "center",
       alignItems: "center",
     },
-    changeText: { fontSize: 16, fontWeight: "600", color: WA.primary },
+    changeText: { fontSize: 15, fontWeight: "700", color: "#FFFFFF" },
+
+    sectionTitle: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: WA.secondary,
+      paddingHorizontal: 20,
+      marginBottom: 10,
+    },
+    quickRow: { paddingHorizontal: 16, gap: 12, paddingBottom: 4 },
+    quickItem: { width: 72, alignItems: "center", gap: 6 },
+    quickThumb: {
+      width: 72,
+      height: 112,
+      borderRadius: 12,
+      overflow: "hidden",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "rgba(0,0,0,0.12)",
+    },
+    quickLabel: { fontSize: 12, color: WA.secondary, maxWidth: 72 },
+
+    card: {
+      marginHorizontal: 16,
+      marginTop: 22,
+      borderRadius: 16,
+      overflow: "hidden",
+      backgroundColor: WA.white,
+    },
+    cardDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: WA.border,
+      marginLeft: 64,
+    },
+    iconCircleSm: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    resetLabel: { color: "#FF3B30" },
+    mockText: { height: 4, borderRadius: 2 },
 
     phone: {
       overflow: "hidden",
@@ -662,7 +1072,7 @@ const styles = themedStyles(() =>
     mockOther: { alignSelf: "flex-start", backgroundColor: WA.white },
 
     listGroup: { backgroundColor: WA.white },
-    groupTop: { marginTop: 16 },
+    groupTop: { marginTop: 4 },
     listRow: {
       flexDirection: "row",
       alignItems: "center",
@@ -674,16 +1084,10 @@ const styles = themedStyles(() =>
     rowFlex: { flex: 1 },
     rowLabel: { fontSize: 17, color: WA.text },
     rowSub: { fontSize: 13, color: WA.secondary, marginTop: 2 },
-    rowSwatch: { width: 26, height: 26, borderRadius: 13 },
     divider: {
       height: StyleSheet.hairlineWidth,
       backgroundColor: WA.border,
       marginLeft: 72,
-    },
-    dividerFull: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: WA.border,
-      marginLeft: 16,
     },
     iconCircle: {
       width: 40,
@@ -732,7 +1136,12 @@ const styles = themedStyles(() =>
       borderRadius: 22,
       backgroundColor: WA.white,
     },
-    bubbleItem: { width: "25%", alignItems: "center", paddingVertical: 10, gap: 6 },
+    bubbleItem: {
+      width: "25%",
+      alignItems: "center",
+      paddingVertical: 10,
+      gap: 6,
+    },
     bubbleSwatch: {
       width: 52,
       height: 52,
@@ -754,7 +1163,7 @@ const styles = themedStyles(() =>
       alignItems: "center",
       gap: 12,
       paddingHorizontal: 12,
-      paddingBottom: 10,
+      paddingBottom: 8,
       backgroundColor: WA.bg,
     },
     fullClose: {
@@ -765,7 +1174,12 @@ const styles = themedStyles(() =>
       alignItems: "center",
     },
     fullTitle: { fontSize: 20, fontWeight: "700", color: WA.text },
-    fullBody: { flex: 1, justifyContent: "flex-end", paddingHorizontal: 12, gap: 6 },
+    fullBody: {
+      flex: 1,
+      justifyContent: "flex-end",
+      paddingHorizontal: 12,
+      gap: 6,
+    },
     datePill: {
       alignSelf: "center",
       paddingHorizontal: 12,
@@ -793,7 +1207,7 @@ const styles = themedStyles(() =>
     setBtn: {
       height: 52,
       borderRadius: 26,
-      backgroundColor: "#370372",
+      backgroundColor: "#111111",
       justifyContent: "center",
       alignItems: "center",
     },

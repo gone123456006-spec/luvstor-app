@@ -51,7 +51,12 @@ function PaperWallpaperBase({ paper, width, height, dark, scale = 1 }: PaperProp
   }
 
   return (
-    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: dark ? paper.darkBg : paper.bg }]}>
+    <View
+      pointerEvents="none"
+      renderToHardwareTextureAndroid
+      shouldRasterizeIOS
+      style={[StyleSheet.absoluteFill, { backgroundColor: dark ? paper.darkBg : paper.bg }]}
+    >
       <Svg width={width} height={height}>
         <Defs>
           <Pattern id={id} x={0} y={paper.kind === "lines" ? 40 * scale : 0} width={tw} height={th} patternUnits="userSpaceOnUse">
@@ -91,7 +96,13 @@ export const PaperWallpaper = React.memo(PaperWallpaperBase);
 function SceneWallpaperBase({ scene, dark }: { scene: ChatScene; dark: boolean }) {
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: scene.color }]}>
-      <Image source={scene.source} style={StyleSheet.absoluteFill} contentFit="cover" />
+      <Image
+        source={scene.source}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        transition={0}
+      />
       {dark && !scene.dark ? <View style={[StyleSheet.absoluteFill, styles.dim]} /> : null}
     </View>
   );

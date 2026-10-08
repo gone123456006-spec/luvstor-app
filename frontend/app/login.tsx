@@ -36,6 +36,7 @@ import { claimPendingReferralInBackground } from "../utils/referrals";
 import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
+import { themedPalette, themedStyles } from "../utils/theme";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
@@ -65,7 +66,7 @@ function GoogleLogo({ size = 20 }: { size?: number }) {
 }
 
 /** Luvstor brand palette (matches welcome) */
-const C = {
+const C = themedPalette({
   primary: "#7C3AED",
   white: "#FFFFFF",
   ink: "#1A1A2E",
@@ -74,7 +75,7 @@ const C = {
   error: "#E53935",
   googleBorder: "#DADCE0",
   yellow: "#F5D547",
-};
+});
 
 const HERO_SLIDES = [
   {
@@ -453,7 +454,8 @@ export default function LoginScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const s = themedStyles(() =>
+  StyleSheet.create({
   root: { flex: 1, backgroundColor: C.primary },
   flex: { flex: 1 },
   scroll: {
@@ -645,4 +647,5 @@ const s = StyleSheet.create({
     color: C.ink,
     fontWeight: "700",
   },
-});
+}),
+);

@@ -9,8 +9,12 @@ import {
   useAccessibility,
   wallpaperColor,
 } from "../../contexts/AccessibilityContext";
+import ChatGradientWallpaper from "../../components/ChatGradientWallpaper";
+import { PaperWallpaper, SceneWallpaper } from "../../components/ChatSceneWallpaper";
+import { findPaper, findScene } from "../../utils/chatScenes";
 import ChatWallpaperPattern from "../../components/ChatWallpaperPattern";
-import { findPattern } from "../../utils/chatPatterns";
+import DeferredMount from "../../components/DeferredMount";
+import { findGradient, findPattern } from "../../utils/chatPatterns";
 import { Image } from "expo-image";
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -1468,6 +1472,9 @@ export default function MessageScreen() {
   const chatWallpaperUri =
     a11yPrefs.chatWallpaper === "photo" ? a11yPrefs.chatWallpaperUri : null;
   const chatPattern = findPattern(a11yPrefs.chatWallpaper);
+  const chatGradient = findGradient(a11yPrefs.chatWallpaper);
+  const chatPaper = findPaper(a11yPrefs.chatWallpaper);
+  const chatScene = findScene(a11yPrefs.chatWallpaper);
   const { width: winW, height: winH } = useWindowDimensions();
   const { showAlert } = useAppAlert();
   const { sessionVersion, user } = useAuth();
@@ -3950,6 +3957,7 @@ export default function MessageScreen() {
       const headers: Record<string, string> = {
         Authorization: `Bearer ${token}`,
         "Content-Type": mimeType,
+        "X-Media-Scope": "chat",
       };
 
       if (Platform.OS !== "web" && FileSystem.uploadAsync) {
@@ -4977,13 +4985,28 @@ export default function MessageScreen() {
             contentFit="cover"
             pointerEvents="none"
           />
+        ) : chatScene ? (
+          <SceneWallpaper scene={chatScene} dark={isDarkTheme} />
+        ) : chatPaper ? (
+          <PaperWallpaper paper={chatPaper} width={winW} height={winH} dark={isDarkTheme} />
+        ) : chatGradient ? (
+          <DeferredMount>
+            <ChatGradientWallpaper
+              gradient={chatGradient}
+              width={winW}
+              height={winH}
+              dark={isDarkTheme}
+            />
+          </DeferredMount>
         ) : chatPattern ? (
-          <ChatWallpaperPattern
-            pattern={chatPattern}
-            width={winW}
-            height={winH}
-            dark={isDarkTheme || a11yPrefs.wallpaperDark}
-          />
+          <DeferredMount>
+            <ChatWallpaperPattern
+              pattern={chatPattern}
+              width={winW}
+              height={winH}
+              dark={isDarkTheme || a11yPrefs.wallpaperDark}
+            />
+          </DeferredMount>
         ) : null}
         {messages.length === 0 && !loading && (
           <View style={styles.emptyChatBanner}>
@@ -4998,7 +5021,12 @@ export default function MessageScreen() {
           <FlatList
             style={[
               styles.messagesFlatList,
-              { backgroundColor: chatWallpaperUri || chatPattern ? "transparent" : chatBg },
+              {
+                backgroundColor:
+                  chatWallpaperUri || chatPattern || chatGradient || chatPaper || chatScene
+                    ? "transparent"
+                    : chatBg,
+              },
             ]}
             ref={flatListRef}
             data={listData}

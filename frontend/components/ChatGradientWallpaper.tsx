@@ -56,7 +56,12 @@ function StickerLayer({
     }
   }
   return (
-    <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.clip]}>
+    <View
+      pointerEvents="none"
+      renderToHardwareTextureAndroid
+      shouldRasterizeIOS
+      style={[StyleSheet.absoluteFill, styles.clip]}
+    >
       {nodes}
     </View>
   );
