@@ -80,6 +80,7 @@ function createApp() {
   api.use('/system', require('./routes/system'));
   api.use('/audit', require('./routes/audit'));
   api.use('/admins', require('./routes/admins'));
+  api.use('/versions', require('./routes/versions'));
   api.use((_req, _res, next) => next(new HttpError(404, 'Not found')));
   app.use('/api', api);
 

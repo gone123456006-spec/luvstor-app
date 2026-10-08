@@ -7,14 +7,22 @@ export type Admin = {
   name: string;
   role: string;
   mustChangePassword: boolean;
+  mfaEnabled: boolean;
+  mfaSetupRequired: boolean;
+  mfaPolicyRequired: boolean;
+  mfaRecoveryCodesLeft: number;
   permissions: string[];
   mediaBaseUrl: string;
 };
 
+/** Password accepted; the caller must finish with `verifyMfa` */
+export type LoginResult = { mfaToken: string } | null;
+
 type AuthState = {
   admin: Admin | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
   setAdmin: (a: Admin | null) => void;
   can: (permission: string) => boolean;
@@ -37,6 +45,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthErrorHandler((err) => {
       if (err.code === 'MUST_CHANGE_PASSWORD') {
         setAdmin((a) => (a ? { ...a, mustChangePassword: true } : a));
+      } else if (err.code === 'MFA_SETUP_REQUIRED') {
+        setAdmin((a) => (a ? { ...a, mfaSetupRequired: true } : a));
       } else {
         setAdmin(null);
       }
@@ -44,8 +54,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setAuthErrorHandler(null);
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const r = await api<{ admin: Admin }>('/auth/login', { method: 'POST', body: { email, password } });
+  const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
+    const r = await api<{ admin?: Admin; mfaRequired?: boolean; mfaToken?: string }>('/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    });
+    if (r.mfaRequired && r.mfaToken) return { mfaToken: r.mfaToken };
+    if (r.admin) setAdmin(r.admin);
+    return null;
+  }, []);
+
+  const verifyMfa = useCallback(async (mfaToken: string, code: string) => {
+    const r = await api<{ admin: Admin }>('/auth/mfa/login', { method: 'POST', body: { mfaToken, code } });
     setAdmin(r.admin);
   }, []);
 
@@ -60,8 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const can = useCallback((p: string) => !!admin?.permissions.includes(p), [admin]);
 
   const value = useMemo(
-    () => ({ admin, loading, login, logout, setAdmin, can }),
-    [admin, loading, login, logout, can],
+    () => ({ admin, loading, login, verifyMfa, logout, setAdmin, can }),
+    [admin, loading, login, verifyMfa, logout, can],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

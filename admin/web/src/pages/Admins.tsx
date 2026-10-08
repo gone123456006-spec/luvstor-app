@@ -94,6 +94,7 @@ export default function Admins() {
                       <td>
                         <Badge value={a.active ? 'active' : 'disabled'} tone={a.active ? 'good' : 'muted'} />
                         {a.lockedUntil ? <> <Badge value="locked" tone="bad" /></> : null}
+                        {' '}<Badge value={a.mfaEnabled ? '2FA on' : '2FA off'} tone={a.mfaEnabled ? 'good' : 'warn'} />
                         {a.mustChangePassword ? <div className="muted small">Must set password</div> : null}
                       </td>
                       <td className="small">{a.lastLoginAt ? ago(a.lastLoginAt) : 'Never'}</td>
@@ -109,6 +110,14 @@ export default function Admins() {
                             >
                               Reset password
                             </button>
+                            {a.mfaEnabled ? (
+                              <button
+                                className="btn btn-sm"
+                                onClick={() => setConfirm({ id: a.id, title: 'Reset two-factor', message: `Remove ${a.email}'s authenticator app (for a lost phone)? They will be signed out and must set it up again on next sign-in.`, body: { resetMfa: true } })}
+                              >
+                                Reset 2FA
+                              </button>
+                            ) : null}
                             <button
                               className={`btn btn-sm ${a.active ? 'btn-danger' : ''}`}
                               onClick={() =>

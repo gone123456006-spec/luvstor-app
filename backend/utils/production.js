@@ -61,6 +61,16 @@ function validateProductionEnv() {
     );
   }
 
+  if (String(process.env.SMTP_DEV_MODE || '').toLowerCase() === 'true') {
+    warnings.push(
+      'SMTP_DEV_MODE=true in production — OTP is the fixed 123456 unless email (BREVO_API_KEY / SMTP) is configured. Remove it.',
+    );
+  }
+
+  if (!process.env.ADMIN_API_KEY?.trim() || String(process.env.ADMIN_API_KEY).trim().length < 24) {
+    warnings.push('ADMIN_API_KEY missing or shorter than 24 characters');
+  }
+
   if (!process.env.HEARTBEAT_SECRET?.trim()) {
     warnings.push(
       'HEARTBEAT_SECRET not set — /ping is open in production (Render blueprint auto-generates this)',

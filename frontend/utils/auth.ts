@@ -6,10 +6,10 @@ import {
 import {
     apiLogout,
     apiRequest,
-    AUTH_TOKEN_KEY,
     AUTH_USER_KEY,
 } from './api';
 import { durableMediaPathFromUrl } from './media';
+import { clearAuthToken, readAuthToken, writeAuthToken } from './tokenStore';
 import { normalizeEmail } from './normalizeEmail';
 
 export { normalizeEmail };
@@ -121,7 +121,7 @@ export async function markAuthUserProfileComplete(): Promise<void> {
 }
 
 export async function getAuthToken(): Promise<string | null> {
-  return AsyncStorage.getItem(AUTH_TOKEN_KEY);
+  return readAuthToken();
 }
 
 export async function getCurrentAuthUser(): Promise<AuthUser | null> {
@@ -341,8 +341,8 @@ export async function completeAccountLogin(
   const email = normalizeEmail(user.email);
   await prepareAccountSwitch(email);
 
+  await writeAuthToken(token);
   await AsyncStorage.multiSet([
-    [AUTH_TOKEN_KEY, token],
     [AUTH_USER_KEY, JSON.stringify({ ...user, email })],
     [ACTIVE_ACCOUNT_EMAIL_KEY, email],
   ]);
@@ -448,7 +448,7 @@ export async function routeAfterSignIn(
 /** Logout: notify server (clears device lock) + clear all local session data */
 export async function logout(): Promise<void> {
   try {
-    const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+    const token = await readAuthToken();
     if (token) {
       // Unregister FCM while the JWT is still valid (server logout also clears device tokens)
       try {
@@ -480,7 +480,8 @@ export async function logout(): Promise<void> {
     } catch {
       /* Google module may be absent in this binary */
     }
-    await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, AUTH_USER_KEY, ACTIVE_ACCOUNT_EMAIL_KEY]);
+    await clearAuthToken();
+    await AsyncStorage.multiRemove([AUTH_USER_KEY, ACTIVE_ACCOUNT_EMAIL_KEY]);
     await clearLegacyGlobalStorage();
   }
 }

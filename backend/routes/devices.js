@@ -1,3 +1,4 @@
+const { publicErrorMessage } = require('../utils/publicError');
 /**
  * Device (FCM token) registration.
  * Every endpoint requires a valid session — tokens are always bound to a user.
@@ -45,7 +46,7 @@ router.post('/register', auth, writeLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error('devices/register error:', err.message);
-    res.status(err.status || 500).json({ error: err.message || 'Server error' });
+    res.status(err.status || 500).json({ error: publicErrorMessage(err, 'Server error') });
   }
 });
 

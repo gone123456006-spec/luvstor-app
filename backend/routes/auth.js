@@ -19,6 +19,27 @@ const {
 } = require('../middleware/otpRateLimit');
 const { serializeUser, hasCompletedProfileSetup } = require('../utils/userHelpers');
 const { issueToken: issueAuthToken } = require('../utils/authToken');
+const { hashOtp, otpLookupValues } = require('../utils/otpHash');
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
+
+/** Per-IP caps on top of the per-email OTP limits (stops one host spraying many emails) */
+function ipLimiter(limit, windowMin) {
+  return rateLimit({
+    windowMs: windowMin * 60 * 1000,
+    limit,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+    handler: (_req, res) =>
+      res.status(429).json({
+        error: 'Too many attempts from this network. Please try again in a few minutes.',
+        code: 'RATE_LIMITED',
+      }),
+  });
+}
+const sendOtpIpLimiter = ipLimiter(40, 15);
+const verifyIpLimiter = ipLimiter(80, 15);
 const { generateUniquePublicId, ensureUserPublicId } = require('../utils/publicId');
 const { checkAndRestoreOnLogin } = require('../jobs/accountDeletion');
 const { isUserBanned, sendBanned } = require('../utils/accountBan');
@@ -168,7 +189,7 @@ router.get('/google-status', (req, res) => {
 // POST /api/auth/google
 // Body: { idToken, deviceId, forceTransfer? }
 // ─────────────────────────────────────────────
-router.post('/google', async (req, res) => {
+router.post('/google', verifyIpLimiter, async (req, res) => {
   try {
     const idToken = String(req.body.idToken || '').trim();
     const deviceId = String(req.body.deviceId || '').trim();
@@ -284,7 +305,7 @@ router.post('/google', async (req, res) => {
 // ─────────────────────────────────────────────
 // POST /api/auth/send-otp
 // ─────────────────────────────────────────────
-router.post('/send-otp', async (req, res) => {
+router.post('/send-otp', sendOtpIpLimiter, async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     if (!email || !EMAIL_REGEX.test(email)) {
@@ -316,7 +337,7 @@ router.post('/send-otp', async (req, res) => {
 
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + smtpConfig.otpExpiryMinutes * 60 * 1000);
-    await OTP.create({ email, otp, expiresAt });
+    await OTP.create({ email, otp: hashOtp(email, otp), expiresAt });
 
     await sendOTPEmail(email, otp);
     recordOtpSent(email);
@@ -347,7 +368,12 @@ router.post('/send-otp', async (req, res) => {
               ? `Cannot reach SMTP (${smtpConfig.host}:${smtpConfig.port}). On Render free tier set BREVO_API_KEY instead.`
               : 'Failed to send verification email. Check BREVO_API_KEY / SMTP settings.';
 
-    res.status(500).json({ error: message });
+    res.status(500).json({
+      error:
+        process.env.NODE_ENV === 'production'
+          ? 'Could not send the verification email. Please try again in a moment.'
+          : message,
+    });
   }
 });
 
@@ -356,7 +382,7 @@ router.post('/send-otp', async (req, res) => {
 // Body: { email, otp, deviceId, forceTransfer? }
 // forceTransfer: after OTP identity check, move the session to this device
 // ─────────────────────────────────────────────
-router.post('/verify-otp', async (req, res) => {
+router.post('/verify-otp', verifyIpLimiter, async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     const otp = String(req.body.otp || '').trim();
@@ -387,7 +413,7 @@ router.post('/verify-otp', async (req, res) => {
         ? null
         : OTP.findOne({
             email,
-            otp,
+            otp: otpLookupValues(email, otp),
             used: false,
             expiresAt: { $gt: new Date() },
           }).sort({ createdAt: -1 }),
@@ -470,7 +496,7 @@ router.post('/verify-otp', async (req, res) => {
         const otp = String(req.body.otp || '').trim();
         const record = await OTP.findOne({
           email,
-          otp,
+          otp: otpLookupValues(email, otp),
           used: false,
           expiresAt: { $gt: new Date() },
         }).sort({ createdAt: -1 });
@@ -494,7 +520,7 @@ router.post('/verify-otp', async (req, res) => {
 // OTP-verified force bind to a new device (reinstall / new phone)
 // Body: { email, otp, deviceId }
 // ─────────────────────────────────────────────
-router.post('/transfer-device', async (req, res) => {
+router.post('/transfer-device', verifyIpLimiter, async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     const otp = String(req.body.otp || '').trim();
@@ -517,7 +543,7 @@ router.post('/transfer-device', async (req, res) => {
 
     const record = await OTP.findOne({
       email,
-      otp,
+      otp: otpLookupValues(email, otp),
       used: false,
       expiresAt: { $gt: new Date() },
     }).sort({ createdAt: -1 });

@@ -27,7 +27,8 @@ import {
   logout,
   syncDeviceSessionIfNeeded,
 } from '../utils/auth';
-import { AUTH_TOKEN_KEY, AUTH_USER_KEY, setOnSessionInvalid } from '../utils/api';
+import { AUTH_USER_KEY, setOnSessionInvalid } from '../utils/api';
+import { clearAuthToken } from '../utils/tokenStore';
 import { clearLegacyGlobalStorage } from '../utils/accountStorage';
 import { hydrateNearbyFeedCache } from '../utils/nearbyFeedCache';
 import { withTimeout } from '../utils/withTimeout';
@@ -45,7 +46,8 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 async function clearLocalSessionOnly() {
-  await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, AUTH_USER_KEY, ACTIVE_ACCOUNT_EMAIL_KEY]);
+  await clearAuthToken();
+  await AsyncStorage.multiRemove([AUTH_USER_KEY, ACTIVE_ACCOUNT_EMAIL_KEY]);
   await clearLegacyGlobalStorage();
 }
 

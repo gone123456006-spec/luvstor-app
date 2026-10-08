@@ -1,3 +1,4 @@
+const { publicErrorMessage } = require('../utils/publicError');
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
@@ -94,7 +95,7 @@ router.get('/chat-access', auth, async (req, res) => {
     });
   } catch (err) {
     console.error('tokens/chat-access error:', err);
-    res.status(err.status || 500).json({ error: err.message || 'Server error' });
+    res.status(err.status || 500).json({ error: publicErrorMessage(err, 'Server error') });
   }
 });
 
@@ -183,7 +184,7 @@ router.post('/ensure-session', auth, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('tokens/ensure-session error:', err);
-    res.status(err.status || 500).json({ error: err.message || 'Server error' });
+    res.status(err.status || 500).json({ error: publicErrorMessage(err, 'Server error') });
   }
 });
 

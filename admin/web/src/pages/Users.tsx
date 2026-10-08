@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { qs } from '../api';
 import { useApi, useDebounced } from '../hooks';
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Pager, PlanBadge, Stat, UserChip } from '../components/ui';
+import { AppVersionCell } from '../components/AppVersion';
 import { ago, dateOnly, num } from '../format';
 
 function UserStats({ onStatus }: { onStatus: (status: string) => void }) {
@@ -103,6 +104,7 @@ export default function Users() {
                   <th>Login</th>
                   <th>Plan</th>
                   <th>Photo check</th>
+                  <th>App version</th>
                   <th className="num">Tokens</th>
                   <th>Last seen</th>
                   <th>Joined</th>
@@ -116,6 +118,7 @@ export default function Users() {
                     <td className="small">{u.authProvider}</td>
                     <td><PlanBadge plan={u.plan} /></td>
                     <td><Badge value={u.photoVerification} /></td>
+                    <td><AppVersionCell app={u.app} /></td>
                     <td className="num">{num(u.tokenBalance)}</td>
                     <td className="small">{u.isOnline ? <Badge value="online" tone="good" /> : ago(u.lastSeen)}</td>
                     <td className="small">{dateOnly(u.createdAt)}</td>

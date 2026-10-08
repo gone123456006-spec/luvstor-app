@@ -2,6 +2,7 @@
  * Create (or reset) an admin account from the command line.
  *   npm run create-admin -- --email you@example.com --name "You" [--role owner]
  * Prints a one-time temporary password; it must be changed on first sign-in.
+ * Resetting an existing admin also clears their two-factor authentication.
  */
 const crypto = require('crypto');
 const { config } = require('../config');
@@ -35,9 +36,16 @@ async function run() {
     existing.failedLogins = 0;
     existing.lockUntil = null;
     existing.tokenVersion = (existing.tokenVersion || 0) + 1;
+    // Lost-phone recovery: MFA is set up again after the next sign-in
+    existing.mfaEnabled = false;
+    existing.mfaSecret = '';
+    existing.mfaPendingSecret = '';
+    existing.mfaRecoveryCodes = [];
+    existing.mfaLastStep = -1;
+    existing.mfaEnabledAt = null;
     if (name) existing.name = name;
     await existing.save();
-    console.log(`Reset admin ${email} (${role}).`);
+    console.log(`Reset admin ${email} (${role}); two-factor authentication must be set up again.`);
   } else {
     await AdminUser.create({ email, name, role, passwordHash, mustChangePassword: true });
     console.log(`Created admin ${email} (${role}).`);

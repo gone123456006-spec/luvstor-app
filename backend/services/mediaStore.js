@@ -27,10 +27,51 @@ function mediaIdFromUrl(url) {
   return null;
 }
 
+/** Real type from the file header — the client-declared mime is not trusted */
+function sniffMime(buf) {
+  if (!buf || buf.length < 12) return null;
+  const hex = buf.subarray(0, 12).toString('hex');
+  const ascii = buf.subarray(0, 12).toString('latin1');
+  if (hex.startsWith('ffd8ff')) return 'image/jpeg';
+  if (hex.startsWith('89504e47')) return 'image/png';
+  if (ascii.startsWith('GIF8')) return 'image/gif';
+  if (ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WEBP') return 'image/webp';
+  if (ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WAVE') return 'audio/wav';
+  if (ascii.slice(4, 8) === 'ftyp') {
+    const brand = ascii.slice(8, 12).toLowerCase();
+    if (['heic', 'heix', 'hevc', 'mif1', 'msf1', 'heis'].includes(brand)) return 'image/heic';
+    if (brand === 'avif') return 'image/avif';
+    if (brand.startsWith('3gp')) return 'audio/3gpp';
+    return 'audio/mp4';
+  }
+  if (ascii.startsWith('ID3') || hex.startsWith('fffb') || hex.startsWith('fff3')) return 'audio/mpeg';
+  if (hex.startsWith('fff1') || hex.startsWith('fff9')) return 'audio/aac';
+  if (ascii.startsWith('OggS')) return 'audio/ogg';
+  if (hex.startsWith('1a45dfa3')) return 'audio/webm';
+  if (ascii.startsWith('#!AMR')) return 'audio/amr';
+  if (ascii.startsWith('caff')) return 'audio/x-caf';
+  return null;
+}
+
+const SAFE_DECLARED = /^(image\/(jpeg|jpg|png|gif|webp|heic|heif|avif)|audio\/[a-z0-9.+-]+)$/i;
+
+/** Mime we are willing to serve back; never html / svg / script */
+function safeMime(buffer, declared) {
+  const sniffed = sniffMime(buffer);
+  if (sniffed) {
+    // m4a voice notes and mp4-family images share `ftyp`; keep a declared image/* for heif
+    if (sniffed === 'audio/mp4' && SAFE_DECLARED.test(String(declared || ''))) return declared;
+    return sniffed;
+  }
+  return SAFE_DECLARED.test(String(declared || '')) ? declared : 'application/octet-stream';
+}
+
 function kindFromMime(mime, prefix) {
+  if (prefix === 'img') return 'image';
+  if (prefix === 'aud') return 'audio';
   const m = String(mime || '').toLowerCase();
-  if (m.startsWith('image/') || prefix === 'img') return 'image';
-  if (m.startsWith('audio/') || prefix === 'aud') return 'audio';
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('audio/')) return 'audio';
   return 'other';
 }
 
@@ -55,7 +96,7 @@ async function persistMediaBuffer({
     throw new Error('File too large (max 14MB)');
   }
 
-  const resolvedMime = mime || defaultMime || 'application/octet-stream';
+  const resolvedMime = safeMime(buffer, mime || defaultMime);
   const fileName = `${prefix || 'file'}_${Date.now()}_${Math.random()
     .toString(36)
     .slice(2)}`;

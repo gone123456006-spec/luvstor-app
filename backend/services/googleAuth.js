@@ -72,6 +72,12 @@ async function verifyGoogleIdToken(idToken) {
     throw err;
   }
 
+  if (typeof idToken !== 'string' || idToken.length < 20 || idToken.length > 8192) {
+    const err = new Error('Invalid Google ID token');
+    err.code = 'GOOGLE_TOKEN_INVALID';
+    throw err;
+  }
+
   const client = getClient();
   let ticket;
   try {
@@ -83,7 +89,9 @@ async function verifyGoogleIdToken(idToken) {
     const err = new Error(
       e.message?.includes('Wrong recipient') || e.message?.includes('audience')
         ? 'Google token audience mismatch. Ensure GOOGLE_WEB_CLIENT_ID / GOOGLE_ANDROID_CLIENT_ID match the app.'
-        : `Invalid Google ID token: ${e.message}`,
+        : process.env.NODE_ENV === 'production'
+          ? 'Invalid Google ID token'
+          : `Invalid Google ID token: ${e.message}`,
     );
     err.code = 'GOOGLE_TOKEN_INVALID';
     err.cause = e;

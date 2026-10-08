@@ -44,6 +44,7 @@ import {
     saveLocalProfile,
 } from "../../utils/auth";
 import { durableMediaPathFromUrl, resolveMediaUrl } from "../../utils/media";
+import { checkBio } from "../../utils/bioFilter";
 import {
     getCachedProfile,
     preloadProfile,
@@ -997,7 +998,12 @@ export default function ProfileScreen() {
 
   const saveEditProfile = async () => {
     const name = editName.trim();
-    const bio = editBio.trim();
+    const bioCheck = checkBio(editBio);
+    if (!bioCheck.ok) {
+      Alert.alert("About Me", bioCheck.error);
+      return;
+    }
+    const bio = bioCheck.bio;
     const ageNum = editAge.trim() ? parseInt(editAge.trim(), 10) : null;
     const heightNum = editHeight.trim()
       ? parseInt(editHeight.trim(), 10)

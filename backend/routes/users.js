@@ -198,6 +198,15 @@ router.put("/me", auth, async (req, res) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
 
+    if (updates.bio !== undefined) {
+      const { checkBio } = require("../utils/bioFilter");
+      const verdict = checkBio(updates.bio);
+      if (!verdict.ok) {
+        return res.status(400).json({ error: verdict.error, code: verdict.code, field: "bio" });
+      }
+      updates.bio = verdict.bio;
+    }
+
     // Never persist file:// / content:// / LAN absolutes — they blank after reinstall
     if (updates.photo !== undefined) {
       const next = sanitizeProfileMediaUpdate(updates.photo);

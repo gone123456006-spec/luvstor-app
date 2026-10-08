@@ -26,6 +26,9 @@ const { mainApi } = require('../lib/mainApi');
 const { LIST_FIELDS, listUser, loadUserRefs, accountStatus, PAID_PLANS } = require('../lib/users');
 const { requirePermission } = require('../middleware/auth');
 const { revokeAppSessions } = require('../lib/sessions');
+const { appInfoForUsers } = require('../lib/appVersions');
+
+const APP_VERSION_FIELDS = 'appVersion appBuild appPlatform appVersionSeenAt';
 
 const router = express.Router();
 const MAX_MS = 15_000;
@@ -87,10 +90,22 @@ router.get(
     }[sort];
 
     const [rows, total] = await Promise.all([
-      User.find(filter).select(LIST_FIELDS).sort(sortSpec).skip(skip).limit(limit).lean().maxTimeMS(MAX_MS),
+      User.find(filter)
+        .select(`${LIST_FIELDS} ${APP_VERSION_FIELDS}`)
+        .sort(sortSpec)
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .maxTimeMS(MAX_MS),
       User.countDocuments(filter).maxTimeMS(MAX_MS),
     ]);
-    res.json({ users: rows.map(listUser), page, limit, total });
+    const appInfo = await appInfoForUsers(rows).catch(() => new Map());
+    res.json({
+      users: rows.map((u) => ({ ...listUser(u), app: appInfo.get(String(u._id)) || null })),
+      page,
+      limit,
+      total,
+    });
   }),
 );
 
@@ -164,9 +179,12 @@ router.get(
       ...recentCalls.flatMap((c) => [c.callerId, c.calleeId]),
     ]);
 
+    const appInfo = await appInfoForUsers([user]).catch(() => new Map());
+
     await audit(req, 'users.view', { targetType: 'user', targetId: id });
 
     res.json({
+      app: appInfo.get(String(user._id)) || null,
       user: {
         ...listUser(user),
         bio: user.bio || '',

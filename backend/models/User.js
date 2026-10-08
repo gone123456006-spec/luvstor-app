@@ -77,6 +77,11 @@ const userSchema = new mongoose.Schema({
   /** Single-device session: only this installation may use the account */
   activeDeviceId: { type: String, default: null },
   activeDeviceBoundAt: { type: Date, default: null },
+  /** Last app build seen on authenticated requests (admin "App versions"); never sent to other users */
+  appVersion: { type: String, default: null, select: false },
+  appBuild: { type: String, default: null, select: false },
+  appPlatform: { type: String, default: null, select: false },
+  appVersionSeenAt: { type: Date, default: null, select: false },
   /** Chat access tokens (independent of offers / premiums / trials) */
   tokenBalance: { type: Number, default: 0, min: 0 },
   /**

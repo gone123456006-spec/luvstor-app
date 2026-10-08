@@ -19,6 +19,7 @@ function view(a) {
     lastLoginAt: a.lastLoginAt,
     lockedUntil: a.lockUntil && a.lockUntil > new Date() ? a.lockUntil : null,
     mustChangePassword: !!a.mustChangePassword,
+    mfaEnabled: !!a.mfaEnabled,
     createdAt: a.createdAt,
   };
 }
@@ -100,8 +101,20 @@ router.patch(
       admin.failedLogins = 0;
       changes.unlocked = true;
     }
+    if (req.body?.resetMfa === true) {
+      if (String(admin._id) === String(req.admin._id)) {
+        throw new HttpError(400, 'Use your Account page to manage your own two-factor authentication');
+      }
+      admin.mfaEnabled = false;
+      admin.mfaSecret = '';
+      admin.mfaPendingSecret = '';
+      admin.mfaRecoveryCodes = [];
+      admin.mfaLastStep = -1;
+      admin.mfaEnabledAt = null;
+      changes.mfaReset = true;
+    }
     // Any security-relevant change kills existing sessions
-    if (changes.role || changes.active || changes.passwordReset) {
+    if (changes.role || changes.active || changes.passwordReset || changes.mfaReset) {
       admin.tokenVersion = (admin.tokenVersion || 0) + 1;
     }
     await admin.save();

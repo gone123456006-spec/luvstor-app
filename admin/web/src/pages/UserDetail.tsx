@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { Avatar, Badge, Card, ConfirmAction, Empty, ErrorBox, KeyValue, Loading, Modal, PageHeader, PlanBadge, Stat, UserChip, useToast } from '../components/ui';
+import { platformLabel, VersionStatusBadge, type AppInfo } from '../components/AppVersion';
 import { ago, dateTime, duration, label, mediaUrl, num, pct } from '../format';
 
 type Action = 'ban' | 'unban' | 'logout' | 'tokens' | 'reset' | 'restore' | 'notify' | null;
@@ -66,6 +67,7 @@ export default function UserDetail() {
   if (error && !data) return <ErrorBox error={error} onRetry={reload} />;
   if (!data) return null;
   const { user: u, stats } = data;
+  const app: AppInfo | null = data.app || null;
   const pv = u.photoVerificationDetail || {};
   const base = admin?.mediaBaseUrl || '';
 
@@ -163,6 +165,27 @@ export default function UserDetail() {
               ['User ID', <span className="mono">{u.id}</span>],
               ['Login method', u.authProvider],
               ['Bound device', u.activeDeviceId ? `${u.activeDeviceId} · ${ago(u.activeDeviceBoundAt)}` : 'None'],
+              [
+                'App version',
+                app?.version ? (
+                  <>
+                    <span className="mono">{app.version}</span>
+                    {app.build ? <span className="muted small"> (build {app.build})</span> : null}
+                    {app.platform ? <span className="muted small"> · {platformLabel(app.platform)}</span> : null}{' '}
+                    <VersionStatusBadge status={app.status} />
+                    <div className="muted small">
+                      {app.status === 'outdated' && app.latest ? `Latest is ${app.latest}. ` : ''}
+                      {app.source === 'push'
+                        ? 'From push registration (older app build)'
+                        : app.seenAt
+                          ? `Seen ${ago(app.seenAt)}`
+                          : ''}
+                    </div>
+                  </>
+                ) : (
+                  <span className="muted">Unknown — hasn't opened a build that reports its version</span>
+                ),
+              ],
               ['Photo check', <><Badge value={u.photoVerification} />{pv.matchScore != null ? <span className="muted small"> match {pct(pv.matchScore > 1 ? pv.matchScore / 100 : pv.matchScore)}</span> : null}</>],
               ['Photo check note', pv.reviewNote || '—'],
               ['Referral code', u.referralCode || '—'],
