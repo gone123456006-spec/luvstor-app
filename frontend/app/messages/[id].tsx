@@ -2,7 +2,15 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { type AudioRecorder } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "../../utils/haptics";
+import {
+  CHAT_TEXT_SIZES,
+  myBubbleColor,
+  useAccessibility,
+  wallpaperColor,
+} from "../../contexts/AccessibilityContext";
+import ChatWallpaperPattern from "../../components/ChatWallpaperPattern";
+import { findPattern } from "../../utils/chatPatterns";
 import { Image } from "expo-image";
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -38,6 +46,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    useWindowDimensions,
     View,
 } from "react-native";
 import {
@@ -131,6 +140,8 @@ import {
     setThreadCacheAccount,
     type CachedChatMsg,
 } from "../../utils/threadCache";
+import { NAV_ICON } from "../../utils/platformIcons";
+import { tc, themedStyles } from "../../utils/theme";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 /** Compact on small phones, slightly larger on tablets */
@@ -362,7 +373,7 @@ function DeliveryTicks({
       <Ionicons
         name="checkmark"
         size={13}
-        color={light ? "rgba(255,255,255,0.8)" : "#8696A0"}
+        color={light ? tc("rgba(255,255,255,0.8)", "fg") : tc("#8696A0", "fg")}
         style={styles.singleDeliveryTick}
       />
     );
@@ -423,12 +434,16 @@ function MessageBubbleText({
 }) {
   const timeLabel = fmtTime(createdAt);
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const { prefs } = useAccessibility();
+  const size = CHAT_TEXT_SIZES[prefs.chatTextSize];
 
   return (
     <View style={styles.messageTextWrap}>
       <Text
         style={[
           styles.messageText,
+          { fontSize: size.fontSize, lineHeight: size.lineHeight },
+          prefs.boldChatText && styles.messageTextBold,
           isMe ? styles.myMessageText : styles.otherMessageText,
         ]}
         onTextLayout={(event) => {
@@ -885,6 +900,10 @@ const MessageItem = React.memo(function MessageItem({
   otherName: string;
 }) {
   const isMe = item.sender === "me";
+  const { prefs: a11yPrefs } = useAccessibility();
+  const myBubbleTint = isMe
+    ? { backgroundColor: myBubbleColor(a11yPrefs), borderColor: myBubbleColor(a11yPrefs) }
+    : null;
   const rowStyle = [
     styles.messageRow,
     isSelected && styles.selectedMessageRow,
@@ -932,7 +951,7 @@ const MessageItem = React.memo(function MessageItem({
               <Ionicons
                 name="mic"
                 size={13}
-                color={isMe ? "rgba(255,255,255,0.85)" : "#6750A4"}
+                color={isMe ? tc("rgba(255,255,255,0.85)", "fg") : tc("#6750A4", "fg")}
                 style={{ marginRight: 4 }}
               />
             ) : null}
@@ -959,7 +978,7 @@ const MessageItem = React.memo(function MessageItem({
             <Ionicons
               name="eye-off"
               size={15}
-              color={isMe ? "#fff" : "#6750A4"}
+              color={isMe ? "#fff" : tc("#6750A4", "fg")}
             />
           </View>
         ) : thumb ? (
@@ -997,7 +1016,7 @@ const MessageItem = React.memo(function MessageItem({
     return (
       <View style={styles.callEventRow}>
         <View style={styles.callEventChip}>
-          <Ionicons name={icon as any} size={14} color="#667781" />
+          <Ionicons name={icon as any} size={14} color={tc("#667781", "fg")} />
           <Text style={styles.callEventText}>{label}</Text>
         </View>
       </View>
@@ -1023,7 +1042,7 @@ const MessageItem = React.memo(function MessageItem({
               <Ionicons
                 name="ban-outline"
                 size={14}
-                color={isMe ? "rgba(255,255,255,0.7)" : "#999"}
+                color={isMe ? tc("rgba(255,255,255,0.7)", "fg") : tc("#999", "fg")}
                 style={{ marginRight: 6 }}
               />
               <Text
@@ -1102,6 +1121,7 @@ const MessageItem = React.memo(function MessageItem({
                   styles.messageBubble,
                   styles.viewOnceBubble,
                   isMe ? styles.myBubbleBorder : styles.otherBubbleBorder,
+                  myBubbleTint,
                 ]}
               >
                 {renderReplyPreview()}
@@ -1117,7 +1137,7 @@ const MessageItem = React.memo(function MessageItem({
                     <Ionicons
                       name="eye-off-outline"
                       size={15}
-                      color={isMe ? "#fff" : "#6750A4"}
+                      color={isMe ? "#fff" : tc("#6750A4", "fg")}
                     />
                     <View
                       style={[
@@ -1202,7 +1222,7 @@ const MessageItem = React.memo(function MessageItem({
                       styles.viewOnceIconCircleOther,
                     ]}
                   >
-                    <Ionicons name="eye-outline" size={15} color="#6750A4" />
+                    <Ionicons name="eye-outline" size={15} color={tc("#6750A4", "fg")} />
                     <View
                       style={[
                         styles.viewOnceOneBadge,
@@ -1395,6 +1415,7 @@ const MessageItem = React.memo(function MessageItem({
             style={[
               styles.messageBubble,
               isMe ? styles.myBubbleBorder : styles.otherBubbleBorder,
+              myBubbleTint,
             ]}
           >
             {renderReplyPreview()}
@@ -1442,6 +1463,12 @@ export default function MessageScreen() {
   }>();
   const peerId = String(Array.isArray(id) ? id[0] : id || "");
   const router = useRouter();
+  const { prefs: a11yPrefs, isDark: isDarkTheme } = useAccessibility();
+  const chatBg = wallpaperColor(a11yPrefs);
+  const chatWallpaperUri =
+    a11yPrefs.chatWallpaper === "photo" ? a11yPrefs.chatWallpaperUri : null;
+  const chatPattern = findPattern(a11yPrefs.chatWallpaper);
+  const { width: winW, height: winH } = useWindowDimensions();
   const { showAlert } = useAppAlert();
   const { sessionVersion, user } = useAuth();
   const {
@@ -4707,7 +4734,7 @@ export default function MessageScreen() {
         pointerEvents={callUiBlocking ? "none" : "auto"}
       >
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView edges={["top"]} style={{ backgroundColor: "#FFFFFF" }}>
+      <SafeAreaView edges={["top"]} style={{ backgroundColor: tc("#FFFFFF", "bg") }}>
         {inCallChatBanner ? <View style={styles.inCallBannerSpacer} /> : null}
         {selectionMode ? (
           <View style={styles.selectionHeader}>
@@ -4716,7 +4743,7 @@ export default function MessageScreen() {
                 onPress={() => setSelectedMessages([])}
                 style={styles.backButton}
               >
-                <Ionicons name="close" size={28} color="#333" />
+                <Ionicons name="close" size={28} color={tc("#333", "fg")} />
               </TouchableOpacity>
               <Text style={styles.selectionCountText}>
                 {selectedMessages.length} selected
@@ -4735,7 +4762,7 @@ export default function MessageScreen() {
               onPress={() => router.back()}
               style={styles.backButton}
             >
-              <Ionicons name="chevron-back" size={28} color="#333" />
+              <Ionicons name={NAV_ICON.back} size={28} color={tc("#333", "fg")} />
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.userInfo}
@@ -4815,7 +4842,7 @@ export default function MessageScreen() {
                       friendshipStatus?.theyBlocked ||
                       friendshipStatus?.iBlocked ||
                       (!isTyping && !otherUserOnline)
-                        ? { color: "#999" }
+                        ? { color: tc("#999", "fg") }
                         : null,
                     ]}
                   >
@@ -4840,7 +4867,7 @@ export default function MessageScreen() {
                   (isMatched || seededFriends) &&
                   !friendshipStatus?.iBlocked &&
                   !friendshipStatus?.theyBlocked;
-                const iconColor = canCall ? "#111B21" : "#B0B0B0";
+                const iconColor = canCall ? tc("#111B21", "fg") : "#B0B0B0";
                 const startCall = (callType: "voice" | "video") => {
                   if (!id) {
                     showAlert({
@@ -4931,7 +4958,7 @@ export default function MessageScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="More options"
               >
-                <Ionicons name="ellipsis-vertical" size={22} color="#111B21" />
+                <Ionicons name={NAV_ICON.more} size={22} color={tc("#111B21", "fg")} />
               </TouchableOpacity>
             </View>
           </View>
@@ -4939,10 +4966,25 @@ export default function MessageScreen() {
       </SafeAreaView>
 
       <KeyboardAvoidingView
-        style={styles.chatContainer}
+        style={[styles.chatContainer, { backgroundColor: chatBg }]}
         behavior="padding"
         keyboardVerticalOffset={0}
       >
+        {chatWallpaperUri ? (
+          <Image
+            source={{ uri: chatWallpaperUri }}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            pointerEvents="none"
+          />
+        ) : chatPattern ? (
+          <ChatWallpaperPattern
+            pattern={chatPattern}
+            width={winW}
+            height={winH}
+            dark={isDarkTheme || a11yPrefs.wallpaperDark}
+          />
+        ) : null}
         {messages.length === 0 && !loading && (
           <View style={styles.emptyChatBanner}>
             <Text style={styles.emptyChatText}>
@@ -4954,7 +4996,10 @@ export default function MessageScreen() {
           <ChatThreadSkeleton />
         ) : (
           <FlatList
-            style={styles.messagesFlatList}
+            style={[
+              styles.messagesFlatList,
+              { backgroundColor: chatWallpaperUri || chatPattern ? "transparent" : chatBg },
+            ]}
             ref={flatListRef}
             data={listData}
             inverted
@@ -5065,7 +5110,7 @@ export default function MessageScreen() {
                 onPress={() => void dismissCallPrompt()}
                 hitSlop={10}
               >
-                <Ionicons name="close" size={18} color="#666" />
+                <Ionicons name="close" size={18} color={tc("#666", "fg")} />
               </TouchableOpacity>
             </View>
           )}
@@ -5129,11 +5174,11 @@ export default function MessageScreen() {
               </View>
               {replyingTo.viewOnce ? (
                 <View style={styles.replyingToViewOnceThumb}>
-                  <Ionicons name="eye-off" size={18} color="#6750A4" />
+                  <Ionicons name="eye-off" size={18} color={tc("#6750A4", "fg")} />
                 </View>
               ) : isAudioReply(replyingTo) ? (
                 <View style={styles.replyingToViewOnceThumb}>
-                  <Ionicons name="mic" size={18} color="#6750A4" />
+                  <Ionicons name="mic" size={18} color={tc("#6750A4", "fg")} />
                 </View>
               ) : replyThumbUri(replyingTo) ? (
                 <RNImage
@@ -5148,7 +5193,7 @@ export default function MessageScreen() {
                 style={styles.cancelReplyingToButton}
                 hitSlop={8}
               >
-                <Ionicons name="close" size={20} color="#667781" />
+                <Ionicons name="close" size={20} color={tc("#667781", "fg")} />
               </TouchableOpacity>
             </View>
           )}
@@ -5200,7 +5245,7 @@ export default function MessageScreen() {
                     color={
                       friendshipStatus?.theyBlocked || !isMediaUnlocked
                         ? "#B0B0B0"
-                        : "#111B21"
+                        : tc("#111B21", "fg")
                     }
                   />
                 </TouchableOpacity>
@@ -5214,7 +5259,7 @@ export default function MessageScreen() {
                         isRecording && styles.inputWhileRecording,
                       ]}
                       placeholder="Message"
-                      placeholderTextColor="#999"
+                      placeholderTextColor={tc("#999", "fg")}
                       value={inputText}
                       onChangeText={handleTyping}
                       multiline
@@ -5283,7 +5328,7 @@ export default function MessageScreen() {
                       color={
                         friendshipStatus?.theyBlocked || !isMediaUnlocked
                           ? "#B0B0B0"
-                          : "#54656F"
+                          : tc("#54656F", "fg")
                       }
                     />
                   </TouchableOpacity>
@@ -5522,7 +5567,7 @@ export default function MessageScreen() {
               activeOpacity={0.7}
               hitSlop={8}
             >
-              <Ionicons name="arrow-back" size={24} color="#262626" />
+              <Ionicons name={NAV_ICON.back} size={24} color={tc("#262626", "fg")} />
             </TouchableOpacity>
             <Text style={styles.optionsTitle} numberOfLines={1}>
               Options
@@ -5581,7 +5626,7 @@ export default function MessageScreen() {
                       color={
                         friendshipStatus?.areFriends || friendshipStatus?.iLiked
                           ? "#ED4956"
-                          : "#262626"
+                          : tc("#262626", "fg")
                       }
                     />
                   </TouchableOpacity>
@@ -5604,7 +5649,7 @@ export default function MessageScreen() {
                       : "notifications-off-outline"
                   }
                   size={22}
-                  color="#262626"
+                  color={tc("#262626", "fg")}
                 />
               </TouchableOpacity>
               <View style={styles.optionsDivider} />
@@ -5615,7 +5660,7 @@ export default function MessageScreen() {
                 activeOpacity={0.65}
               >
                 <Text style={styles.optionsRowText}>Share</Text>
-                <Ionicons name="share-outline" size={22} color="#262626" />
+                <Ionicons name={NAV_ICON.share} size={22} color={tc("#262626", "fg")} />
               </TouchableOpacity>
               <View style={styles.optionsDivider} />
               <TouchableOpacity
@@ -5738,7 +5783,7 @@ export default function MessageScreen() {
                     onPress={() => setBlockSheetOpen(false)}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="close" size={20} color="#6750A4" />
+                    <Ionicons name="close" size={20} color={tc("#6750A4", "fg")} />
                   </TouchableOpacity>
                 </View>
                 <View style={styles.optInfoCard}>
@@ -5810,7 +5855,7 @@ export default function MessageScreen() {
                     onPress={() => setReportOpen(false)}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="close" size={20} color="#6750A4" />
+                    <Ionicons name="close" size={20} color={tc("#6750A4", "fg")} />
                   </TouchableOpacity>
                 </View>
                 <View style={styles.optInfoCard}>
@@ -5884,7 +5929,7 @@ export default function MessageScreen() {
                     onPress={() => setReasonPickerOpen(false)}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="close" size={20} color="#6750A4" />
+                    <Ionicons name="close" size={20} color={tc("#6750A4", "fg")} />
                   </TouchableOpacity>
                 </View>
                 <View style={styles.optActionCard}>
@@ -5928,7 +5973,8 @@ export default function MessageScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: "#ECE5DD", position: "relative" },
   chatLeaveLayer: { flex: 1 },
   inCallBannerSpacer: { height: 62 },
@@ -6106,8 +6152,8 @@ const styles = StyleSheet.create({
   optAlertCard: {
     width: "100%",
     maxWidth: 300,
-    backgroundColor: "#E4E6EB",
-    borderRadius: 16,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 26,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#E7E0EC",
@@ -6135,6 +6181,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#E7E0EC",
     minHeight: 52,
+    backgroundColor: "#FFFFFF",
   },
   optAlertBtn: {
     flex: 1,
@@ -6162,7 +6209,7 @@ const styles = StyleSheet.create({
   },
   optSheet: {
     width: "100%",
-    backgroundColor: "#E4E6EB",
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 14,
@@ -6208,10 +6255,8 @@ const styles = StyleSheet.create({
   },
   optActionCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 18,
+    borderRadius: 22,
     overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#E7E0EC",
   },
   optActionRow: {
     flexDirection: "row",
@@ -6255,8 +6300,8 @@ const styles = StyleSheet.create({
   },
   reportSheet: {
     backgroundColor: "#fff",
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     paddingBottom: 20,
     paddingTop: 6,
   },
@@ -6301,7 +6346,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     alignItems: "center",
     paddingVertical: 13,
-    borderRadius: 10,
+    borderRadius: 24,
     backgroundColor: "#F0F2F5",
   },
   reportCancelText: {
@@ -6544,6 +6589,9 @@ const styles = StyleSheet.create({
     fontSize: 15.5,
     lineHeight: 20.5,
     flexShrink: 1,
+  },
+  messageTextBold: {
+    fontWeight: "600",
   },
   messageMetaInline: {
     flexDirection: "row",
@@ -7211,4 +7259,5 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(103,80,164,0.1)",
   },
   cancelReplyingToButton: { padding: 4 },
-});
+}),
+);

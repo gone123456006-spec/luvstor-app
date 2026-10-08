@@ -79,9 +79,10 @@ import {
 } from "../../utils/recentSearches";
 import { getCachedProfile, preloadProfile } from "../../utils/profileCache";
 import { apiRequest } from "../../utils/api";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
 /** Discover theme — deep purple + black */
-const D = {
+const D = themedPalette({
   purple: "#370372",
   purpleSoft: "#EFE8F8",
   purpleTrack: "#E8E0F2",
@@ -91,7 +92,7 @@ const D = {
   muted: "#79747E",
   border: "#E7E0EC",
   danger: "#ED4956",
-};
+});
 
 const GENDER_OPTIONS = ["All", "Man", "Woman", "Other"];
 const DISTANCE_OPTIONS = [
@@ -1683,7 +1684,7 @@ export default function DiscoverScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={{ flex: 1, backgroundColor: D.bg }}>
-        <StatusBar barStyle="dark-content" backgroundColor={D.bg} />
+        <StatusBar barStyle={statusBarStyle()} backgroundColor={D.bg} />
 
         {/* ── Header ── */}
         <View style={styles.header}>
@@ -1753,7 +1754,7 @@ export default function DiscoverScreen() {
             <Ionicons
               name="search"
               size={18}
-              color="#65676B"
+              color={tc("#65676B", "fg")}
               style={styles.searchIcon}
             />
             <Text style={styles.searchPlaceholder}>Search</Text>
@@ -1875,7 +1876,7 @@ export default function DiscoverScreen() {
                 pressed && Platform.OS === "ios" && styles.filterBtnPressed,
               ]}
               hitSlop={8}
-              android_ripple={{ color: "rgba(0,0,0,0.08)", radius: 14 }}
+              android_ripple={{ color: tc("rgba(0,0,0,0.08)", "fg"), radius: 14 }}
               onPress={() => {
                 dismissSearchKeyboard();
                 setPrefsVisible(true);
@@ -2320,7 +2321,8 @@ function clampedRatio(index: number, maxIndex: number) {
   return Math.min(Math.max(index, 0), maxIndex) / maxIndex;
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: D.bg },
   header: {
     flexDirection: "row",
@@ -2686,7 +2688,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   prefsSheet: {
-    backgroundColor: "#E4E6EB",
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
@@ -2815,4 +2817,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
   },
-});
+}),
+);

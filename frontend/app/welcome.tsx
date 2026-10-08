@@ -111,7 +111,11 @@ function GetStartedButton({ onPress }: { onPress: () => void }) {
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel="Get started"
-      style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
+      android_ripple={{ color: "rgba(55,3,114,0.12)", borderless: false }}
+      style={({ pressed }) => [
+        styles.primaryBtn,
+        pressed && Platform.OS === "ios" && styles.primaryBtnPressed,
+      ]}
     >
       <Text style={styles.primaryBtnText}>Get started</Text>
       <Ionicons name="arrow-forward" size={19} color={BRAND} />
@@ -197,6 +201,7 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 56,
     borderRadius: 28,
+    overflow: "hidden",
     backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",

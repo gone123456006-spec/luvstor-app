@@ -1,12 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Animated,
-  Easing,
   Platform,
   Pressable,
   StatusBar,
@@ -38,6 +35,7 @@ import {
 import { getAuthToken } from "../../utils/auth";
 import { resolveMediaUrl } from "../../utils/media";
 import { getTabBarClearance } from "../../utils/navigation";
+import { SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
 import { SHOW_ME_OPTIONS, type ShowMeValue } from "../../utils/showMe";
 import {
   fetchSubscriptionStatus,
@@ -45,30 +43,27 @@ import {
   hasExplorePrefsAccess,
   initiateSubscriptionPurchase,
 } from "../../utils/subscriptions";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
 const GIRL_IMG = require("../../assets/images/explore-girl.png");
 const BOY_IMG = require("../../assets/images/explore-boy.png");
 
 /** Luvstor Explore — soft purple/rose atmosphere */
-const T = {
-  bg: "#F7F4FA",
-  bgMid: "#EDE4F7",
-  bgDeep: "#FFE4EC",
+const T = themedPalette({
+  bg: "#F5F5F7",
   surface: "#FFFFFF",
-  text: "#1A0A2E",
-  secondary: "#5C5668",
-  muted: "#9A93A8",
-  border: "rgba(55, 3, 114, 0.08)",
+  text: "#1C1B1F",
+  secondary: "#49454F",
+  muted: "#79747E",
+  border: "#E7E0EC",
   primary: "#370372",
-  primaryDeep: "#24024D",
-  primarySoft: "#F0E8FA",
-  primaryMid: "#5A2FC7",
+  primarySoft: "#EFE8F8",
   rose: "#FF4B6E",
   roseSoft: "#FFE8EE",
   roseDeep: "#E8355A",
-  gold: "#F5C518",
-  live: "#E53935",
-};
+  online: "#25D366",
+  danger: "#EA0038",
+});
 
 function prefsSummary(prefs: ExplorePrefs) {
   if (prefs.showMe === "All") {
@@ -190,17 +185,8 @@ export default function ExploreScreen() {
   if (inExploreCall) {
     return (
       <View style={styles.root}>
-        <LinearGradient
-          colors={[T.bg, T.bgMid, "#F8F0F6", T.bgDeep]}
-          locations={[0, 0.32, 0.68, 1]}
-          start={{ x: 0.1, y: 0 }}
-          end={{ x: 0.9, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
-        <View style={styles.orbPurple} pointerEvents="none" />
-        <View style={styles.orbRose} pointerEvents="none" />
         <SafeAreaView style={styles.safe} edges={["top"]}>
-          <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+          <StatusBar barStyle={statusBarStyle()} backgroundColor={T.bg} />
           <Header
             onPrefs={() => setPrefsOpen(true)}
             prefsLabel={prefsSummary(prefs)}
@@ -229,17 +215,8 @@ export default function ExploreScreen() {
 
   return (
     <View style={styles.root}>
-      <LinearGradient
-        colors={[T.bg, T.bgMid, "#F8F0F6", T.bgDeep]}
-        locations={[0, 0.32, 0.68, 1]}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <View style={styles.orbPurple} pointerEvents="none" />
-      <View style={styles.orbRose} pointerEvents="none" />
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+        <StatusBar barStyle={statusBarStyle()} backgroundColor={T.bg} />
         <Header
           onPrefs={() => setPrefsOpen(true)}
           prefsLabel={prefsSummary(prefs)}
@@ -303,22 +280,20 @@ function Header({
   onPrefs: () => void;
   prefsLabel: string;
 }) {
+  const filtered = prefsLabel !== "Preferences";
   return (
     <View style={styles.header}>
-      <View style={styles.headerLeft}>
-        <Text style={styles.headerTitle}>Explore</Text>
-      </View>
+      <Text style={styles.headerTitle}>Explore</Text>
       <TouchableOpacity
         onPress={onPrefs}
-        activeOpacity={0.75}
-        style={styles.prefsChip}
+        activeOpacity={0.6}
+        hitSlop={8}
+        style={styles.headerIconBtn}
         accessibilityRole="button"
         accessibilityLabel={`Preferences: ${prefsLabel}`}
       >
-        <Ionicons name="options-outline" size={18} color={T.primary} />
-        <Text style={styles.prefsChipText} numberOfLines={1}>
-          {prefsLabel === "Preferences" ? "Filters" : prefsLabel}
-        </Text>
+        <Ionicons name="options-outline" size={24} color={T.text} />
+        {filtered ? <View style={styles.headerDot} /> : null}
       </TouchableOpacity>
     </View>
   );
@@ -331,116 +306,81 @@ function IdleHome({
   onVideo: () => void;
   onVoice: () => void;
 }) {
-  const fadeIn = useRef(new Animated.Value(0)).current;
-  const slideUp = useRef(new Animated.Value(18)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeIn, {
-        toValue: 1,
-        duration: 420,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideUp, {
-        toValue: 0,
-        duration: 420,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fadeIn, slideUp]);
-
   return (
     <TabPadded style={styles.idle}>
-      <Animated.View
-        style={[
-          styles.idleTop,
-          { opacity: fadeIn, transform: [{ translateY: slideUp }] },
-        ]}
-      >
-        {/* WhatsApp-style overlapping profile banner */}
-        <View style={styles.idleHero}>
-          <View style={styles.pairBanner}>
-            <View style={[styles.pairAvatar, styles.pairLeft]}>
-              <Image
-                source={BOY_IMG}
-                style={styles.pairPhoto}
-                contentFit="cover"
-              />
-            </View>
-            <View style={[styles.pairAvatar, styles.pairRight]}>
-              <Image
-                source={GIRL_IMG}
-                style={styles.pairPhoto}
-                contentFit="cover"
-              />
-            </View>
+      <View style={styles.idleTop}>
+        <View style={styles.pairBanner}>
+          <View style={[styles.pairAvatar, styles.pairLeft]}>
+            <Image source={BOY_IMG} style={styles.pairPhoto} contentFit="cover" />
+          </View>
+          <View style={styles.pairAvatar}>
+            <Image source={GIRL_IMG} style={styles.pairPhoto} contentFit="cover" />
           </View>
         </View>
+        <Text style={styles.idleTitle}>Meet someone new</Text>
+        <Text style={styles.idleSub}>
+          Start an anonymous video or voice call with a random person.
+        </Text>
+      </View>
 
-        <View style={styles.idleCopy}>
-          <Text style={styles.idleTitle}>
-            Meet someone{"\n"}
-            <Text style={styles.idleTitleAccent}>right now</Text>
-          </Text>
+      <View>
+        <View style={styles.optionCard}>
+          <OptionRow
+            icon="videocam"
+            title="Video call"
+            subtitle="Face-to-face with someone new"
+            onPress={onVideo}
+          />
+          <View style={styles.optionDivider} />
+          <OptionRow
+            icon="call"
+            title="Voice call"
+            subtitle="Talk without showing your face"
+            onPress={onVoice}
+          />
         </View>
-      </Animated.View>
-
-      <Animated.View
-        style={[
-          styles.idleBottom,
-          { opacity: fadeIn, transform: [{ translateY: slideUp }] },
-        ]}
-      >
-        <Text style={styles.callTypeLabel}>Select Call type</Text>
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={onVideo}
-          style={styles.primaryCtaWrap}
-          accessibilityRole="button"
-          accessibilityLabel="Start video explore"
-        >
-          <LinearGradient
-            colors={[T.primary, T.primaryMid]}
-            start={{ x: 0, y: 0.5 }}
-            end={{ x: 1, y: 0.5 }}
-            style={styles.primaryCta}
-          >
-            <View style={styles.ctaIconBubble}>
-              <Ionicons name="videocam" size={22} color={T.primary} />
-            </View>
-            <View style={styles.ctaCopy}>
-              <Text style={styles.ctaTitle}>Start Video</Text>
-              <Text style={styles.ctaHint}>Face-to-face match</Text>
-            </View>
-            <Ionicons name="arrow-forward" size={20} color="#fff" />
-          </LinearGradient>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={onVoice}
-          style={styles.secondaryCta}
-          accessibilityRole="button"
-          accessibilityLabel="Start voice explore"
-        >
-          <View style={[styles.ctaIconBubble, styles.ctaIconRose]}>
-            <Ionicons name="call" size={20} color={T.rose} />
-          </View>
-          <View style={styles.ctaCopy}>
-            <Text style={styles.ctaTitleDark}>Start Voice</Text>
-            <Text style={styles.ctaHintDark}>Talk without video</Text>
-          </View>
-          <Ionicons name="arrow-forward" size={18} color={T.primary} />
-        </TouchableOpacity>
-
         <View style={styles.idleFootRow}>
-          <Ionicons name="shield-checkmark" size={14} color={T.primaryMid} />
-          <Text style={styles.idleFoot}>
-            Safe · Skip anytime · Be kind
-          </Text>
+          <Ionicons name="lock-closed" size={12} color={T.muted} />
+          <Text style={styles.idleFoot}>Anonymous · Skip anytime</Text>
         </View>
-      </Animated.View>
+      </View>
     </TabPadded>
+  );
+}
+
+function OptionRow({
+  icon,
+  title,
+  subtitle,
+  onPress,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>["name"];
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      android_ripple={{ color: tc("rgba(0,0,0,0.06)", "fg") }}
+      style={({ pressed }) => [
+        styles.optionRow,
+        pressed && Platform.OS === "ios" && { backgroundColor: tc("#F2F2F2", "bg") },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`Start ${title.toLowerCase()}`}
+    >
+      <View style={styles.optionIcon}>
+        <Ionicons name={icon} size={22} color="#FFFFFF" />
+      </View>
+      <View style={styles.optionCopy}>
+        <Text style={styles.optionTitle}>{title}</Text>
+        <Text style={styles.optionSub}>{subtitle}</Text>
+      </View>
+      {SHOW_ROW_CHEVRON ? (
+        <Ionicons name="chevron-forward" size={20} color={T.muted} />
+      ) : null}
+    </Pressable>
   );
 }
 
@@ -660,14 +600,9 @@ function ExplorePrefsSheet({
             })
           }
         >
-          <LinearGradient
-            colors={[T.primary, T.text]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.saveBtn}
-          >
+          <View style={styles.saveBtn}>
             <Text style={styles.saveBtnText}>Save</Text>
-          </LinearGradient>
+          </View>
         </TouchableOpacity>
       </View>
     </View>
@@ -685,283 +620,93 @@ function SearchingState({
   onSkip: () => void;
   onLeave: () => void;
 }) {
-  const [ring1] = useState(() => new Animated.Value(0));
-  const [ring2] = useState(() => new Animated.Value(0));
-  const [ring3] = useState(() => new Animated.Value(0));
-  const [orbit] = useState(() => new Animated.Value(0));
-  const [breathe] = useState(() => new Animated.Value(0));
-  const [tipFade] = useState(() => new Animated.Value(1));
-
   const [startedAt] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState(0);
-  const [dots, setDots] = useState(1);
-  const [tipIdx, setTipIdx] = useState(0);
-
-  useEffect(() => {
-    const make = (v: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(v, {
-            toValue: 1,
-            duration: 2400,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.timing(v, {
-            toValue: 0,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-        ]),
-      );
-    const loops = [
-      make(ring1, 0),
-      make(ring2, 800),
-      make(ring3, 1600),
-      Animated.loop(
-        Animated.timing(orbit, {
-          toValue: 1,
-          duration: 9000,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-      ),
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(breathe, {
-            toValue: 1,
-            duration: 1100,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-          Animated.timing(breathe, {
-            toValue: 0,
-            duration: 1100,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-        ]),
-      ),
-    ];
-    loops.forEach((l) => l.start());
-    return () => loops.forEach((l) => l.stop());
-  }, [ring1, ring2, ring3, orbit, breathe]);
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-      setDots((d) => (d % 3) + 1);
-    }, 500);
-    return () => clearInterval(tick);
-  }, [startedAt]);
 
   useEffect(() => {
     const iv = setInterval(() => {
-      Animated.timing(tipFade, {
-        toValue: 0,
-        duration: 220,
-        useNativeDriver: true,
-      }).start(() => {
-        setTipIdx((i) => (i + 1) % SEARCH_TIPS.length);
-        Animated.timing(tipFade, {
-          toValue: 1,
-          duration: 260,
-          useNativeDriver: true,
-        }).start();
-      });
-    }, 4000);
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
     return () => clearInterval(iv);
-  }, [tipFade]);
-
-  const ringStyle = (v: Animated.Value) => ({
-    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
-    transform: [
-      {
-        scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 2.3] }),
-      },
-    ],
-  });
-
-  const spin = orbit.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "360deg"],
-  });
-  const counterSpin = orbit.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "-360deg"],
-  });
-  const coreScale = breathe.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.06],
-  });
+  }, [startedAt]);
 
   const cooling = cooldownSec > 0;
-  const modeIcon = mode === "video" ? "videocam" : "call";
   const mm = Math.floor(elapsed / 60);
   const ss = String(elapsed % 60).padStart(2, "0");
-  const tip = SEARCH_TIPS[tipIdx];
+  const modeLabel = mode === "video" ? "Video" : "Voice";
 
   return (
-    <TabPadded style={styles.stateScreen}>
-      <View style={styles.stateCenter}>
-        <View style={styles.modeLivePill}>
-          <View style={styles.modeLiveDot} />
-          <Text style={styles.modeLiveText}>
-            {mode === "video" ? "Video" : "Voice"} queue
-          </Text>
-          <Text style={styles.modeLiveTimer}>
-            {cooling ? "paused" : `${mm}:${ss}`}
-          </Text>
-        </View>
-
-        <View style={styles.radarWrap}>
-          <View style={styles.radarHalo} />
-          <Animated.View
-            style={[styles.radarRing, styles.radarRingRose, ringStyle(ring1)]}
-          />
-          <Animated.View
-            style={[styles.radarRing, styles.radarRingPurple, ringStyle(ring2)]}
-          />
-          <Animated.View style={[styles.radarRing, ringStyle(ring3)]} />
-
-          <View style={styles.orbitTrack} pointerEvents="none" />
-          <Animated.View
-            pointerEvents="none"
-            style={[styles.orbit, { transform: [{ rotate: spin }] }]}
-          >
-            {ORBITERS.map((o) => (
-              <Animated.View
-                key={o.key}
-                style={[
-                  styles.orbiter,
-                  o.pos,
-                  { width: o.size, height: o.size, borderRadius: o.size / 2 },
-                  { transform: [{ rotate: counterSpin }] },
-                ]}
-              >
-                {o.img ? (
-                  <Image
-                    source={o.img}
-                    style={styles.pairPhoto}
-                    contentFit="cover"
-                  />
-                ) : (
-                  <View style={[styles.orbiterIcon, { backgroundColor: o.bg }]}>
-                    <Ionicons name={o.icon} size={o.size * 0.5} color={o.fg} />
-                  </View>
-                )}
-              </Animated.View>
-            ))}
-          </Animated.View>
-
-          <Animated.View style={{ transform: [{ scale: coreScale }] }}>
-            <LinearGradient
-              colors={[T.rose, T.primaryMid, T.primary]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.radarCore}
-            >
-              {cooling ? (
-                <Text style={styles.radarCoreNum}>{cooldownSec}</Text>
-              ) : (
-                <Ionicons name={modeIcon} size={34} color="#fff" />
-              )}
-            </LinearGradient>
-          </Animated.View>
-        </View>
-
-        <Text style={styles.stateTitle}>
-          {cooling ? "Get ready" : "Finding someone"}
-          <Text style={styles.stateTitleDots}>
-            {cooling ? "" : ".".repeat(dots).padEnd(3, " ")}
-          </Text>
+    <TabPadded style={styles.searchScreen}>
+      <View style={styles.searchNote}>
+        <Ionicons name="lock-closed" size={12} color={T.muted} />
+        <Text style={styles.searchNoteText}>
+          Anonymous · only your ID is shown
         </Text>
-        <Text style={styles.stateSub}>
-          {cooling
-            ? `Your next ${mode} match starts in ${cooldownSec}s`
-            : `Looking for an anonymous ${mode} partner near you`}
-        </Text>
-
-        <Animated.View style={[styles.tipCard, { opacity: tipFade }]}>
-          <View style={styles.tipIcon}>
-            <Ionicons name={tip.icon} size={16} color={T.primary} />
-          </View>
-          <Text style={styles.tipText} numberOfLines={2}>
-            {tip.text}
-          </Text>
-        </Animated.View>
       </View>
 
-      <View style={styles.stateActions}>
-        <TouchableOpacity
-          activeOpacity={0.85}
+      <View style={styles.searchCenter}>
+        <View style={styles.searchAvatar}>
+          <Ionicons name="person" size={68} color="#FFFFFF" />
+        </View>
+        <Text style={styles.searchTitle}>Finding someone</Text>
+        <Text style={styles.searchStatus}>
+          {cooling
+            ? `Next match in ${cooldownSec}s`
+            : `${modeLabel} · Searching ${mm}:${ss}`}
+        </Text>
+      </View>
+
+      <View style={styles.searchActions}>
+        <SearchAction
+          icon="shuffle"
+          label={cooling ? `${cooldownSec}s` : "Skip"}
           onPress={onSkip}
-          style={[styles.skipBtn, cooling && { opacity: 0.45 }]}
           disabled={cooling}
-          accessibilityRole="button"
-          accessibilityLabel="Skip to next person"
-        >
-          <Ionicons name="play-skip-forward" size={18} color={T.primary} />
-          <Text style={styles.skipBtnText}>
-            {cooling ? `Wait ${cooldownSec}s` : "Try someone new"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={onLeave}
-          style={styles.leaveBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Leave queue"
-        >
-          <Ionicons name="close-circle" size={18} color={T.roseDeep} />
-          <Text style={styles.leaveBtnText}>Leave queue</Text>
-        </TouchableOpacity>
+          primary
+        />
+        <SearchAction icon="close" label="Leave" onPress={onLeave} danger />
       </View>
     </TabPadded>
   );
 }
 
-const SEARCH_TIPS: {
+function SearchAction({
+  icon,
+  label,
+  onPress,
+  disabled,
+  danger,
+  primary,
+}: {
   icon: React.ComponentProps<typeof Ionicons>["name"];
-  text: string;
-}[] = [
-  { icon: "hand-left-outline", text: "Say hi first — a smile goes a long way" },
-  { icon: "sunny-outline", text: "Good lighting makes a great first impression" },
-  { icon: "shield-checkmark-outline", text: "Your name stays hidden — only your ID is shown" },
-  { icon: "play-skip-forward-outline", text: "Not a vibe? Skip anytime, no hard feelings" },
-  { icon: "heart-outline", text: "Be kind — everyone here is meeting someone new" },
-];
-
-const ORBIT_SIZE = 232;
-const ORBITERS: {
-  key: string;
-  size: number;
-  pos: object;
-  img?: number;
-  icon?: React.ComponentProps<typeof Ionicons>["name"];
-  bg?: string;
-  fg?: string;
-}[] = [
-  { key: "girl", size: 46, pos: { top: -23, left: ORBIT_SIZE / 2 - 23 }, img: GIRL_IMG },
-  { key: "boy", size: 42, pos: { bottom: 13, left: 13 }, img: BOY_IMG },
-  {
-    key: "heart",
-    size: 32,
-    pos: { bottom: 18, right: 18 },
-    icon: "heart",
-    bg: T.roseSoft,
-    fg: T.rose,
-  },
-  {
-    key: "chat",
-    size: 28,
-    pos: { top: ORBIT_SIZE / 2 - 14, left: -14 },
-    icon: "chatbubble-ellipses",
-    bg: T.primarySoft,
-    fg: T.primary,
-  },
-];
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  primary?: boolean;
+}) {
+  const filled = danger || primary;
+  return (
+    <View style={styles.searchActionItem}>
+      <TouchableOpacity
+        activeOpacity={0.75}
+        onPress={onPress}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        style={[
+          styles.searchActionBtn,
+          primary && styles.searchActionPrimary,
+          danger && styles.searchActionDanger,
+          disabled && { opacity: 0.45 },
+        ]}
+      >
+        <Ionicons name={icon} size={26} color={filled ? "#FFFFFF" : T.text} />
+      </TouchableOpacity>
+      <Text style={styles.searchActionLabel}>{label}</Text>
+    </View>
+  );
+}
 
 function MatchedState({
   peer,
@@ -975,86 +720,25 @@ function MatchedState({
   };
   mode: "video" | "voice";
 }) {
-  const id = String(peer.publicId || '').trim().toUpperCase();
-  const photo = peer.photo || '';
-  const pop = useRef(new Animated.Value(0.82)).current;
-  const glow = useRef(new Animated.Value(0.4)).current;
-
-  useEffect(() => {
-    Animated.spring(pop, {
-      toValue: 1,
-      friction: 5,
-      tension: 90,
-      useNativeDriver: true,
-    }).start();
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(glow, {
-          toValue: 1,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-        Animated.timing(glow, {
-          toValue: 0.4,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [glow, pop]);
-
+  const id = String(peer.publicId || "").trim().toUpperCase();
   return (
-    <TabPadded style={styles.stateScreen}>
-      <View style={styles.stateCenter}>
-        <View style={styles.matchBadgeWrap}>
-          <LinearGradient
-            colors={[T.rose, T.primaryMid]}
-            start={{ x: 0, y: 0.5 }}
-            end={{ x: 1, y: 0.5 }}
-            style={styles.matchBadgeGrad}
-          >
-            <Text style={styles.matchBadge}>It{"'"}s a match</Text>
-          </LinearGradient>
-        </View>
-        <Animated.View
-          style={[
-            styles.matchAvatar,
-            {
-              transform: [{ scale: pop }],
-              opacity: glow.interpolate({
-                inputRange: [0.4, 1],
-                outputRange: [0.92, 1],
-              }),
-            },
-          ]}
-        >
-          <LinearGradient
-            colors={[T.rose, T.primary]}
-            style={styles.matchRing}
-          >
-            <View style={styles.matchAvatarInner}>
-              <WhatsAppAvatar
-                name={id || 'Anonymous'}
-                publicId={id}
-                photo={photo}
-                gender={peer.gender}
-                size={118}
-              />
-            </View>
-          </LinearGradient>
-        </Animated.View>
-        <Text style={styles.matchName}>{id || 'Anonymous'}</Text>
-        <Text style={styles.matchAnonHint}>
-          {id ? 'Name hidden · ID only' : 'Identity hidden'}
+    <TabPadded style={styles.callScreen}>
+      <View style={styles.searchNote}>
+        <Ionicons name="lock-closed" size={12} color={T.muted} />
+        <Text style={styles.searchNoteText}>Name hidden · ID only</Text>
+      </View>
+      <View style={styles.searchCenter}>
+        <WhatsAppAvatar
+          name={id || "Anonymous"}
+          publicId={id}
+          photo={peer.photo || ""}
+          gender={peer.gender}
+          size={128}
+        />
+        <Text style={styles.searchTitle}>{id || "Anonymous"}</Text>
+        <Text style={styles.searchStatus}>
+          Connecting {mode === "video" ? "video" : "voice"}…
         </Text>
-        <View style={styles.connectingRow}>
-          <ActivityIndicator size="small" color={T.primary} />
-          <Text style={styles.connectingText}>
-            Connecting {mode === "video" ? "video" : "voice"}…
-          </Text>
-        </View>
       </View>
     </TabPadded>
   );
@@ -1077,59 +761,103 @@ function LiveCallState({
   const display = id || getDisplayName(name, publicId) || "Anonymous";
 
   return (
-    <TabPadded style={styles.stateScreen}>
-      <View style={styles.stateCenter}>
-        <View style={styles.livePill}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveText}>Live now</Text>
+    <TabPadded style={styles.callScreen}>
+      <View style={styles.searchNote}>
+        <Ionicons name="lock-closed" size={12} color={T.muted} />
+        <Text style={styles.searchNoteText}>Name hidden · ID only</Text>
+      </View>
+      <View style={styles.searchCenter}>
+        <WhatsAppAvatar
+          name={display}
+          publicId={id}
+          photo={uri}
+          gender={gender}
+          size={128}
+        />
+        <Text style={styles.searchTitle}>{display}</Text>
+        <View style={styles.onCallRow}>
+          <View style={styles.onCallDot} />
+          <Text style={[styles.searchStatus, { marginTop: 0 }]}>On call · controls are on the call screen</Text>
         </View>
-        <View style={styles.matchAvatar}>
-          <LinearGradient
-            colors={[T.rose, T.primary]}
-            style={styles.matchRing}
-          >
-            <View style={styles.matchAvatarInner}>
-              <WhatsAppAvatar
-                name={display}
-                publicId={id}
-                photo={uri}
-                gender={gender}
-                size={118}
-              />
-            </View>
-          </LinearGradient>
-        </View>
-        <Text style={styles.matchName}>{display}</Text>
-        <Text style={styles.stateSub}>
-          {id ? "Name hidden · ID only" : "Controls are on the call screen"}
-        </Text>
       </View>
     </TabPadded>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerDot: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: T.primary,
+  },
+  optionCard: {
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  optionIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: T.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionCopy: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: T.text,
+  },
+  optionSub: {
+    marginTop: 2,
+    fontSize: 13,
+    color: T.muted,
+  },
+  optionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: T.border,
+    marginLeft: 76,
+  },
+  callScreen: {
+    flex: 1,
+    paddingHorizontal: 24,
+  },
+  onCallRow: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  onCallDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: T.online,
+  },
   root: {
     flex: 1,
     backgroundColor: T.bg,
-  },
-  orbPurple: {
-    position: "absolute",
-    top: -60,
-    right: -40,
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: "rgba(90, 47, 199, 0.12)",
-  },
-  orbRose: {
-    position: "absolute",
-    bottom: 120,
-    left: -70,
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: "rgba(255, 75, 110, 0.10)",
   },
   safe: {
     flex: 1,
@@ -1139,92 +867,30 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 22,
+    paddingLeft: 16,
+    paddingRight: 8,
     paddingTop: 4,
-    paddingBottom: 10,
-    gap: 12,
-  },
-  headerLeft: {
-    flex: 1,
+    paddingBottom: 8,
   },
   headerTitle: {
-    fontSize: 32,
-    fontWeight: "800",
+    fontSize: 28,
+    fontWeight: "700",
     color: T.text,
-    letterSpacing: -1,
-  },
-  headerSub: {
-    marginTop: 2,
-    fontSize: 13,
-    fontWeight: "500",
-    color: T.muted,
-    letterSpacing: -0.1,
-  },
-  prefsChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    maxWidth: 140,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 22,
-    backgroundColor: T.surface,
-    borderWidth: 1,
-    borderColor: T.border,
-    ...Platform.select({
-      ios: {
-        shadowColor: T.primary,
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 2 },
-      },
-      android: { elevation: 2 },
-    }),
-  },
-  prefsChipText: {
-    flexShrink: 1,
-    fontSize: 12,
-    fontWeight: "600",
-    color: T.primary,
+    letterSpacing: -0.3,
   },
   body: {
     flex: 1,
   },
-
   idle: {
     flex: 1,
-    paddingHorizontal: 22,
+    paddingHorizontal: 16,
     justifyContent: "space-between",
   },
   idleTop: {
-    alignItems: "center",
-    paddingTop: 8,
-  },
-  idleBottom: {
-    gap: 12,
-    paddingBottom: 4,
-  },
-  anonPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: "rgba(55, 3, 114, 0.08)",
-    marginBottom: 18,
-  },
-  anonPillText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: T.primary,
-    letterSpacing: 0.2,
-  },
-  idleHero: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 14,
-    marginTop: 4,
+    paddingHorizontal: 8,
   },
   pairBanner: {
     flexDirection: "row",
@@ -1232,142 +898,49 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   pairAvatar: {
-    width: 128,
-    height: 128,
-    borderRadius: 64,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
     overflow: "hidden",
     borderWidth: 3,
-    borderColor: "#FFFFFF",
-    backgroundColor: "#E8E0F5",
+    borderColor: T.bg,
+    backgroundColor: "#CFD8DC",
   },
   pairLeft: {
-    marginRight: -32,
+    marginRight: -24,
     zIndex: 1,
-  },
-  pairRight: {
-    zIndex: 2,
   },
   pairPhoto: {
     width: "100%",
     height: "100%",
   },
-  idleCopy: {
-    alignItems: "center",
-    paddingHorizontal: 6,
-    marginTop: 6,
-  },
   idleTitle: {
-    fontSize: 30,
-    fontWeight: "800",
-    color: T.text,
-    letterSpacing: -0.8,
-    lineHeight: 36,
-    textAlign: "center",
-  },
-  idleTitleAccent: {
-    color: T.primary,
-  },
-  callTypeLabel: {
-    fontSize: 18,
-    fontWeight: "700",
-    lineHeight: 24,
+    marginTop: 22,
+    fontSize: 22,
+    fontWeight: "600",
     color: T.text,
     textAlign: "center",
-    letterSpacing: -0.2,
-    marginBottom: 2,
   },
   idleSub: {
-    marginTop: 10,
-    fontSize: 15,
-    lineHeight: 22,
-    color: T.secondary,
+    marginTop: 6,
+    fontSize: 14,
+    lineHeight: 20,
+    color: T.muted,
     textAlign: "center",
     maxWidth: 300,
-  },
-  primaryCtaWrap: {
-    borderRadius: 22,
-    overflow: "hidden",
-    ...Platform.select({
-      ios: {
-        shadowColor: T.primary,
-        shadowOpacity: 0.28,
-        shadowRadius: 14,
-        shadowOffset: { width: 0, height: 8 },
-      },
-      android: { elevation: 5 },
-    }),
-  },
-  primaryCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-  },
-  secondaryCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 22,
-    backgroundColor: T.surface,
-    borderWidth: 1,
-    borderColor: T.border,
-  },
-  ctaIconBubble: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#fff",
-  },
-  ctaIconRose: {
-    backgroundColor: T.roseSoft,
-  },
-  ctaCopy: {
-    flex: 1,
-  },
-  ctaTitle: {
-    color: "#fff",
-    fontSize: 17,
-    fontWeight: "800",
-    letterSpacing: -0.2,
-  },
-  ctaHint: {
-    marginTop: 2,
-    color: "rgba(255,255,255,0.78)",
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  ctaTitleDark: {
-    color: T.text,
-    fontSize: 17,
-    fontWeight: "800",
-    letterSpacing: -0.2,
-  },
-  ctaHintDark: {
-    marginTop: 2,
-    color: T.muted,
-    fontSize: 13,
-    fontWeight: "500",
   },
   idleFootRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    paddingTop: 6,
+    paddingTop: 12,
+    paddingBottom: 4,
   },
   idleFoot: {
     fontSize: 12,
-    lineHeight: 16,
     color: T.muted,
-    fontWeight: "500",
-    ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
   },
-
   /* Prefs sheet — in-tree so footer tabs stay visible */
   sheetHost: {
     ...StyleSheet.absoluteFill,
@@ -1531,342 +1104,88 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 15,
     borderRadius: 14,
+    backgroundColor: T.primary,
   },
   saveBtnText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
   },
-
-  stateScreen: {
+  searchScreen: {
     flex: 1,
     paddingHorizontal: 24,
-    justifyContent: "space-between",
   },
-  stateCenter: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  stateTitle: {
-    marginTop: 28,
-    fontSize: 24,
-    fontWeight: "800",
-    color: T.text,
-    letterSpacing: -0.5,
-    textAlign: "center",
-  },
-  stateSub: {
-    marginTop: 8,
-    fontSize: 15,
-    lineHeight: 22,
-    color: T.secondary,
-    textAlign: "center",
-    paddingHorizontal: 16,
-  },
-  stateActions: {
-    gap: 8,
-    alignItems: "center",
-  },
-  modeLivePill: {
+  searchNote: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: T.primarySoft,
-    marginBottom: 22,
+    paddingTop: 4,
   },
-  modeLiveText: {
+  searchNoteText: {
     fontSize: 12,
-    fontWeight: "700",
-    color: T.primary,
-  },
-  modeLiveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#22C55E",
-  },
-  modeLiveTimer: {
-    marginLeft: 4,
-    fontSize: 12,
-    fontWeight: "600",
     color: T.muted,
-    fontVariant: ["tabular-nums"],
   },
-  stateTitleDots: {
-    color: T.primary,
-  },
-
-  radarWrap: {
-    width: 260,
-    height: 260,
+  searchCenter: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    paddingBottom: 40,
   },
-  radarHalo: {
-    position: "absolute",
-    width: 168,
-    height: 168,
-    borderRadius: 84,
-    backgroundColor: "rgba(90, 47, 199, 0.08)",
-  },
-  orbitTrack: {
-    position: "absolute",
-    width: ORBIT_SIZE,
-    height: ORBIT_SIZE,
-    borderRadius: ORBIT_SIZE / 2,
-    borderWidth: 1,
-    borderStyle: "dashed",
-    borderColor: "rgba(55, 3, 114, 0.14)",
-  },
-  orbit: {
-    position: "absolute",
-    width: ORBIT_SIZE,
-    height: ORBIT_SIZE,
-  },
-  orbiter: {
-    position: "absolute",
+  searchAvatar: {
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    backgroundColor: "#CFD8DC",
+    alignItems: "center",
+    justifyContent: "center",
     overflow: "hidden",
-    borderWidth: 2.5,
-    borderColor: "#FFFFFF",
-    backgroundColor: "#E8E0F5",
-    ...Platform.select({
-      ios: {
-        shadowColor: T.primary,
-        shadowOpacity: 0.18,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 3 },
-      },
-      android: { elevation: 3 },
-    }),
   },
-  orbiterIcon: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
+  searchTitle: {
+    marginTop: 22,
+    fontSize: 24,
+    fontWeight: "600",
+    color: T.text,
+    textAlign: "center",
   },
-  radarCoreNum: {
-    fontSize: 36,
-    fontWeight: "800",
-    color: "#fff",
+  searchStatus: {
+    marginTop: 6,
+    fontSize: 15,
+    color: T.secondary,
+    textAlign: "center",
     fontVariant: ["tabular-nums"],
   },
-  tipCard: {
-    marginTop: 22,
+  searchActions: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    maxWidth: 340,
-    alignSelf: "stretch",
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.85)",
-    borderWidth: 1,
-    borderColor: T.border,
-  },
-  tipIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: "center",
     justifyContent: "center",
-    backgroundColor: T.primarySoft,
+    gap: 56,
+    paddingBottom: 12,
   },
-  tipText: {
-    flex: 1,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
-    color: T.secondary,
-  },
-  skipBtn: {
-    alignSelf: "stretch",
-    flexDirection: "row",
+  searchActionItem: {
     alignItems: "center",
-    justifyContent: "center",
     gap: 8,
-    paddingVertical: 15,
-    borderRadius: 18,
-    backgroundColor: T.surface,
-    borderWidth: 1.5,
-    borderColor: "rgba(55, 3, 114, 0.18)",
   },
-  skipBtnText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: T.primary,
-  },
-  leaveBtn: {
-    flexDirection: "row",
+  searchActionBtn: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
-    gap: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.12)",
   },
-  leaveBtnText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: T.roseDeep,
-  },
-  radarRing: {
-    position: "absolute",
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 2,
-    borderColor: T.primaryMid,
-  },
-  radarRingRose: {
-    borderColor: T.rose,
-  },
-  radarRingPurple: {
+  searchActionPrimary: {
+    backgroundColor: T.primary,
     borderColor: T.primary,
   },
-  radarCore: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    ...Platform.select({
-      ios: {
-        shadowColor: T.primary,
-        shadowOpacity: 0.35,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: 8 },
-      },
-      android: { elevation: 8 },
-    }),
+  searchActionDanger: {
+    backgroundColor: "#EA0038",
+    borderColor: "#EA0038",
   },
-
-  countdown: {
-    width: 108,
-    height: 108,
-    borderRadius: 54,
-    overflow: "hidden",
-    borderWidth: 3,
-    borderColor: "rgba(55, 3, 114, 0.15)",
-  },
-  countdownInner: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  countdownNum: {
-    fontSize: 40,
-    fontWeight: "800",
-    color: T.primary,
-  },
-
-  matchBadgeWrap: {
-    marginBottom: 20,
-    borderRadius: 20,
-    overflow: "hidden",
-  },
-  matchBadgeGrad: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  matchBadge: {
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    color: "#fff",
-  },
-  matchAvatar: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  matchRing: {
-    padding: 4,
-    borderRadius: 999,
-  },
-  matchAvatarInner: {
-    borderRadius: 999,
-    overflow: "hidden",
-    backgroundColor: T.surface,
-  },
-  matchName: {
-    marginTop: 20,
-    fontSize: 26,
-    fontWeight: "800",
-    color: T.text,
-    letterSpacing: -0.5,
-  },
-  matchAnonHint: {
-    marginTop: 4,
+  searchActionLabel: {
     fontSize: 13,
-    fontWeight: "600",
-    color: T.muted,
-  },
-  matchHandle: {
-    marginTop: 4,
-    fontSize: 15,
-    color: T.muted,
-  },
-  connectingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 20,
-  },
-  connectingText: {
-    fontSize: 14,
-    fontWeight: "500",
     color: T.secondary,
   },
-
-  ghostBtn: {
-    alignSelf: "stretch",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 15,
-    borderRadius: 18,
-    backgroundColor: T.surface,
-    borderWidth: 1,
-    borderColor: T.border,
-  },
-  ghostBtnText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: T.text,
-  },
-  textBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  textBtnLabel: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: T.muted,
-  },
-
-  livePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: T.text,
-    marginBottom: 20,
-  },
-  liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: T.live,
-  },
-  liveText: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-});
+}),
+);

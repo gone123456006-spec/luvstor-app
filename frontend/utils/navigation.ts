@@ -56,10 +56,12 @@ export function getSheetBottomPadding(safeBottom: number): number {
 /** Primary push navigation (chat, settings, profile sub-screens) */
 export const stackScreenOptions = {
   headerShown: false,
-  animation: 'slide_from_right' as const,
+  // Native push per platform (iOS slide + parallax, Android system transition)
+  animation: 'default' as const,
   animationDuration: 260,
   gestureEnabled: true,
-  fullScreenGestureEnabled: true,
+  // iOS: edge swipe-back like system apps (full-screen swipe forces simple_push)
+  fullScreenGestureEnabled: false,
   freezeOnBlur: true,
   contentStyle: { backgroundColor: SCREEN_BG },
 };
@@ -82,7 +84,9 @@ export const instantScreenOptions = {
 export const modalScreenOptions = {
   ...stackScreenOptions,
   presentation: 'modal' as const,
-  animation: 'slide_from_bottom' as const,
+  animation: (Platform.OS === 'ios' ? 'default' : 'slide_from_bottom') as
+    | 'default'
+    | 'slide_from_bottom',
   animationDuration: 280,
 };
 

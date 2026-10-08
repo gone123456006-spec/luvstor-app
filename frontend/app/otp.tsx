@@ -30,6 +30,7 @@ import { claimPendingReferralInBackground } from "../utils/referrals";
 import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
+import { NAV_ICON } from "../utils/platformIcons";
 
 const OTP_LENGTH = 6;
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
@@ -312,7 +313,7 @@ export default function OtpScreen() {
                   style={s.backBtn}
                   hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 >
-                  <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+                  <Ionicons name={NAV_ICON.back} size={22} color="#FFFFFF" />
                 </TouchableOpacity>
                 <View style={s.shieldWrap}>
                   <Ionicons name="shield-checkmark" size={22} color="#FFFFFF" />
