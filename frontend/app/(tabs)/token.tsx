@@ -102,15 +102,6 @@ const TOKEN_PACKS = [
   },
 ] as const;
 
-const TOKEN_MENU = [
-  { key: "buy", label: "Buy tokens" },
-  { key: "spin", label: "Lucky spin" },
-  { key: "premium", label: "Premium plans" },
-  { key: "refresh", label: "Refresh balance" },
-  { key: "help", label: "Help" },
-] as const;
-type TokenMenuKey = (typeof TOKEN_MENU)[number]["key"];
-
 function formatInr(n: number) {
   return `₹${Number(n).toLocaleString("en-IN")}`;
 }
@@ -974,17 +965,6 @@ export default function TokenScreen() {
   }, [packOffers, selectedPack]);
 
   const [buySheetOpen, setBuySheetOpen] = React.useState(false);
-  const [menuOpen, setMenuOpen] = React.useState(false);
-
-  const onMenuPick = (key: TokenMenuKey) => {
-    setMenuOpen(false);
-    if (key === "buy") scrollToTokenPacks();
-    else if (key === "spin") setSpinModalOpen(true);
-    else if (key === "premium") router.push("/subscription" as any);
-    else if (key === "refresh") void loadBalance();
-    else if (key === "help") router.push("/help-support" as any);
-  };
-
   // WhatsApp-style: tap a row → confirm in a bottom sheet (no page jump)
   const selectPackAndShowBuy = React.useCallback((packId: string) => {
     setSelectedPackId(packId);
@@ -1117,15 +1097,6 @@ export default function TokenScreen() {
                 publicId={userPublicId || undefined}
                 size={34}
               />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              activeOpacity={0.6}
-              onPress={() => setMenuOpen(true)}
-              accessibilityLabel="More options"
-              hitSlop={8}
-            >
-              <Ionicons name="ellipsis-vertical" size={20} color={tc("#111B21", "fg")} />
             </TouchableOpacity>
           </View>
         </View>
@@ -1360,32 +1331,6 @@ export default function TokenScreen() {
           if (nextAt !== undefined) setNextSpinAt(nextAt);
         }}
       />
-
-      {/* ⋮ menu — WhatsApp overflow popup */}
-      <Modal
-        visible={menuOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setMenuOpen(false)}
-      >
-        <TouchableOpacity
-          style={StyleSheet.absoluteFill}
-          activeOpacity={1}
-          onPress={() => setMenuOpen(false)}
-        />
-        <View style={[styles.menuCard, { top: insets.top + 6 }]}>
-          {TOKEN_MENU.map((item) => (
-            <TouchableOpacity
-              key={item.key}
-              style={styles.menuItem}
-              activeOpacity={0.6}
-              onPress={() => onMenuPick(item.key)}
-            >
-              <Text style={styles.menuText}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Modal>
 
       {/* Buy confirmation — WhatsApp bottom sheet */}
       <Modal
@@ -1862,29 +1807,6 @@ const styles = themedStyles(() =>
   },
   continueBtnDisabled: {
     opacity: 0.5,
-  },
-
-  // ⋮ overflow menu
-  menuCard: {
-    position: "absolute",
-    right: 10,
-    minWidth: 200,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-  },
-  menuItem: {
-    paddingHorizontal: 18,
-    paddingVertical: 13,
-  },
-  menuText: {
-    fontSize: 16,
-    color: "#111B21",
   },
 
   // Buy confirmation sheet
