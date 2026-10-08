@@ -18,6 +18,7 @@ const { isViewingChat } = require('../utils/activeChat');
 const deviceTokens = require('./deviceTokens');
 const pushQueue = require('./pushQueue');
 const { absoluteMediaUrl } = require('../utils/absoluteUrl');
+const cache = require('../utils/cache');
 
 /**
  * Per-type push defaults.
@@ -249,14 +250,29 @@ async function applyPreviewPrivacy(userId, type, title, body) {
   return { title, body };
 }
 
+/**
+ * Counts are cached per user and keyed on the cache version that
+ * utils/cacheVersionPlugin bumps on every Message / Notification write.
+ * The TTL is only a backstop for writes the plugin can't attribute.
+ */
+const UNREAD_TTL_SEC = 30;
+
+function cachedCount(kind, scope, userId, compute) {
+  return cache
+    .version(scope, userId)
+    .then((v) => cache.getOrSet(`unread:${kind}:${userId}:${v}`, UNREAD_TTL_SEC, compute));
+}
+
 async function unreadCountFor(userId) {
   try {
-    return await Notification.countDocuments({
-      userId,
-      read: false,
-      deletedAt: null,
-      type: { $nin: [...HIDE_FROM_CENTER] },
-    });
+    return await cachedCount('notif', 'notif', userId, () =>
+      Notification.countDocuments({
+        userId,
+        read: false,
+        deletedAt: null,
+        type: { $nin: [...HIDE_FROM_CENTER] },
+      }),
+    );
   } catch {
     return 0;
   }
@@ -265,36 +281,56 @@ async function unreadCountFor(userId) {
 /** Unread DM count for launcher badge (WhatsApp-style — chats drive the badge). */
 async function chatUnreadCountFor(userId) {
   try {
-    const mongoose = require('mongoose');
-    const Message = require('../models/Message');
-    const ConversationState = require('../models/ConversationState');
-    const myObjId = new mongoose.Types.ObjectId(userId);
-
-    const archived = await ConversationState.find({
-      userId,
-      archived: true,
-    })
-      .select('otherUserId')
-      .lean();
-    const archivedIds = archived.map((s) => String(s.otherUserId));
-
-    const match = {
-      receiverId: myObjId,
-      read: false,
-      isDeleted: { $ne: true },
-      undelivered: { $ne: true },
-      deletedFor: { $nin: [myObjId] },
-    };
-    if (archivedIds.length) {
-      match.senderId = {
-        $nin: archivedIds.map((id) => new mongoose.Types.ObjectId(id)),
-      };
-    }
-
-    return await Message.countDocuments(match);
+    return await cachedChatUnread(userId);
   } catch {
     return 0;
   }
+}
+
+/** Same as chatUnreadCountFor but throws, for routes that report errors */
+function cachedChatUnread(userId) {
+  return cachedCount('chat', 'msg', userId, () => computeChatUnread(userId));
+}
+
+async function computeChatUnread(userId) {
+  const mongoose = require('mongoose');
+  const Message = require('../models/Message');
+  const myObjId = new mongoose.Types.ObjectId(userId);
+
+  const archived = await ConversationState.find({
+    userId,
+    archived: true,
+  })
+    .select('otherUserId')
+    .lean();
+  const archivedIds = archived.map((s) => String(s.otherUserId));
+
+  const match = {
+    receiverId: myObjId,
+    read: false,
+    isDeleted: { $ne: true },
+    undelivered: { $ne: true },
+    deletedFor: { $nin: [myObjId] },
+  };
+  if (archivedIds.length) {
+    match.senderId = {
+      $nin: archivedIds.map((id) => new mongoose.Types.ObjectId(id)),
+    };
+  }
+
+  return Message.countDocuments(match);
+}
+
+/** Notification Center badge (excludes chat + Profile View tabs) */
+function centerUnreadCount(userId) {
+  return cachedCount('center', 'notif', userId, () =>
+    Notification.countDocuments({
+      userId,
+      read: false,
+      deletedAt: null,
+      type: { $nin: ['chat', 'profile_view'] },
+    }),
+  );
 }
 
 const CHAT_STACK_MAX_LINES = 6;
@@ -913,6 +949,9 @@ module.exports = {
   createPersonalNotifications,
   broadcastNotification,
   unreadCountFor,
+  chatUnreadCountFor,
+  cachedChatUnread,
+  centerUnreadCount,
   resolveDeepLink,
   redactProfileViewPayload,
   TYPE_DEFAULTS,

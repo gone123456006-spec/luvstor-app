@@ -14,8 +14,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { sharePublicProfile } from "../../components/CopyablePublicId";
 import { getDisplayName } from "../../components/WhatsAppAvatar";
 import { getCachedProfile, preloadProfile } from "../../utils/profileCache";
+import { NAV_ICON, SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
+import ListRowTouchable from "../../components/ListRowTouchable";
+import ThemePickerDialog, { THEME_LABELS } from "../../components/ThemePickerDialog";
+import { useAccessibility } from "../../contexts/AccessibilityContext";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: "#F5F5F7",
   white: "#FFFFFF",
   text: "#1C1B1F",
@@ -24,7 +29,7 @@ const WA = {
   primary: "#370372",
   header: "#F5F5F7",
   iconSoft: "#EFE8F8",
-};
+});
 
 type RowProps = {
   icon: keyof typeof Ionicons.glyphMap;
@@ -45,7 +50,7 @@ function SettingsRow({
 }: RowProps) {
   return (
     <>
-      <TouchableOpacity
+      <ListRowTouchable
         style={styles.listRow}
         activeOpacity={0.7}
         onPress={onPress}
@@ -57,8 +62,10 @@ function SettingsRow({
           <Text style={styles.rowLabel}>{label}</Text>
           <Text style={styles.rowSub}>{sub}</Text>
         </View>
-        <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-      </TouchableOpacity>
+        {SHOW_ROW_CHEVRON ? (
+          <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+        ) : null}
+      </ListRowTouchable>
       {showDivider ? <View style={styles.divider} /> : null}
     </>
   );
@@ -68,6 +75,8 @@ export default function SettingsScreen() {
   const router = useRouter();
   const [publicId, setPublicId] = useState("");
   const [name, setName] = useState("");
+  const [themeOpen, setThemeOpen] = useState(false);
+  const { prefs } = useAccessibility();
 
   useFocusEffect(
     useCallback(() => {
@@ -101,7 +110,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -109,7 +118,7 @@ export default function SettingsScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
@@ -123,7 +132,7 @@ export default function SettingsScreen() {
             icon="person"
             color={WA.primary}
             label="Account"
-            sub="Login details, logout, delete account"
+            sub="Login details, privacy, logout"
             onPress={() => router.push("/settings/account" as any)}
           />
         </View>
@@ -131,7 +140,7 @@ export default function SettingsScreen() {
         <View style={[styles.listGroup, styles.listGroupSpaced]}>
           <SettingsRow
             icon="key"
-            color="#6750A4"
+            color={tc("#6750A4", "fg")}
             label="Permissions"
             sub="Microphone, camera, photos, music & calls"
             onPress={() => router.push("/settings/permissions" as any)}
@@ -146,6 +155,30 @@ export default function SettingsScreen() {
             showDivider
           />
           <SettingsRow
+            icon="accessibility"
+            color="#0A84FF"
+            label="Accessibility"
+            sub="Text size, bold text, reduce motion, haptics"
+            onPress={() => router.push("/settings/accessibility" as any)}
+            showDivider
+          />
+          <SettingsRow
+            icon="moon"
+            color="#5856D6"
+            label="Theme"
+            sub={THEME_LABELS[prefs.themeMode]}
+            onPress={() => setThemeOpen(true)}
+            showDivider
+          />
+          <SettingsRow
+            icon="image"
+            color="#FF2D55"
+            label="Chat wallpaper"
+            sub="Colour or photo behind your chats"
+            onPress={() => router.push("/settings/chat-wallpaper" as any)}
+            showDivider
+          />
+          <SettingsRow
             icon="call"
             color="#128C7E"
             label="Calls"
@@ -156,7 +189,7 @@ export default function SettingsScreen() {
 
         <View style={[styles.listGroup, styles.listGroupSpaced]}>
           <SettingsRow
-            icon="share-social"
+            icon={NAV_ICON.share}
             color={WA.primary}
             label="Share profile"
             sub={
@@ -174,11 +207,18 @@ export default function SettingsScreen() {
           />
         </View>
       </ScrollView>
+
+      <ThemePickerDialog
+        visible={themeOpen}
+        onClose={() => setThemeOpen(false)}
+        returnTo="/settings"
+      />
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: "row",
@@ -228,4 +268,5 @@ const styles = StyleSheet.create({
   rowContent: { flex: 1 },
   rowLabel: { fontSize: 17, color: WA.text, fontWeight: "400" },
   rowSub: { fontSize: 13, color: WA.secondary, marginTop: 2 },
-});
+}),
+);

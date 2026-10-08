@@ -22,6 +22,8 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RecentSearchPerson } from "../utils/recentSearches";
 import WhatsAppAvatar from "./WhatsAppAvatar";
+import { NAV_ICON } from "../utils/platformIcons";
+import { tc, themedStyles } from "../utils/theme";
 
 const SCREEN_W = Dimensions.get("window").width;
 const SCREEN_H = Dimensions.get("window").height;
@@ -59,7 +61,7 @@ export default function SearchModeOverlay({
   onClearAll,
   children,
   autoFocus = true,
-  backgroundColor = "#FFFFFF",
+  backgroundColor = tc("#FFFFFF", "bg"),
   fromY,
 }: Props) {
   const insets = useSafeAreaInsets();
@@ -252,7 +254,7 @@ export default function SearchModeOverlay({
             accessibilityRole="button"
             accessibilityLabel="Back"
           >
-            <Ionicons name="chevron-back" size={28} color="#050505" />
+            <Ionicons name={NAV_ICON.back} size={28} color={tc("#050505", "fg")} />
           </TouchableOpacity>
         </Animated.View>
 
@@ -260,14 +262,14 @@ export default function SearchModeOverlay({
           <Ionicons
             name="search"
             size={18}
-            color="#65676B"
+            color={tc("#65676B", "fg")}
             style={styles.searchIcon}
           />
           <TextInput
             ref={inputRef}
             style={styles.searchInput}
             placeholder={placeholder}
-            placeholderTextColor="#65676B"
+            placeholderTextColor={tc("#65676B", "fg")}
             value={query}
             onChangeText={onChangeQuery}
             returnKeyType="search"
@@ -286,7 +288,8 @@ export default function SearchModeOverlay({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   modalRoot: {
     flex: 1,
     width: SCREEN_W,
@@ -395,4 +398,5 @@ const styles = StyleSheet.create({
   results: {
     flex: 1,
   },
-});
+}),
+);

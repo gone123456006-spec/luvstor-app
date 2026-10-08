@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../utils/api';
 import WhatsAppAvatar from './WhatsAppAvatar';
+import { tc, themedStyles } from '../utils/theme';
 
 const PURPLE = '#370372';
 const REFRESH_INTERVAL = 60000; // 1 minute
@@ -79,11 +80,11 @@ export function OnlineNearbyPulse({ token, onUserPress, refreshTrigger }: Props)
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <Ionicons name="radio" size={16} color={PURPLE} />
+          <Ionicons name="radio" size={16} color={tc(PURPLE, "fg")} />
           <Text style={styles.headerText}>Online Nearby</Text>
         </View>
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="small" color={PURPLE} />
+          <ActivityIndicator size="small" color={tc(PURPLE, "fg")} />
         </View>
       </View>
     );
@@ -102,7 +103,7 @@ export function OnlineNearbyPulse({ token, onUserPress, refreshTrigger }: Props)
           <Text style={styles.count}>{users.length}</Text>
         </View>
         <TouchableOpacity onPress={fetchOnlineNearby} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="refresh" size={18} color="#666" />
+          <Ionicons name="refresh" size={18} color={tc("#666", "fg")} />
         </TouchableOpacity>
       </View>
       
@@ -141,7 +142,8 @@ export function OnlineNearbyPulse({ token, onUserPress, refreshTrigger }: Props)
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: {
     backgroundColor: '#fff',
     paddingVertical: 12,
@@ -235,4 +237,5 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
-});
+}),
+);

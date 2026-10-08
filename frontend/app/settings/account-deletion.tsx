@@ -10,8 +10,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const C = {
+const C = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -20,14 +22,14 @@ const C = {
   primary: '#370372',
   danger: '#FF4B6E',
   header: '#F5F5F7',
-};
+});
 
 export default function AccountDeletionScreen() {
   const router = useRouter();
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={C.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -35,7 +37,7 @@ export default function AccountDeletionScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={C.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={C.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Account Deletion Policy</Text>
       </View>
@@ -55,8 +57,10 @@ export default function AccountDeletionScreen() {
 
           <Text style={styles.sectionTitle}>How to Delete in the App</Text>
           <Text style={styles.bulletItem}>1. Open Luvstor</Text>
-          <Text style={styles.bulletItem}>2. Go to Settings → Account</Text>
-          <Text style={styles.bulletItem}>3. Tap Delete account</Text>
+          <Text style={styles.bulletItem}>
+            2. Go to Settings → Account → Personal details → Account ownership and control
+          </Text>
+          <Text style={styles.bulletItem}>3. Tap Deactivation or deletion → Delete account</Text>
           <Text style={styles.bulletItem}>
             4. Confirm that you understand deletion is permanent after the grace
             period
@@ -181,7 +185,8 @@ export default function AccountDeletionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   header: {
     flexDirection: 'row',
@@ -235,4 +240,5 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingLeft: 8,
   },
-});
+}),
+);

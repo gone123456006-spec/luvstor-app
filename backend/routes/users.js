@@ -437,6 +437,10 @@ router.put("/me", auth, async (req, res) => {
       updates.coverPhoto !== undefined ||
       updates.photos !== undefined
     ) {
+      // A chat photo reused as DP / cover / post must become public
+      require("../services/mediaStore")
+        .markMediaPublic(req.userId, [user.photo, user.coverPhoto, ...(user.photos || [])])
+        .catch(() => {});
       try {
         const {
           orphanedMediaUrls,
@@ -1149,12 +1153,12 @@ function getDistanceMetres(lat1, lon1, lat2, lon2) {
 // Get online nearby users for pulse strip
 router.get("/online-nearby", auth, async (req, res) => {
   try {
-    const { getOnlineNearbyPulse } = require('../services/onlineNearby');
-    
-    const radiusKm = Number(req.query.radius) || undefined;
-    const limit = Number(req.query.limit) || undefined;
-    
-    const result = await getOnlineNearbyPulse(req.userId, {
+    const { getOnlineNearbyPulseCached } = require('../services/onlineNearby');
+
+    const radiusKm = Math.min(Number(req.query.radius) || 0, 50) || undefined;
+    const limit = Math.min(Number(req.query.limit) || 0, 48) || undefined;
+
+    const result = await getOnlineNearbyPulseCached(req.userId, {
       radiusKm,
       limit,
     });

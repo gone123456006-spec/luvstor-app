@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { StyleSheet, View } from "react-native";
+import { themedStyles } from "../utils/theme";
 
 export default function BonusCoin({
   size = 58,
@@ -29,11 +30,13 @@ export default function BonusCoin({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   coin: {
     backgroundColor: "#EAB308",
     alignItems: "center",
     justifyContent: "center",
     borderColor: "#FDE68A",
   },
-});
+}),
+);

@@ -44,6 +44,7 @@ async function persistMediaBuffer({
   originalName,
   prefix,
   defaultMime,
+  isPrivate = false,
 }) {
   if (!Buffer.isBuffer(buffer) || !buffer.length) {
     throw new Error('Empty media buffer');
@@ -66,6 +67,7 @@ async function persistMediaBuffer({
     fileName,
     originalName: originalName || fileName,
     size: buffer.length,
+    private: !!isPrivate || kindFromMime(resolvedMime, prefix) === 'audio',
     data: buffer,
   });
 
@@ -106,6 +108,54 @@ async function loadMediaById(id) {
   return MediaAsset.findById(id).select('+data');
 }
 
+/** Headers-only lookup — never reads the file bytes */
+async function loadMediaMeta(id) {
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
+  return MediaAsset.findById(id).select('mimeType size kind private').lean();
+}
+
+/**
+ * Mark the asset behind a stored `/api/media/{id}` URL as private (chat media).
+ * Skipped when the file is also the owner's DP / cover / gallery photo —
+ * those must stay public.
+ */
+async function markMediaPrivate(url) {
+  const id = mediaIdFromUrl(url);
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) return;
+  try {
+    const asset = await MediaAsset.findById(id).select('userId private').lean();
+    if (!asset || asset.private) return;
+    if (asset.userId) {
+      const User = require('../models/User');
+      const owner = await User.findById(asset.userId).select('photo coverPhoto photos').lean();
+      const used = [owner?.photo, owner?.coverPhoto, ...(owner?.photos || [])].some(
+        (p) => typeof p === 'string' && mediaIdFromUrl(p) === id,
+      );
+      if (used) return;
+    }
+    await MediaAsset.updateOne({ _id: id, private: { $ne: true } }, { $set: { private: true } });
+    require('./mediaMemCache').del(String(id));
+  } catch (err) {
+    console.warn('[mediaStore] markMediaPrivate failed:', err.message);
+  }
+}
+
+/** Make the owner's own assets public again (used for profile photos) */
+async function markMediaPublic(userId, urls) {
+  const ids = [...new Set((urls || []).map(mediaIdFromUrl).filter(Boolean))].filter((id) =>
+    mongoose.Types.ObjectId.isValid(id),
+  );
+  if (!userId || !ids.length) return;
+  const res = await MediaAsset.updateMany(
+    { _id: { $in: ids }, userId, private: true },
+    { $set: { private: false } },
+  );
+  if (res.modifiedCount) {
+    const memCache = require('./mediaMemCache');
+    ids.forEach((id) => memCache.del(String(id)));
+  }
+}
+
 async function deleteUserMedia(userId) {
   await MediaAsset.deleteMany({ userId });
 }
@@ -117,5 +167,8 @@ module.exports = {
   persistMediaBuffer,
   mediaExists,
   loadMediaById,
+  loadMediaMeta,
+  markMediaPrivate,
+  markMediaPublic,
   deleteUserMedia,
 };

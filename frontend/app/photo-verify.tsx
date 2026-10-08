@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Image } from 'expo-image';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../utils/haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -16,7 +15,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getApiBase } from '../utils/api';
 import { getAuthToken } from '../utils/auth';
 import { uploadImageDurable } from '../utils/uploadMedia';
 import { userFacingMessage } from '../utils/userFacingError';
@@ -27,6 +25,9 @@ import {
   PhotoVerification,
   submitPhotoVerification,
 } from '../utils/verification';
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, tc, themedStyles } from "../utils/theme";
+import { useAccessibility } from "../contexts/AccessibilityContext";
 
 const ANALYSIS_MS = 30 * 60 * 1000;
 const POLL_MS = 20_000;
@@ -303,6 +304,7 @@ function LiveAutoCaptureModal({
  */
 export default function PhotoVerifyScreen() {
   const router = useRouter();
+  const { isDark } = useAccessibility();
   const [status, setStatus] = useState<PhotoVerification | null>(null);
   const [challenge, setChallenge] = useState<PhotoChallenge | null>(null);
   const [loading, setLoading] = useState(true);
@@ -570,15 +572,6 @@ export default function PhotoVerifyScreen() {
   const isPending = status?.status === 'pending';
   const canTakeSelfie = !isApproved && !isPending && !uploading;
 
-  const poseIcon =
-    challenge?.pose === 'smile'
-      ? 'happy-outline'
-      : challenge?.pose === 'turn_left'
-        ? 'arrow-back-circle-outline'
-        : challenge?.pose === 'turn_right'
-          ? 'arrow-forward-circle-outline'
-          : 'camera-outline';
-
   const heading = isApproved
     ? 'Photo verified'
     : isPending
@@ -591,17 +584,17 @@ export default function PhotoVerifyScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={statusBarStyle()} />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-          <Ionicons name="arrow-back" size={24} color="#1C1B1F" />
+          <Ionicons name={NAV_ICON.back} size={24} color={tc("#1C1B1F", "fg")} />
         </TouchableOpacity>
         <Text style={styles.title}>Photo verification</Text>
       </View>
 
       {loading ? (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={BRAND} />
+          <ActivityIndicator size="large" color={tc(BRAND, "fg")} />
           <Text style={styles.loadingText}>Loading verification…</Text>
         </View>
       ) : (
@@ -609,14 +602,16 @@ export default function PhotoVerifyScreen() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.badge}>
-            <Ionicons
-              name={isApproved ? 'shield-checkmark' : 'shield-outline'}
-              size={40}
-              color={isApproved ? '#22C55E' : BRAND}
-            />
-          </View>
-          <Text style={styles.heading}>{heading}</Text>
+          {!isApproved ? (
+            <View style={[styles.badge, isDark && fixed.badgeDark]}>
+              <Ionicons
+                name="shield-outline"
+                size={40}
+                color={isDark ? '#D8CCFF' : BRAND}
+              />
+            </View>
+          ) : null}
+          <Text style={[styles.heading, isApproved && fixed.verifiedHeading]}>{heading}</Text>
           <Text style={styles.copy}>
             {isApproved
               ? 'Your live selfie matched your profile photos. Badge is on Nearby and Explore.'
@@ -638,55 +633,20 @@ export default function PhotoVerifyScreen() {
             </View>
           ) : null}
 
-          {canTakeSelfie ? (
-            <View style={styles.poseCard}>
-              <Ionicons name={poseIcon as any} size={40} color={BRAND} />
-              <Text style={styles.poseLabel}>
-                {challenge?.label || 'Ready when you are'}
-              </Text>
-              <Text style={styles.poseHint}>
-                {challenge?.instruction ||
-                  'Tap Start auto verify. The camera will guide Smile → Left → Right and click for you.'}
-              </Text>
-              <TouchableOpacity
-                onPress={() => void refreshChallenge()}
-                hitSlop={12}
-                style={styles.newPoseBtn}
-              >
-                <Ionicons name="refresh" size={16} color={BRAND} />
-                <Text style={styles.newPose}>
-                  {challenge ? 'Refresh challenge' : 'Get challenge'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {status?.selfieUrl ? (
-            <Image
-              source={{
-                uri: status.selfieUrl.startsWith('http')
-                  ? status.selfieUrl
-                  : `${getApiBase()}${status.selfieUrl}`,
-              }}
-              style={styles.preview}
-              contentFit="cover"
-            />
-          ) : null}
-
           {isRejected && status?.reviewNote ? (
             <Text style={styles.note}>{status.reviewNote}</Text>
           ) : null}
 
           {uploading ? (
             <View style={styles.busyRow}>
-              <ActivityIndicator color={BRAND} />
+              <ActivityIndicator color={tc(BRAND, "fg")} />
               <Text style={styles.busyText}>Uploading live selfie…</Text>
             </View>
           ) : null}
 
           {isPending ? (
             <View style={styles.busyRow}>
-              <ActivityIndicator color={BRAND} />
+              <ActivityIndicator color={tc(BRAND, "fg")} />
               <Text style={styles.busyText}>
                 {remainingMs > 0
                   ? `Analysing DP + photos + selfie · ${formatRemaining(remainingMs)}`
@@ -725,7 +685,8 @@ export default function PhotoVerifyScreen() {
   );
 }
 
-const live = StyleSheet.create({
+const live = themedStyles(() =>
+  StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#000',
@@ -853,9 +814,11 @@ const live = StyleSheet.create({
   },
   permBtnText: { color: '#fff', fontWeight: '700' },
   cancelText: { color: 'rgba(255,255,255,0.7)' },
-});
+}),
+);
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F7' },
   header: {
     flexDirection: 'row',
@@ -914,41 +877,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   stepLine: { color: '#49454F', lineHeight: 22, fontSize: 14 },
-  poseCard: {
-    width: '100%',
-    backgroundColor: '#EFE8F8',
-    borderRadius: 16,
-    padding: 18,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  poseLabel: {
-    marginTop: 10,
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1C1B1F',
-  },
-  poseHint: {
-    marginTop: 6,
-    textAlign: 'center',
-    color: '#49454F',
-    lineHeight: 20,
-  },
-  newPoseBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 12,
-    padding: 6,
-  },
   newPose: { color: BRAND, fontWeight: '600', fontSize: 15 },
-  preview: {
-    width: 160,
-    height: 160,
-    borderRadius: 16,
-    marginBottom: 16,
-    backgroundColor: '#eee',
-  },
   note: {
     color: '#B3261E',
     marginBottom: 12,
@@ -977,4 +906,10 @@ const styles = StyleSheet.create({
   },
   btnText: { color: '#fff', fontWeight: '700', fontSize: 17 },
   linkBtn: { marginTop: 16, padding: 8 },
+}),
+);
+
+const fixed = StyleSheet.create({
+  verifiedHeading: { color: '#22C55E' },
+  badgeDark: { backgroundColor: '#3A2E5C' },
 });

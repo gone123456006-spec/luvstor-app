@@ -24,6 +24,7 @@ import {
   sendLike,
   unlikeUser,
 } from "../../utils/friends";
+import { tc, themedStyles } from "../../utils/theme";
 
 /**
  * Opens a user profile from notification / share links:
@@ -203,7 +204,7 @@ export default function NotificationProfileScreen() {
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#6750A4" />
+          <ActivityIndicator size="large" color={tc("#6750A4", "fg")} />
           <Text style={styles.hint}>Opening profile…</Text>
         </View>
       ) : error ? (
@@ -242,7 +243,8 @@ export default function NotificationProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   root: { flex: 1, backgroundColor: "#FDF8FF" },
   center: {
     flex: 1,
@@ -272,4 +274,5 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-});
+}),
+);

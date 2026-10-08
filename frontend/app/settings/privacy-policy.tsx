@@ -10,8 +10,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const C = {
+const C = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -19,14 +21,14 @@ const C = {
   border: '#E7E0EC',
   primary: '#370372',
   header: '#F5F5F7',
-};
+});
 
 export default function PrivacyPolicyScreen() {
   const router = useRouter();
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={C.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -34,7 +36,7 @@ export default function PrivacyPolicyScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={C.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={C.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy Policy</Text>
       </View>
@@ -201,7 +203,7 @@ export default function PrivacyPolicyScreen() {
           </Text>
           <Text style={styles.bulletItem}>• Block users and manage privacy settings</Text>
           <Text style={styles.bulletItem}>
-            • Delete your account from Settings → Account → Delete account
+            • Delete your account from Settings → Account → Personal details → Account ownership and control → Deactivation or deletion
           </Text>
           <Text style={styles.bulletItem}>
             • Contact us to ask questions about your data
@@ -231,7 +233,8 @@ export default function PrivacyPolicyScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   header: {
     flexDirection: 'row',
@@ -285,4 +288,5 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingLeft: 8,
   },
-});
+}),
+);

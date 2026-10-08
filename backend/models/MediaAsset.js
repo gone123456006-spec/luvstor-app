@@ -24,6 +24,8 @@ const mediaAssetSchema = new mongoose.Schema(
     fileName: { type: String, default: '' },
     originalName: { type: String, default: '' },
     size: { type: Number, default: 0 },
+    /** Chat photo / voice note — served only through signed links */
+    private: { type: Boolean, default: false },
     /** Raw file bytes — do not project in list queries */
     data: { type: Buffer, required: true, select: false },
   },

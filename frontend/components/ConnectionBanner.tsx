@@ -9,6 +9,7 @@ import {
   retryConnectionNow,
   subscribeConnectivity,
 } from '../utils/connectivity';
+import { themedStyles } from '../utils/theme';
 
 /**
  * One app-wide connection bar: offline, server/socket trouble (retrying), and a
@@ -68,7 +69,8 @@ export default function ConnectionBanner() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   wrap: {
     position: 'absolute',
     left: 0,
@@ -102,4 +104,5 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.22)',
   },
   retryText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-});
+}),
+);

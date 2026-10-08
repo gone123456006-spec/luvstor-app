@@ -96,4 +96,15 @@ const conversationStateSchema = new mongoose.Schema({
 conversationStateSchema.index({ userId: 1, otherUserId: 1 }, { unique: true });
 conversationStateSchema.index({ userId: 1, waitingForReply: 1 });
 
+// Archive / unarchive moves unread out of the main badge → same version as messages
+conversationStateSchema.plugin(require('../utils/cacheVersionPlugin'), {
+  scope: 'msg',
+  fields: ['userId'],
+  relevant: (update, op) => {
+    if (op.startsWith('delete') || op === 'findOneAndDelete') return true;
+    if (!update) return false;
+    return 'archived' in update || 'archived' in (update.$set || {}) || 'archived' in (update.$setOnInsert || {});
+  },
+});
+
 module.exports = mongoose.model('ConversationState', conversationStateSchema);

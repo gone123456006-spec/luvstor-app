@@ -17,8 +17,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAuthToken } from '../utils/auth';
 import { listMySupportTickets, submitSupportTicket, SupportTicket } from '../utils/support';
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -28,12 +30,12 @@ const WA = {
   primaryContainer: '#EADDFF',
   accent: '#FF4B6E',
   header: '#F5F5F7',
-};
+});
 
 const FAQS = [
   {
     q: 'How do I delete my account permanently?',
-    a: 'Go to Profile > Settings > Account and tap "Delete Account". Your account is deactivated immediately with a 7-day restore period.',
+    a: 'Go to Profile > Settings > Account > Personal details > Account ownership and control > Deactivation or deletion. Your account is deactivated immediately with a 7-day restore period.',
   },
   {
     q: 'Is Luvstor completely free to use?',
@@ -124,14 +126,14 @@ export default function HelpSupportScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={24} color={WA.text} />
+            <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Help & Support</Text>
         </View>
@@ -217,7 +219,7 @@ export default function HelpSupportScreen() {
                 value={ticketSubject}
                 onChangeText={setTicketSubject}
                 placeholder="Short summary"
-                placeholderTextColor="#999"
+                placeholderTextColor={tc("#999", "fg")}
                 maxLength={200}
               />
 
@@ -227,7 +229,7 @@ export default function HelpSupportScreen() {
                 value={ticketDescription}
                 onChangeText={setTicketDescription}
                 placeholder="Tell us what happened (min 10 characters)"
-                placeholderTextColor="#999"
+                placeholderTextColor={tc("#999", "fg")}
                 multiline
                 maxLength={5000}
                 textAlignVertical="top"
@@ -279,7 +281,8 @@ export default function HelpSupportScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -372,4 +375,5 @@ const styles = StyleSheet.create({
   },
   ticketSubject: { fontSize: 15, fontWeight: '600', color: WA.text },
   ticketMeta: { marginTop: 4, fontSize: 12, color: WA.secondary },
-});
+}),
+);

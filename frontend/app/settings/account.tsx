@@ -18,8 +18,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { apiRequest } from '../../utils/api';
 import { getAuthToken } from '../../utils/auth';
 import { getCachedProfile, preloadProfile } from '../../utils/profileCache';
+import { NAV_ICON, SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
+import ListRowTouchable from "../../components/ListRowTouchable";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -28,7 +31,7 @@ const WA = {
   primary: '#370372',
   danger: '#FF4B6E',
   header: '#F5F5F7',
-};
+});
 
 function GoogleG({ size = 18 }: { size?: number }) {
   return (
@@ -135,7 +138,7 @@ export default function AccountSettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <Modal
         visible={logoutVisible}
@@ -185,7 +188,7 @@ export default function AccountSettingsScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Account</Text>
       </View>
@@ -208,7 +211,7 @@ export default function AccountSettingsScreen() {
                   style={[
                     styles.iconCircle,
                     {
-                      backgroundColor: isGoogle ? '#FFFFFF' : WA.primary,
+                      backgroundColor: isGoogle ? tc('#FFFFFF', "bg") : WA.primary,
                       borderWidth: isGoogle ? 1 : 0,
                       borderColor: WA.border,
                     },
@@ -235,7 +238,7 @@ export default function AccountSettingsScreen() {
               <View style={styles.divider} />
 
               <View style={styles.infoRow}>
-                <View style={[styles.iconCircle, { backgroundColor: '#370372' }]}>
+                <View style={[styles.iconCircle, { backgroundColor: tc('#370372', "bg") }]}>
                   <Ionicons name="person" size={20} color="#fff" />
                 </View>
                 <View style={styles.rowContent}>
@@ -267,7 +270,7 @@ export default function AccountSettingsScreen() {
 
         <Text style={styles.sectionHint}>Legal & Privacy</Text>
         <View style={styles.listGroup}>
-          <TouchableOpacity
+          <ListRowTouchable
             style={styles.listRow}
             activeOpacity={0.7}
             onPress={() => router.push('/settings/privacy-policy' as any)}
@@ -276,12 +279,14 @@ export default function AccountSettingsScreen() {
               <Ionicons name="shield-checkmark" size={20} color="#fff" />
             </View>
             <Text style={styles.rowLabelFlex}>Privacy Policy</Text>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
 
           <View style={styles.divider} />
 
-          <TouchableOpacity
+          <ListRowTouchable
             style={styles.listRow}
             activeOpacity={0.7}
             onPress={() => router.push('/settings/terms-conditions' as any)}
@@ -290,27 +295,15 @@ export default function AccountSettingsScreen() {
               <Ionicons name="document-text" size={20} color="#fff" />
             </View>
             <Text style={styles.rowLabelFlex}>Terms & Conditions</Text>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.listRow}
-            activeOpacity={0.7}
-            onPress={() => router.push('/settings/account-deletion' as any)}
-          >
-            <View style={[styles.iconCircle, { backgroundColor: '#EA4335' }]}>
-              <Ionicons name="information-circle" size={20} color="#fff" />
-            </View>
-            <Text style={styles.rowLabelFlex}>Account Deletion Policy</Text>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
         </View>
 
         <Text style={styles.sectionHint}>About</Text>
         <View style={styles.listGroup}>
-          <TouchableOpacity
+          <ListRowTouchable
             style={styles.listRow}
             activeOpacity={0.7}
             onPress={() => router.push('/settings/permissions' as any)}
@@ -324,30 +317,53 @@ export default function AccountSettingsScreen() {
                 Microphone, camera, photos, music & calls
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
 
           <View style={styles.divider} />
 
-          <TouchableOpacity
+          <ListRowTouchable
             style={styles.listRow}
             activeOpacity={0.7}
             onPress={() => router.push('/settings/app-version' as any)}
           >
-            <View style={[styles.iconCircle, { backgroundColor: '#370372' }]}>
+            <View style={[styles.iconCircle, { backgroundColor: tc('#370372', "bg") }]}>
               <Ionicons name="phone-portrait-outline" size={20} color="#fff" />
             </View>
             <View style={styles.rowContent}>
               <Text style={styles.rowLabel}>App version</Text>
               <Text style={styles.rowSub}>Version, build & platform info</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
+
+          <View style={styles.divider} />
+
+          <ListRowTouchable
+            style={styles.listRow}
+            activeOpacity={0.7}
+            onPress={() => router.push('/settings/personal-details' as any)}
+          >
+            <View style={[styles.iconCircle, { backgroundColor: '#6B7280' }]}>
+              <Ionicons name="person-circle-outline" size={22} color="#fff" />
+            </View>
+            <View style={styles.rowContent}>
+              <Text style={styles.rowLabel}>Personal details</Text>
+              <Text style={styles.rowSub}>Contact info, name</Text>
+            </View>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
         </View>
 
         <Text style={styles.sectionHint}>Session</Text>
         <View style={styles.listGroup}>
-          <TouchableOpacity
+          <ListRowTouchable
             style={styles.listRow}
             activeOpacity={0.7}
             onPress={onLogout}
@@ -358,35 +374,18 @@ export default function AccountSettingsScreen() {
             <Text style={[styles.rowLabelFlex, { color: WA.danger }]}>
               Logout
             </Text>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={[styles.sectionHint, { paddingTop: 28 }]}>
-          Deleting your account will permanently remove your profile and data from Luvstor.
-        </Text>
-
-        <View style={styles.listGroup}>
-          <TouchableOpacity
-            style={styles.listRow}
-            activeOpacity={0.7}
-            onPress={() => router.push('/delete-account/warning' as any)}
-          >
-            <View style={[styles.iconCircle, { backgroundColor: WA.danger }]}>
-              <Ionicons name="trash" size={20} color="#fff" />
-            </View>
-            <Text style={[styles.rowLabelFlex, { color: WA.danger }]}>
-              Delete account
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -450,7 +449,7 @@ const styles = StyleSheet.create({
   },
   rowContent: { flex: 1 },
   rowLabel: { fontSize: 17, fontWeight: '400', color: WA.text },
-  rowLabelFlex: { flex: 1, fontSize: 17, fontWeight: '400' },
+  rowLabelFlex: { flex: 1, fontSize: 17, fontWeight: '400', color: WA.text },
   rowSub: { fontSize: 13, color: WA.secondary, marginTop: 2 },
   logoutOverlay: {
     flex: 1,
@@ -510,4 +509,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
-});
+}),
+);

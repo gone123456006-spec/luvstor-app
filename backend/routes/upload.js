@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const Upload = require('../models/Upload');
 const { persistMediaBuffer } = require('../services/mediaStore');
 const { publicApiBase } = require('../utils/absoluteUrl');
+const { signMediaUrl } = require('../utils/mediaSign');
 
 function parseDataUri(base64) {
   const matches = String(base64 || '').match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
@@ -35,6 +36,9 @@ function extensionForMime(mime, fallback = 'bin') {
  */
 async function persistUploadBuffer(req, { buffer, mime, originalName, prefix, defaultMime, defaultExt }) {
   const resolvedMime = mime || defaultMime;
+  const isPrivate =
+    prefix === 'aud' ||
+    String(req.headers['x-media-scope'] || req.body?.scope || '').toLowerCase() === 'chat';
   const result = await persistMediaBuffer({
     userId: req.userId,
     buffer,
@@ -42,6 +46,7 @@ async function persistUploadBuffer(req, { buffer, mime, originalName, prefix, de
     originalName,
     prefix,
     defaultMime,
+    isPrivate,
   });
 
   const publicBase = publicApiBase();
@@ -49,13 +54,15 @@ async function persistUploadBuffer(req, { buffer, mime, originalName, prefix, de
     publicBase && !/localhost|127\.0\.0\.1/i.test(publicBase)
       ? publicBase
       : `${req.protocol}://${req.get('host')}`;
-  const absoluteUrl = `${hostBase}${result.url}`;
+  // Private files come back signed so the uploader can show them right away
+  const url = isPrivate ? signMediaUrl(result.url) : result.url;
+  const absoluteUrl = `${hostBase}${url}`;
 
   // Optional ext hint for clients that append types (not required for serve)
   const ext = extensionForMime(resolvedMime, defaultExt);
 
   return {
-    url: result.url,
+    url,
     absoluteUrl,
     uploadId: result.id,
     mediaId: result.id,

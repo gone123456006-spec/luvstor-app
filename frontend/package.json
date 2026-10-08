@@ -1,6 +1,6 @@
 {
   "name": "luvstor",
-  "main": "expo-router/entry",
+  "main": "index.js",
   "version": "1.0.0",
   "scripts": {
     "start": "node ./scripts/start-expo.js",

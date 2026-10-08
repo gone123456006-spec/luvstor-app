@@ -153,7 +153,27 @@ async function getOnlineNearbyPulse(viewerId, options = {}) {
   }
 }
 
+/**
+ * Strip is polled by every open Home screen; 20 s per viewer keeps it "live"
+ * while collapsing the $near + presence work. Likes / blocks bump the social
+ * version so the strip never shows a stale Like / blocked user.
+ */
+const PULSE_TTL_SEC = Math.max(0, Number(process.env.ONLINE_NEARBY_TTL_SEC ?? 20));
+
+async function getOnlineNearbyPulseCached(viewerId, options = {}) {
+  if (!PULSE_TTL_SEC) return getOnlineNearbyPulse(viewerId, options);
+  const cache = require('../utils/cache');
+  const v = await cache.version('social', viewerId);
+  const key = `pulse:${viewerId}:${v}:${options.radiusKm || ''}:${options.limit || ''}`;
+  const cached = await cache.get(key);
+  if (cached !== undefined) return cached;
+  const result = await getOnlineNearbyPulse(viewerId, options);
+  if (!result.error) await cache.set(key, result, PULSE_TTL_SEC);
+  return result;
+}
+
 module.exports = {
   CONFIG,
   getOnlineNearbyPulse,
+  getOnlineNearbyPulseCached,
 };

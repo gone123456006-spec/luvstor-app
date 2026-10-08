@@ -63,6 +63,22 @@ export function durableMediaPathFromUrl(url?: string | null): string | null {
   return null;
 }
 
+/** `?e=&s=` from a signed private-media link (chat photos / voice notes), or '' */
+export function mediaSignatureQuery(url?: string | null): string {
+  const raw = String(url || '');
+  const q = raw.indexOf('?');
+  if (q < 0) return '';
+  const query = raw.slice(q + 1).split('#')[0];
+  let e = '';
+  let s = '';
+  for (const part of query.split('&')) {
+    const [k, v = ''] = part.split('=');
+    if (k === 'e') e = v;
+    else if (k === 's') s = v;
+  }
+  return e && s ? `?e=${e}&s=${s}` : '';
+}
+
 /** @deprecated use durableMediaPathFromUrl — kept for call sites */
 export function uploadsPathFromUrl(url?: string | null): string | null {
   return durableMediaPathFromUrl(url);
@@ -119,7 +135,7 @@ export function resolveMediaUrl(url?: string | null): string | null {
   const mediaBase = getMediaBase();
   const durable = durableMediaPathFromUrl(trimmed);
   if (durable) {
-    return `${mediaBase}${durable}`;
+    return `${mediaBase}${durable}${mediaSignatureQuery(trimmed)}`;
   }
 
   if (trimmed.startsWith('/')) {
@@ -163,8 +179,9 @@ export function mediaUrlCandidates(url?: string | null): string[] {
 
   push(resolveMediaUrl(trimmed));
 
-  const path = durableMediaPathFromUrl(trimmed);
-  if (path) {
+  const durable = durableMediaPathFromUrl(trimmed);
+  if (durable) {
+    const path = `${durable}${mediaSignatureQuery(trimmed)}`;
     push(`${PRODUCTION_MEDIA_BASE}${path}`);
     try {
       const api = getApiBase();

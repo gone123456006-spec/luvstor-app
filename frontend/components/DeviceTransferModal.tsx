@@ -12,17 +12,18 @@ import {
 import { getSheetBottomPadding } from "../utils/navigation";
 import { useStableBottomInset } from "../hooks/useStableBottomInset";
 import { useTabBarOverlayInset } from "../hooks/useTabBarOverlayInset";
+import { themedPalette, themedStyles } from "../utils/theme";
 
 /** Match AppAlert iOS action sheet tokens */
-const C = {
+const C = themedPalette({
   accent: "#007AFF",
   danger: "#FF3B30",
   title: "#000000",
   message: "#3C3C43",
   divider: "rgba(60, 60, 67, 0.29)",
-  card: "#E4E6EB",
+  card: "#FFFFFF",
   backdrop: "rgba(0, 0, 0, 0.4)",
-};
+});
 
 type Props = {
   visible: boolean;
@@ -151,7 +152,8 @@ export default function DeviceTransferModal({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   host: {
     ...StyleSheet.absoluteFill,
     zIndex: 10000,
@@ -174,8 +176,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sheetCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 22,
     overflow: "hidden",
   },
   sheetHeader: {
@@ -206,7 +208,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
-    backgroundColor: C.card,
+    backgroundColor: "#FFFFFF",
   },
   sheetBtnDisabled: {
     opacity: 0.5,
@@ -221,8 +223,8 @@ const styles = StyleSheet.create({
   },
   sheetCancel: {
     minHeight: 56,
-    borderRadius: 14,
-    backgroundColor: C.card,
+    borderRadius: 28,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -231,4 +233,5 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: C.accent,
   },
-});
+}),
+);

@@ -13,8 +13,10 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -25,7 +27,7 @@ const WA = {
   danger: '#FF4B6E',
   orange: '#FF9800',
   header: '#FDF8FF',
-};
+});
 
 const REQUIRED_TEXT = 'DELETE MY ACCOUNT';
 
@@ -36,14 +38,14 @@ export default function ConfirmationScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={24} color={WA.text} />
+            <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Type to confirm</Text>
         </View>
@@ -128,7 +130,8 @@ export default function ConfirmationScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -228,4 +231,5 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   continueText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-});
+}),
+);

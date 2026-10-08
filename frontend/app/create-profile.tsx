@@ -44,9 +44,11 @@ import {
     SHOW_ME_OPTIONS,
     type ShowMeValue,
 } from "../utils/showMe";
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
 // ── Luvstor brand (WhatsApp-style, clean) ───────────────────
-const C = {
+const C = themedPalette({
   bg: "#F0F2F5",
   white: "#FFFFFF",
   text: "#1A1A2E",
@@ -58,7 +60,7 @@ const C = {
   yellow: "#F5D547",
   disabled: "#D1D5DB",
   placeholder: "#9CA3AF",
-};
+});
 
 const INTERESTS = [
   { label: "Travel", emoji: "✈️" },
@@ -131,7 +133,8 @@ function WAInputField({
   );
 }
 
-const fieldStyles = StyleSheet.create({
+const fieldStyles = themedStyles(() =>
+  StyleSheet.create({
   container: {
     marginBottom: 16,
   },
@@ -173,7 +176,8 @@ const fieldStyles = StyleSheet.create({
     textAlignVertical: "top",
     paddingTop: 12,
   },
-});
+}),
+);
 
 export default function CreateProfileScreen() {
   const router = useRouter();
@@ -701,10 +705,10 @@ export default function CreateProfileScreen() {
   if (setupDone) {
     return (
       <View style={s.doneContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <StatusBar barStyle={statusBarStyle()} backgroundColor={C.bg} />
         <View style={s.doneIconOuter}>
           <View style={s.doneIconInner}>
-            <Ionicons name="checkmark" size={56} color={C.white} />
+            <Ionicons name="checkmark" size={56} color="#FFFFFF" />
           </View>
         </View>
         <Text style={s.doneTitle}>Profile setup done!</Text>
@@ -739,7 +743,7 @@ export default function CreateProfileScreen() {
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={s.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={C.white} />
+        <StatusBar barStyle={statusBarStyle()} backgroundColor={C.white} />
 
         <SafeAreaView edges={["top"]} style={s.header}>
           <View style={s.headerRow}>
@@ -748,7 +752,7 @@ export default function CreateProfileScreen() {
               style={s.backButton}
               disabled={saving}
             >
-              <Ionicons name="arrow-back" size={24} color={C.text} />
+              <Ionicons name={NAV_ICON.back} size={24} color={C.text} />
             </TouchableOpacity>
             <Text style={s.headerTitle}>Profile setup</Text>
             <Text style={s.headerStep}>
@@ -806,7 +810,8 @@ export default function CreateProfileScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const s = themedStyles(() =>
+  StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: C.bg,
@@ -1122,4 +1127,5 @@ const s = StyleSheet.create({
   doneBonusText: { fontSize: 14, fontWeight: "700", color: C.primaryDark },
   doneContinue: { marginTop: 20, paddingVertical: 10, paddingHorizontal: 24 },
   doneContinueText: { fontSize: 15, fontWeight: "700", color: C.primary },
-});
+}),
+);

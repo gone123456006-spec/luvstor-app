@@ -1,8 +1,10 @@
+import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React from "react";
 import {
   Dimensions,
+  Pressable,
   Image,
   ImageBackground,
   Platform,
@@ -84,13 +86,7 @@ export default function WelcomeScreen() {
               Meet nearby. Chat freely. Start something real.
             </Text>
 
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              activeOpacity={0.88}
-              onPress={() => router.push("/login")}
-            >
-              <Text style={styles.primaryBtnText}>Get started</Text>
-            </TouchableOpacity>
+            <GetStartedButton onPress={() => router.push("/login")} />
 
             <TouchableOpacity
               style={styles.secondaryBtn}
@@ -106,6 +102,24 @@ export default function WelcomeScreen() {
         </View>
       </ImageBackground>
     </View>
+  );
+}
+
+function GetStartedButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Get started"
+      android_ripple={{ color: "rgba(55,3,114,0.12)", borderless: false }}
+      style={({ pressed }) => [
+        styles.primaryBtn,
+        pressed && Platform.OS === "ios" && styles.primaryBtnPressed,
+      ]}
+    >
+      <Text style={styles.primaryBtnText}>Get started</Text>
+      <Ionicons name="arrow-forward" size={19} color={BRAND} />
+    </Pressable>
   );
 }
 
@@ -185,14 +199,21 @@ const styles = StyleSheet.create({
   },
   primaryBtn: {
     width: "100%",
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: BRAND,
+    height: 56,
+    borderRadius: 28,
+    overflow: "hidden",
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 8,
+  },
+  primaryBtnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
   },
   primaryBtnText: {
-    color: "#FFFFFF",
+    color: BRAND,
     fontSize: 17,
     fontWeight: "700",
     letterSpacing: 0.1,

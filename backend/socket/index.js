@@ -24,6 +24,8 @@ const calls = require('../services/calls');
 const exploreMatchmaking = require('../services/exploreMatchmaking');
 const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
 const { toPersistentMediaUrl } = require('../utils/mediaUrl');
+const { signMediaUrl } = require('../utils/mediaSign');
+const { markMediaPrivate } = require('../services/mediaStore');
 
 function normalizeMessageMediaUrl(url) {
   const n = toPersistentMediaUrl(url);
@@ -67,7 +69,7 @@ function shapeReplyToSnapshot(parent) {
     mediaUrl:
       parent.isDeleted || isViewOnce
         ? null
-        : normalizeMessageMediaUrl(parent.mediaUrl),
+        : signMediaUrl(normalizeMessageMediaUrl(parent.mediaUrl)),
     isDeleted: !!parent.isDeleted,
     viewOnce: isViewOnce,
     viewOnceOpened: !!parent.viewOnceOpened,
@@ -617,6 +619,8 @@ module.exports = function initSocket(io) {
           viewOnceOpened: false,
         });
 
+        if (persistentMediaUrl) void markMediaPrivate(persistentMediaUrl);
+
         const payload = {
           _id: message._id,
           roomId: room,
@@ -624,7 +628,7 @@ module.exports = function initSocket(io) {
           receiverId,
           text: message.text,
           type: message.type,
-          mediaUrl: message.mediaUrl,
+          mediaUrl: signMediaUrl(message.mediaUrl),
           delivered: !!message.delivered,
           read: !!message.read,
           undelivered: !!message.undelivered,
@@ -831,7 +835,7 @@ module.exports = function initSocket(io) {
         message.viewOnceOpenedAt = new Date();
         await message.save();
 
-        const mediaUrl = message.mediaUrl || null;
+        const mediaUrl = signMediaUrl(message.mediaUrl) || null;
         socket.emit('chat:view-once-open', {
           messageId: String(message._id),
           mediaUrl,

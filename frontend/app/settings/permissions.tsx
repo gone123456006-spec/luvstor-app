@@ -19,8 +19,10 @@ import {
   requestEssentialPermissions,
   requestPermissionById,
 } from '../../utils/appPermissions';
+import { NAV_ICON } from "../../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#F5F5F7',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -30,7 +32,7 @@ const WA = {
   ok: '#25D366',
   warn: '#F59E0B',
   header: '#F5F5F7',
-};
+});
 
 type RowDef = {
   id: AppPermissionId;
@@ -156,7 +158,7 @@ export default function PermissionsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -164,7 +166,7 @@ export default function PermissionsScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Permissions</Text>
       </View>
@@ -279,7 +281,8 @@ export default function PermissionsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -373,4 +376,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-});
+}),
+);

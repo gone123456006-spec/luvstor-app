@@ -37,6 +37,8 @@ import {
 import { getSheetBottomPadding } from "../utils/navigation";
 import { isExternalLink, openExternalLink, routeForData } from "../utils/push";
 import { fetchSubscriptionStatus } from "../utils/subscriptions";
+import { NAV_ICON } from "../utils/platformIcons";
+import { tc, themedPalette, themedStyles } from "../utils/theme";
 
 const PAGE_SIZE = 25;
 
@@ -49,7 +51,7 @@ let allListCache: {
   hasMore: boolean;
 } | null = null;
 
-const C = {
+const C = themedPalette({
   purple: "#370372",
   purpleSoft: "#EFE8F8",
   purpleMid: "#5B2A9E",
@@ -62,7 +64,7 @@ const C = {
   pillActive: "#111111",
   bg: "#F5F5F7",
   gold: "#F5C518",
-};
+});
 
 type FilterKey = "All" | "Unread" | "Profile View";
 
@@ -81,21 +83,21 @@ function typeMeta(type: AppNotification["type"]) {
       return {
         icon: "heart" as const,
         color: "#FF4B6E",
-        bg: "#FFE8EE",
+        bg: tc("#FFE8EE", "bg"),
         label: "Request",
       };
     case "like":
       return {
         icon: "heart" as const,
         color: "#FF4B6E",
-        bg: "#FFE8EE",
+        bg: tc("#FFE8EE", "bg"),
         label: "Like",
       };
     case "match":
       return {
         icon: "flame" as const,
         color: "#FF4B6E",
-        bg: "#FFE8EE",
+        bg: tc("#FFE8EE", "bg"),
         label: "Match",
       };
     case "friends":
@@ -836,7 +838,7 @@ export default function NotificationsScreen() {
                 size={52}
               />
             ) : (
-              <View style={[styles.iconCircle, { backgroundColor: meta.bg }]}>
+              <View style={[styles.iconCircle, { backgroundColor: tc(meta.bg, "bg") }]}>
                 <Ionicons name={meta.icon} size={24} color={meta.color} />
               </View>
             )}
@@ -1011,7 +1013,7 @@ export default function NotificationsScreen() {
             accessibilityRole="button"
             accessibilityLabel="Go back"
           >
-            <Ionicons name="arrow-back" size={24} color={C.text} />
+            <Ionicons name={NAV_ICON.back} size={24} color={C.text} />
           </TouchableOpacity>
 
           <Text style={styles.headerTitle} numberOfLines={1}>
@@ -1028,7 +1030,7 @@ export default function NotificationsScreen() {
               accessibilityRole="button"
               accessibilityLabel="More options"
             >
-              <Ionicons name="ellipsis-vertical" size={22} color={C.text} />
+              <Ionicons name={NAV_ICON.more} size={22} color={C.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -1326,7 +1328,8 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   header: {
     paddingHorizontal: 4,
@@ -1740,8 +1743,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sheet: {
-    backgroundColor: "#E4E6EB",
-    borderRadius: 14,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 22,
     overflow: "hidden",
   },
   sheetRow: {
@@ -1771,6 +1774,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 16,
     minHeight: 52,
+    backgroundColor: "#FFFFFF",
   },
   sheetVDivider: {
     width: StyleSheet.hairlineWidth,
@@ -1784,8 +1788,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   sheetCancel: {
-    backgroundColor: "#E4E6EB",
-    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 16,
@@ -1816,4 +1820,5 @@ const styles = StyleSheet.create({
     color: C.muted,
     marginTop: 8,
   },
-});
+}),
+);

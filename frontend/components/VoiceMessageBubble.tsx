@@ -21,6 +21,8 @@ import {
   claimVoicePlayback,
   releaseVoicePlayback,
 } from '../utils/voiceMessages';
+import { themedStyles } from '../utils/theme';
+import { myBubbleColor, useAccessibility } from '../contexts/AccessibilityContext';
 
 const VOICE_WAVE_HEIGHTS = [
   7, 12, 9, 15, 11, 14, 8, 13, 10, 16, 12, 8, 14, 9, 13, 11,
@@ -229,6 +231,7 @@ export default function VoiceMessageBubble({
 
   const progress = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
   const displayMs = playing || positionMs > 0 ? positionMs : durationMs;
+  const { prefs: a11yPrefs } = useAccessibility();
   const barActiveColor = isMe ? '#FFFFFF' : '#8E2DE2';
   const barIdleColor = isMe ? 'rgba(255,255,255,0.35)' : '#C4B5D4';
 
@@ -237,6 +240,7 @@ export default function VoiceMessageBubble({
       style={[
         styles.voiceBubble,
         isMe ? styles.myVoiceBubble : styles.otherVoiceBubble,
+        isMe && { backgroundColor: myBubbleColor(a11yPrefs) },
         playError && styles.voiceBubbleError,
       ]}
     >
@@ -330,7 +334,8 @@ export default function VoiceMessageBubble({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   voiceBubble: {
     maxWidth: 210,
     minWidth: 160,
@@ -387,4 +392,5 @@ const styles = StyleSheet.create({
   voiceTime: { fontSize: 10 },
   myVoiceTime: { color: 'rgba(255,255,255,0.55)' },
   otherVoiceTime: { color: '#8696A0' },
-});
+}),
+);

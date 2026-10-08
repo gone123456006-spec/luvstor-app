@@ -26,6 +26,7 @@ const {
   createBulkNotifications,
   broadcastNotification,
   redactProfileViewPayload,
+  centerUnreadCount,
 } = require('../services/notifications');
 const { canSeeProfileViews } = require('../services/subscriptions');
 const pushQueue = require('../services/pushQueue');
@@ -105,9 +106,7 @@ router.get('/', auth, readLimiter, async (req, res) => {
           notifications: [],
           nextCursor: null,
           hasMore: false,
-          unread: await Notification.countDocuments(
-            centerQuery({ userId: req.userId, read: false }),
-          ),
+          unread: await centerUnreadCount(req.userId),
           profileViewsUnlocked: canSeeProfileViews(meEarly),
         });
       }
@@ -140,9 +139,7 @@ router.get('/', auth, readLimiter, async (req, res) => {
 
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
-    const unread = await Notification.countDocuments(
-      centerQuery({ userId: req.userId, read: false }),
-    );
+    const unread = await centerUnreadCount(req.userId);
 
     const me = await User.findById(req.userId)
       .select('subscriptionPlan subscriptionExpiresAt')
@@ -173,9 +170,7 @@ router.get('/', auth, readLimiter, async (req, res) => {
 // GET /api/notifications/unread-count
 router.get('/unread-count', auth, readLimiter, async (req, res) => {
   try {
-    const unread = await Notification.countDocuments(
-      centerQuery({ userId: req.userId, read: false }),
-    );
+    const unread = await centerUnreadCount(req.userId);
     res.json({ unread });
   } catch (err) {
     console.error('notifications/unread-count error:', err.message);
@@ -214,9 +209,7 @@ router.post('/read', auth, writeLimiter, async (req, res) => {
       { $set: { read: true, readAt: new Date() } },
     );
 
-    const unread = await Notification.countDocuments(
-      centerQuery({ userId: req.userId, read: false }),
-    );
+    const unread = await centerUnreadCount(req.userId);
 
     res.json({ ok: true, count: result.modifiedCount, unread });
   } catch (err) {
@@ -239,9 +232,7 @@ router.post('/unread', auth, writeLimiter, async (req, res) => {
       { $set: { read: false, readAt: null } },
     );
 
-    const unread = await Notification.countDocuments(
-      centerQuery({ userId: req.userId, read: false }),
-    );
+    const unread = await centerUnreadCount(req.userId);
 
     res.json({ ok: true, unread });
   } catch (err) {
@@ -287,9 +278,7 @@ router.delete('/:id', auth, writeLimiter, async (req, res) => {
       return res.status(404).json({ error: 'Notification not found' });
     }
 
-    const unread = await Notification.countDocuments(
-      centerQuery({ userId: req.userId, read: false }),
-    );
+    const unread = await centerUnreadCount(req.userId);
 
     res.json({ ok: true, unread });
   } catch (err) {

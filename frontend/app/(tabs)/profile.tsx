@@ -59,9 +59,12 @@ import {
 import { useLiveSubscriptionBadge } from "../../utils/subscriptions";
 import { useTabBarOverlayInset } from "../../hooks/useTabBarOverlayInset";
 import { openPlayStoreToRate } from "../../utils/rateApp";
+import { SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
+import ListRowTouchable from "../../components/ListRowTouchable";
+import { statusBarStyle, tc, themedPalette, themedStyles } from "../../utils/theme";
 
 // ── Luvstor theme + WhatsApp-style layout ───────────────────
-const WA = {
+const WA = themedPalette({
   bg: "#F5F5F7",
   white: "#FFFFFF",
   text: "#1C1B1F",
@@ -73,9 +76,9 @@ const WA = {
   header: "#F5F5F7",
   accent: "#FF4B6E",
   primaryContainer: "#EADDFF",
-};
+});
 
-const C = {
+const C = themedPalette({
   primary: "#6750A4",
   primaryContainer: "#EADDFF",
   surface: "#FFFFFF",
@@ -86,7 +89,7 @@ const C = {
   onSurfaceVariant: "#49454F",
   accent: "#FF4B6E",
   accentLight: "#FFF0F2",
-};
+});
 
 const INTEREST_EMOJIS: Record<string, string> = {
   Travel: "✈️",
@@ -1244,7 +1247,7 @@ export default function ProfileScreen() {
     {
       icon: "settings",
       label: "Settings",
-      color: "#6750A4",
+      color: tc("#6750A4", "fg"),
       route: "/settings",
     },
     {
@@ -1430,7 +1433,7 @@ export default function ProfileScreen() {
         <View style={[styles.waListGroup, { marginBottom: 40 }]}>
           {MENU_ITEMS.map((item, index) => (
             <View key={item.label}>
-              <TouchableOpacity
+              <ListRowTouchable
                 style={styles.waListRow}
                 activeOpacity={0.7}
                 onPress={() => {
@@ -1471,12 +1474,14 @@ export default function ProfileScreen() {
                     {item.label}
                   </Text>
                 </View>
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  color={WA.secondary}
-                />
-              </TouchableOpacity>
+                {SHOW_ROW_CHEVRON ? (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={WA.secondary}
+                  />
+                ) : null}
+              </ListRowTouchable>
               {index < MENU_ITEMS.length - 1 && (
                 <View style={styles.waDivider} />
               )}
@@ -1501,7 +1506,7 @@ export default function ProfileScreen() {
         statusBarTranslucent
       >
         <View style={styles.igEditRoot}>
-          <StatusBar barStyle="dark-content" backgroundColor={WA.bg} />
+          <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.bg} />
           <View style={{ paddingTop: Math.max(insets.top, 0) }}>
             <View style={styles.igEditHeader}>
               <TouchableOpacity
@@ -2331,7 +2336,7 @@ export default function ProfileScreen() {
                     {[
                       {
                         q: "How do I delete my account permanently?",
-                        a: 'Go to Profile > Settings > Account and tap "Delete Account". All your chats, matches, and images will be permanently wiped from our database.',
+                        a: 'Go to Profile > Settings > Account > Personal details > Account ownership and control > Deactivation or deletion. All your chats, matches, and images will be permanently wiped from our database.',
                       },
                       {
                         q: "Is Luvstor completely free to use?",
@@ -2359,7 +2364,7 @@ export default function ProfileScreen() {
                             <Ionicons
                               name={isOpen ? "chevron-up" : "chevron-down"}
                               size={18}
-                              color="#49454F"
+                              color={tc("#49454F", "fg")}
                             />
                           </View>
                           {isOpen && (
@@ -2414,7 +2419,7 @@ export default function ProfileScreen() {
                     <TextInput
                       style={styles.supportInput}
                       placeholder="Brief summary of the issue..."
-                      placeholderTextColor="#79747E"
+                      placeholderTextColor={tc("#79747E", "fg")}
                       value={ticketSubject}
                       onChangeText={setTicketSubject}
                       onFocus={() => {
@@ -2432,7 +2437,7 @@ export default function ProfileScreen() {
                     <TextInput
                       style={[styles.supportInput, styles.supportInputLarge]}
                       placeholder="Please explain the details of the problem..."
-                      placeholderTextColor="#79747E"
+                      placeholderTextColor={tc("#79747E", "fg")}
                       multiline={true}
                       numberOfLines={4}
                       value={ticketDescription}
@@ -2681,7 +2686,8 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: WA.bg,
@@ -3345,7 +3351,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   modalContent: {
-    backgroundColor: "#FEF7FF",
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     maxHeight: "90%",
@@ -3833,8 +3839,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   dpConfirmCard: {
-    backgroundColor: "#E4E6EB",
-    borderRadius: 14,
+    backgroundColor: "#F5F6F8",
+    borderRadius: 22,
     overflow: "hidden",
     marginBottom: 4,
   },
@@ -3856,6 +3862,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 8,
+    backgroundColor: "#FFFFFF",
   },
   dpConfirmVDivider: {
     width: StyleSheet.hairlineWidth,
@@ -3873,7 +3880,7 @@ const styles = StyleSheet.create({
     color: "#007AFF",
   },
   photoOptionsContainer: {
-    backgroundColor: "#E4E6EB",
+    backgroundColor: "#F5F6F8",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 10,
@@ -3897,7 +3904,7 @@ const styles = StyleSheet.create({
     gap: 16,
     paddingVertical: 16,
     paddingHorizontal: 16,
-    borderRadius: 12,
+    borderRadius: 28,
     backgroundColor: "#FFFFFF",
     marginBottom: 8,
   },
@@ -3949,4 +3956,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     zIndex: 10,
   },
-});
+}),
+);

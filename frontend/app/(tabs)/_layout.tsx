@@ -30,6 +30,7 @@ import {
 } from '../../utils/profileCache';
 import { pingAppOpen } from '../../utils/retention';
 import { needsLocationSetup } from '../../utils/locationSetup';
+import { tc, themedStyles } from '../../utils/theme';
 
 const TAB_PREFETCH = [
   { href: '/chat', delayMs: 800 },
@@ -55,20 +56,20 @@ export default function TabLayout() {
   const screenOptions = useMemo(
     () => ({
       ...tabScreenOptions,
-      tabBarActiveTintColor: '#370372',
-      tabBarInactiveTintColor: '#999',
+      tabBarActiveTintColor: tc('#370372', "fg"),
+      tabBarInactiveTintColor: tc('#999', "fg"),
       tabBarStyle: {
         position: 'absolute' as const,
         left: 0,
         right: 0,
         bottom: 0,
         borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: '#E5E5E5',
+        borderTopColor: tc('#E5E5E5', "line"),
         elevation: 8,
         height: tabBarHeight,
         paddingTop: 6,
         paddingBottom: bottomInset,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: tc('#FFFFFF', "bg"),
       },
       tabBarItemStyle: {
         paddingTop: 2,
@@ -218,7 +219,7 @@ export default function TabLayout() {
   if (user && profileGate === 'offline') {
     return (
       <View style={styles.gate}>
-        <Ionicons name="cloud-offline-outline" size={44} color="#6750A4" />
+        <Ionicons name="cloud-offline-outline" size={44} color={tc("#6750A4", "fg")} />
         <Text style={styles.gateTitle}>Can&apos;t connect right now</Text>
         <Text style={styles.gateBody}>
           Check your internet connection and try again.
@@ -237,7 +238,7 @@ export default function TabLayout() {
   if (user && profileGate !== 'ok') {
     return (
       <View style={styles.gate}>
-        <ActivityIndicator size="large" color="#6750A4" />
+        <ActivityIndicator size="large" color={tc("#6750A4", "fg")} />
       </View>
     );
   }
@@ -266,7 +267,7 @@ export default function TabLayout() {
           title: 'Chat',
           freezeOnBlur: false,
           tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
-          tabBarBadgeStyle: { backgroundColor: '#370372', color: '#fff' },
+          tabBarBadgeStyle: { backgroundColor: tc('#370372', "bg"), color: '#fff' },
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'chatbubbles' : 'chatbubbles-outline'}
@@ -321,7 +322,8 @@ export default function TabLayout() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   gate: {
     flex: 1,
     alignItems: 'center',
@@ -354,4 +356,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
-});
+}),
+);

@@ -7,6 +7,20 @@ const { emitFriendUpdate, emitFriendSync } = require('../utils/realtime');
 const { createNotification } = require('../services/notifications');
 const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
 
+/**
+ * List endpoints return plain arrays (app contract), so paging is a hard cap
+ * plus optional `?limit=`; `X-Has-More: 1` tells the client rows were cut.
+ */
+const LIST_MAX = 500;
+function listLimit(req) {
+  return Math.min(Math.max(parseInt(req.query.limit, 10) || LIST_MAX, 1), LIST_MAX);
+}
+function capRows(res, rows, limit) {
+  if (rows.length <= limit) return rows;
+  res.setHeader('X-Has-More', '1');
+  return rows.slice(0, limit);
+}
+
 // ─────────────────────────────────────────────
 // POST /api/friends/like
 // Send a like to another user
@@ -183,7 +197,8 @@ router.get('/requests', auth, async (req, res) => {
 
     // Incoming one-way likes (someone liked ME) + leftover mutual matches.
     // Outgoing likes I sent must never appear here.
-    const matches = await Friendship.find({
+    const limit = listLimit(req);
+    const matchRows = await Friendship.find({
       $and: [
         { $or: [{ userA: myObjId }, { userB: myObjId }] },
         {
@@ -196,7 +211,11 @@ router.get('/requests', auth, async (req, res) => {
           ],
         },
       ],
-    }).sort({ updatedAt: -1 }).lean();
+    })
+      .sort({ updatedAt: -1 })
+      .limit(limit + 1)
+      .lean();
+    const matches = capRows(res, matchRows, limit);
 
     const incoming = matches.filter(
       (m) => m.status !== 'pending_like' || String(m.initiatedBy) !== req.userId,
@@ -399,12 +418,17 @@ router.get('/list', auth, async (req, res) => {
     const myObjId = new mongoose.Types.ObjectId(req.userId);
 
     // Find all friendships where I'm either userA or userB and status is friends
-    const friendships = await Friendship.find({
+    const limit = listLimit(req);
+    const friendRows = await Friendship.find({
       $or: [
         { userA: myObjId, status: 'friends' },
         { userB: myObjId, status: 'friends' },
       ],
-    }).lean();
+    })
+      .sort({ updatedAt: -1 })
+      .limit(limit + 1)
+      .lean();
+    const friendships = capRows(res, friendRows, limit);
 
     // Populate the other user's info (one User query, not N)
     const otherIds = friendships.map((f) =>
@@ -446,13 +470,16 @@ router.get('/likes', auth, async (req, res) => {
     const mongoose = require('mongoose');
     const myObjId = new mongoose.Types.ObjectId(req.userId);
 
-    const likes = await Friendship.find({
+    const limit = listLimit(req);
+    const likeRows = await Friendship.find({
       status: 'pending_like',
       initiatedBy: { $in: [myObjId, String(req.userId)] },
       $or: [{ userA: myObjId }, { userB: myObjId }],
     })
       .sort({ likedAt: -1, updatedAt: -1 })
+      .limit(limit + 1)
       .lean();
+    const likes = capRows(res, likeRows, limit);
 
     const otherIds = likes.map((m) =>
       String(m.userA) === req.userId ? m.userB : m.userA,
@@ -488,13 +515,16 @@ router.get('/blocked', auth, async (req, res) => {
     const mongoose = require('mongoose');
     const myObjId = new mongoose.Types.ObjectId(req.userId);
 
-    const rows = await Friendship.find({
+    const limit = listLimit(req);
+    const blockedRows = await Friendship.find({
       status: 'blocked',
       blockedBy: myObjId,
       $or: [{ userA: myObjId }, { userB: myObjId }],
     })
       .sort({ blockedAt: -1 })
+      .limit(limit + 1)
       .lean();
+    const rows = capRows(res, blockedRows, limit);
 
     const otherIds = rows.map((f) =>
       String(f.userA) === req.userId ? f.userB : f.userA,

@@ -14,6 +14,11 @@ const { getBlockState } = require('../utils/blockState');
 const { applyBlockPrivacy } = require('../utils/blockPrivacy');
 const { hasBidirectionalChat } = require('../utils/chatMediaAccess');
 const { toPersistentMediaUrl } = require('../utils/mediaUrl');
+const { signMediaUrl, signMessageMedia } = require('../utils/mediaSign');
+const { markMediaPrivate } = require('../services/mediaStore');
+const cache = require('../utils/cache');
+
+const CONVERSATIONS_TTL_SEC = 60;
 
 /** Store / return only durable media refs (never file:// or LAN host absolutes). */
 function normalizeMessageMediaUrl(url) {
@@ -325,7 +330,7 @@ function shapeViewOnceForViewer(msg, viewerId) {
   let out = { ...msg };
   // Always normalize so LAN absolutes / bad URIs don't blank after reinstall
   if (out.mediaUrl) {
-    out.mediaUrl = normalizeMessageMediaUrl(out.mediaUrl);
+    out.mediaUrl = signMediaUrl(normalizeMessageMediaUrl(out.mediaUrl));
   }
   if (msg.viewOnce) {
     const isSender = String(msg.senderId) === String(viewerId);
@@ -357,11 +362,22 @@ function shapeReplyToSnapshot(parent) {
     mediaUrl:
       parent.isDeleted || isViewOnce
         ? null
-        : normalizeMessageMediaUrl(parent.mediaUrl),
+        : signMediaUrl(normalizeMessageMediaUrl(parent.mediaUrl)),
     isDeleted: !!parent.isDeleted,
     viewOnce: isViewOnce,
     viewOnceOpened: !!parent.viewOnceOpened,
     createdAt: parent.createdAt,
+  };
+}
+
+/** Chat-list preview row: signed media, view-once hidden like in history */
+function shapeLastMessageForList(msg, viewerId) {
+  if (!msg?.mediaUrl) return msg;
+  const hidden =
+    msg.viewOnce && (msg.viewOnceOpened || String(msg.senderId) !== String(viewerId));
+  return {
+    ...msg,
+    mediaUrl: hidden ? null : signMediaUrl(normalizeMessageMediaUrl(msg.mediaUrl)),
   };
 }
 
@@ -388,7 +404,7 @@ router.get('/history/:otherUserId', auth, async (req, res) => {
     }
 
     const room = roomId(req.userId, otherUserId);
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
     const before = req.query.before; // ISO date cursor for pagination
 
     // Hide undelivered messages from the blocked recipient
@@ -475,7 +491,12 @@ router.get('/conversations', auth, async (req, res) => {
     const mongoose = require('mongoose');
     const myObjId = new mongoose.Types.ObjectId(req.userId);
 
-    const conversations = await Message.aggregate([
+    // Raw rows are cached per message-version; profiles / blocks below stay live
+    const msgVersion = await cache.version('msg', req.userId);
+    const conversations = await cache.getOrSet(
+      `conv:${req.userId}:${msgVersion}`,
+      CONVERSATIONS_TTL_SEC,
+      () => Message.aggregate([
       {
         $match: {
           isDeleted: { $ne: true },
@@ -535,7 +556,8 @@ router.get('/conversations', auth, async (req, res) => {
         },
       },
       { $sort: { 'lastMessage.createdAt': -1 } },
-    ]);
+      ]),
+    );
 
     // Populate the other user's profile for each conversation
     const { archived: archivedIds, cleared: clearedIds } =
@@ -550,7 +572,10 @@ router.get('/conversations', auth, async (req, res) => {
       return !archivedIds.has(otherId) && !clearedIds.has(otherId);
     });
 
-    const enriched = await enrichConversationsBatch(req.userId, visible);
+    const enriched = await enrichConversationsBatch(
+      req.userId,
+      visible.map((c) => ({ ...c, lastMessage: shapeLastMessageForList(c.lastMessage, req.userId) })),
+    );
 
     res.json(enriched);
   } catch (err) {
@@ -700,6 +725,8 @@ router.post('/send', auth, async (req, res) => {
       viewOnceOpened: false,
     });
 
+    if (persistentMediaUrl) void markMediaPrivate(persistentMediaUrl);
+
     if (!undelivered) {
       // Counters off the hot path — respond + socket first
       setImmediate(() => {
@@ -737,7 +764,7 @@ router.post('/send', auth, async (req, res) => {
         receiverId,
         text: message.text,
         type: message.type,
-        mediaUrl: message.mediaUrl,
+        mediaUrl: signMediaUrl(message.mediaUrl),
         delivered: !!message.delivered,
         read: !!message.read,
         undelivered: !!message.undelivered,
@@ -834,7 +861,7 @@ router.post('/send', auth, async (req, res) => {
       }
     }
 
-    res.json(message);
+    res.json(signMessageMedia(message.toJSON()));
   } catch (err) {
     console.error('chat/send error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -973,7 +1000,7 @@ router.post('/view-once/:messageId', auth, async (req, res) => {
 
     res.json({
       messageId: String(message._id),
-      mediaUrl: message.mediaUrl || null,
+      mediaUrl: signMediaUrl(message.mediaUrl) || null,
       viewOnceOpened: true,
     });
   } catch (err) {
@@ -1120,33 +1147,9 @@ router.post('/delete', auth, async (req, res) => {
 // ─────────────────────────────────────────────
 router.get('/unread-count', auth, async (req, res) => {
   try {
-    const mongoose = require('mongoose');
-    const ConversationState = require('../models/ConversationState');
-    const myObjId = new mongoose.Types.ObjectId(req.userId);
-
     // WhatsApp: archived unread lives under Archive, not the main badge
-    const archived = await ConversationState.find({
-      userId: req.userId,
-      archived: true,
-    })
-      .select('otherUserId')
-      .lean();
-    const archivedIds = archived.map((s) => String(s.otherUserId));
-
-    const match = {
-      receiverId: myObjId,
-      read: false,
-      isDeleted: { $ne: true },
-      undelivered: { $ne: true },
-      deletedFor: { $nin: [myObjId] },
-    };
-    if (archivedIds.length) {
-      match.senderId = {
-        $nin: archivedIds.map((id) => new mongoose.Types.ObjectId(id)),
-      };
-    }
-
-    const count = await Message.countDocuments(match);
+    const { cachedChatUnread } = require('../services/notifications');
+    const count = await cachedChatUnread(req.userId);
     res.json({ unread: count });
   } catch (err) {
     console.error('chat/unread-count error:', err);

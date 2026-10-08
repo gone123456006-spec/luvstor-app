@@ -11,16 +11,18 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SUBSCRIPTION_TERMS } from "../utils/subscriptionTerms";
+import { NAV_ICON } from "../utils/platformIcons";
+import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
 /** Matches main Luvstor app theme (Settings / Help) */
-const PAGE = {
+const PAGE = themedPalette({
   bg: "#FDF8FF",
   surface: "#FFFFFF",
   text: "#1C1B1F",
   secondary: "#49454F",
   border: "#E7E0EC",
   primary: "#6750A4",
-};
+});
 
 function renderBody(body: string) {
   const lines = body.split("\n");
@@ -53,7 +55,7 @@ export default function SubscriptionTermsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={PAGE.bg} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={PAGE.bg} />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -61,7 +63,7 @@ export default function SubscriptionTermsScreen() {
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={PAGE.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={PAGE.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>
           Terms & Conditions
@@ -91,7 +93,8 @@ export default function SubscriptionTermsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: PAGE.bg },
   header: {
     flexDirection: "row",
@@ -187,4 +190,5 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: PAGE.border,
   },
-});
+}),
+);

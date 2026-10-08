@@ -10,8 +10,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NAV_ICON, SHOW_ROW_CHEVRON } from "../../utils/platformIcons";
+import ListRowTouchable from "../../components/ListRowTouchable";
+import { statusBarStyle, themedPalette, themedStyles } from "../../utils/theme";
 
-const WA = {
+const WA = themedPalette({
   bg: '#FDF8FF',
   white: '#FFFFFF',
   text: '#1C1B1F',
@@ -21,7 +24,7 @@ const WA = {
   green: '#6750A4',
   danger: '#FF4B6E',
   header: '#FDF8FF',
-};
+});
 
 const LOSE_ITEMS = [
   { icon: 'heart' as const, label: 'All your matches and connections', color: '#FF4B6E' },
@@ -49,11 +52,11 @@ export default function ReflectionScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={WA.header} />
+      <StatusBar barStyle={statusBarStyle()} backgroundColor={WA.header} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={24} color={WA.text} />
+          <Ionicons name={NAV_ICON.back} size={24} color={WA.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Take a moment</Text>
       </View>
@@ -92,7 +95,7 @@ export default function ReflectionScreen() {
 
         {/* Keep account row */}
         <View style={[styles.listGroup, { marginTop: 12 }]}>
-          <TouchableOpacity style={styles.listRow} activeOpacity={0.7} onPress={handleKeepAccount}>
+          <ListRowTouchable style={styles.listRow} activeOpacity={0.7} onPress={handleKeepAccount}>
             <View style={[styles.iconCircle, { backgroundColor: WA.teal }]}>
               <Ionicons name="shield-checkmark" size={20} color="#fff" />
             </View>
@@ -100,8 +103,10 @@ export default function ReflectionScreen() {
               <Text style={styles.rowLabel}>Keep my account</Text>
               <Text style={styles.rowSub}>Pause or hide your profile instead</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
-          </TouchableOpacity>
+            {SHOW_ROW_CHEVRON ? (
+              <Ionicons name="chevron-forward" size={18} color={WA.secondary} />
+            ) : null}
+          </ListRowTouchable>
         </View>
       </ScrollView>
 
@@ -124,7 +129,8 @@ export default function ReflectionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles(() =>
+  StyleSheet.create({
   container: { flex: 1, backgroundColor: WA.bg },
   header: {
     flexDirection: 'row',
@@ -242,4 +248,5 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   continueText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-});
+}),
+);
