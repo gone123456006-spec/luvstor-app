@@ -410,6 +410,8 @@ export default function DiscoverScreen() {
   const [searchQuery, setSearchQuery] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [searchMode, setSearchMode] = React.useState(false);
+  /** Own bar stays hidden until the overlay pill has flown back into it */
+  const [searchBarHidden, setSearchBarHidden] = React.useState(false);
   const [searchBarY, setSearchBarY] = React.useState(0);
   const searchBarRef = React.useRef<View>(null);
   const [recentSearches, setRecentSearches] = React.useState<
@@ -1740,11 +1742,12 @@ export default function DiscoverScreen() {
           <TouchableOpacity
             style={[
               styles.searchContainer,
-              searchMode && styles.searchContainerHidden,
+              (searchMode || searchBarHidden) && styles.searchContainerHidden,
             ]}
             activeOpacity={0.85}
             onPress={() => {
               setSearchQuery("");
+              setSearchBarHidden(true);
               searchBarRef.current?.measureInWindow((_x, y) => {
                 if (typeof y === "number" && y > 0) setSearchBarY(y);
                 setSearchMode(true);
@@ -1770,6 +1773,7 @@ export default function DiscoverScreen() {
           recent={recentSearches}
           backgroundColor={D.bg}
           fromY={searchBarY}
+          onClosed={() => setSearchBarHidden(false)}
           onClearAll={() => {
             void clearRecentSearches(RECENT_SEARCH_HOME).then(
               setRecentSearches,

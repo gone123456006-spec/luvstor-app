@@ -137,7 +137,7 @@ export default function FinalConfirmationScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
-        <Text style={styles.sectionHint}>Before we proceed, here's what will happen:</Text>
+        <Text style={styles.sectionHint}>Before we proceed, here&apos;s what will happen:</Text>
 
         <View style={styles.listGroup}>
           {TIMELINE.map((item, index) => (
@@ -157,7 +157,7 @@ export default function FinalConfirmationScreen() {
         </View>
 
         <Text style={styles.footnote}>
-          You'll receive a confirmation email once deletion is complete.
+          You&apos;ll receive a confirmation email once deletion is complete.
         </Text>
       </ScrollView>
 
