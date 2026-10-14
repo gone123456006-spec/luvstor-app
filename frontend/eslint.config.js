@@ -7,4 +7,11 @@ module.exports = defineConfig([
   {
     ignores: ['dist/*'],
   },
+  {
+    // Build-time Node scripts and config plugins (never bundled into the app)
+    files: ['*.config.js', 'plugins/**/*.js', 'scripts/**/*.js'],
+    languageOptions: {
+      globals: { __dirname: 'readonly', __filename: 'readonly' },
+    },
+  },
 ]);

@@ -3,16 +3,19 @@ import '../utils/logbox';
 // Background FCM → local Answer/Decline trays (must register before React)
 import '../utils/pushBackground';
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
-import { Stack, useRouter, type ErrorBoundaryProps } from 'expo-router';
+import { Stack, usePathname, useRouter, type ErrorBoundaryProps } from 'expo-router';
+import { requireOptionalNativeModule } from 'expo';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import Animated, {
+  FadeIn,
   FadeOut,
   ReducedMotionConfig,
   ReduceMotion,
 } from 'react-native-reanimated';
 import { enableFreeze } from 'react-native-screens';
 import {
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -37,7 +40,7 @@ import {
   instantScreenOptions,
   stackScreenOptions,
 } from '../utils/navigation';
-import { D, tc } from '../utils/theme';
+import { D } from '../utils/theme';
 
 const navDarkTheme = {
   ...DarkTheme,
@@ -59,22 +62,49 @@ type ScreenOptions = Exclude<
 SplashScreen.preventAutoHideAsync().catch(() => {});
 enableFreeze(true);
 
+/** Android 3-button bar: light buttons on a dark backdrop in dark mode */
+function syncNavigationBar(dark: boolean) {
+  // Builds made before expo-navigation-bar was added lack the native module,
+  // and loading the JS package there throws even inside try/catch in dev
+  if (Platform.OS !== 'android' || !requireOptionalNativeModule('ExpoNavigationBar')) return;
+  try {
+    require('expo-navigation-bar').setStyle(dark ? 'light' : 'dark');
+  } catch {}
+}
+
 function RootLayoutContent() {
-  const { reduceMotion, uiKey, returnTo, isDark, restoring, finishRestore } =
+  const { reduceMotion, uiKey, returnTo, isDark, restoring, coverDark, finishRestore } =
     useAccessibility();
   const router = useRouter();
+  const pathname = usePathname();
+
+  React.useEffect(() => {
+    syncNavigationBar(isDark);
+  }, [isDark]);
 
   // App-wide style change remounts the navigator — bring the user back without
   // any visible slide: screens are covered and transitions are off until done
+  // Push once the new navigator has painted; reveal as soon as the target screen
+  // is active instead of waiting on fixed delays. The timeout is only a safety net.
   React.useEffect(() => {
     if (!uiKey || !returnTo) return;
-    const push = setTimeout(() => router.push(returnTo as any), 600);
-    const reveal = setTimeout(finishRestore, 950);
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => router.push(returnTo as any));
+    });
+    const fallback = setTimeout(finishRestore, 1500);
     return () => {
-      clearTimeout(push);
-      clearTimeout(reveal);
+      cancelAnimationFrame(raf);
+      clearTimeout(fallback);
     };
   }, [uiKey, returnTo, router, finishRestore]);
+
+  React.useEffect(() => {
+    if (!restoring || !returnTo || pathname !== returnTo) return;
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(finishRestore);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [restoring, returnTo, pathname, finishRestore]);
 
   const m = (opts: ScreenOptions): ScreenOptions =>
     reduceMotion || restoring ? { ...opts, animation: 'none' } : opts;
@@ -159,10 +189,11 @@ function RootLayoutContent() {
       </Stack>
       {restoring ? (
         <Animated.View
-          exiting={FadeOut.duration(160)}
+          entering={FadeIn.duration(120)}
+          exiting={FadeOut.duration(180)}
           style={[
             StyleSheet.absoluteFill,
-            { backgroundColor: tc('#F5F5F7', 'bg') },
+            { backgroundColor: coverDark ? D.page : '#F5F5F7' },
           ]}
         />
       ) : null}

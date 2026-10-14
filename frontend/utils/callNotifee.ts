@@ -56,8 +56,10 @@ function loadNotifee(): typeof import('@notifee/react-native') | null {
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    notifeeModule = require('@notifee/react-native');
-    return notifeeModule;
+    const loaded: typeof import('@notifee/react-native') | null =
+      require('@notifee/react-native') ?? null;
+    notifeeModule = loaded;
+    return loaded;
   } catch (err: any) {
     notifeeModule = null;
     console.warn('[Notifee] load failed:', err?.message);

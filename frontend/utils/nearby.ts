@@ -127,7 +127,7 @@ export const NEARBY_RANGE_LABEL = `${NEARBY_DISTANCE_MIN_KM}–${NEARBY_DISTANCE
 export function isNearbySectionUser(u: NearbyUser): boolean {
   if (u.source === 'random' || u.source === 'for_you') return false;
   const km = parseDistanceKm(u);
-  if (km == null) return u.source !== 'random';
+  if (km == null) return true;
   return km <= NEARBY_DISTANCE_MAX_KM;
 }
 

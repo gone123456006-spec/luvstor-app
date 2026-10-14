@@ -826,11 +826,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             } catch {
               /* preview is enough to invite; TURN arrives via ringing / accept */
             }
+            const phaseAfterWait = stateRef.current.phase as CallPhase;
             if (
               pendingCancelRef.current ||
               stateRef.current.callId !== callId ||
-              stateRef.current.phase === 'ended' ||
-              stateRef.current.phase === 'idle'
+              phaseAfterWait === 'ended' ||
+              phaseAfterWait === 'idle'
             ) {
               return;
             }
@@ -1693,12 +1694,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             peerName: s.peer?.name || 'Call',
             callType: s.callType,
             hasCamera: s.callType === 'video' && !s.cameraOff,
-            status:
-              s.phase === 'outgoing'
-                ? 'calling'
-                : s.phase === 'ringing'
-                  ? 'ringing'
-                  : 'connected',
+            status: 'connected',
           });
         }
         return;

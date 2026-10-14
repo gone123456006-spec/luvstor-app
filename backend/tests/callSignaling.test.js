@@ -329,7 +329,7 @@ test('calling a non-friend is refused with NOT_FRIENDS', async (t) => {
   }
 });
 
-test('calling an offline friend reports OFFLINE rather than hanging', async (t) => {
+test('calling an offline friend rings via push and tells the caller they are offline', async (t) => {
   if (!available) return t.skip('no database');
 
   const devA = 'dev-offline-a';
@@ -338,17 +338,19 @@ test('calling an offline friend reports OFFLINE rather than hanging', async (t) 
   const callee = await makeUser(devB);
   await befriend(caller, callee);
 
-  // callee never connects — voice requires online
+  // callee never connects — the call still rings (FCM wake-up), WhatsApp-style
   const sockA = await connectClient(tokenFor(caller, devA));
 
   try {
-    const errP = waitFor(sockA, 'call:error');
+    const ringP = waitFor(sockA, 'call:ringing');
     sockA.emit('call:invite', {
       receiverId: String(callee._id),
       callType: 'voice',
     });
-    const err = await errP;
-    assert.equal(err.code, 'OFFLINE');
+    const ringing = await ringP;
+    assert.equal(ringing.receiverId, String(callee._id));
+    assert.equal(ringing.calleeOnline, false);
+    sockA.emit('call:cancel', { callId: ringing.callId });
   } finally {
     sockA.close();
   }

@@ -49,6 +49,7 @@ export function ChatStarterSheet({
   }, [visible, token, matchedUserId]);
 
   const loadStarters = async () => {
+    if (!token) return;
     setLoading(true);
     try {
       const result = await apiRequest(

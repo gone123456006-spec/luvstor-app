@@ -364,14 +364,19 @@ function patchAndroidGradleConfig() {
       gradle = gradle.replace(
         /force 'androidx\.collection:collection:1\.1\.0'/g,
         [
-          "force 'androidx.collection:collection:1.4.2'",
-          "      force 'androidx.collection:collection-ktx:1.4.2'",
-          "      force 'androidx.collection:collection-jvm:1.4.2'",
+          "force 'androidx.collection:collection:1.5.0'",
+          "      force 'androidx.collection:collection-ktx:1.5.0'",
+          "      force 'androidx.collection:collection-jvm:1.5.0'",
         ].join("\n"),
       );
       fs.writeFileSync(rootGradle, gradle);
-      console.log("✔ Patched android/build.gradle (collection 1.4.2)");
-    } else if (!gradle.includes("androidx.collection:collection:1.4.2")) {
+      console.log("✔ Patched android/build.gradle (collection 1.5.0)");
+    } else if (gradle.includes("androidx.collection:collection:1.4.2")) {
+      // Compose needs OrderedScatterSet (1.5.0+); 1.4.2 crashes at launch
+      gradle = gradle.replace(/(androidx\.collection:collection[a-z-]*):1\.4\.2/g, "$1:1.5.0");
+      fs.writeFileSync(rootGradle, gradle);
+      console.log("✔ Patched android/build.gradle (collection 1.4.2 → 1.5.0)");
+    } else if (!gradle.includes("androidx.collection:collection:1.5.0")) {
       const needle = "maven { url 'https://www.jitpack.io' }\n  }\n}";
       const replacement = `maven { url 'https://www.jitpack.io' }
   }
@@ -381,9 +386,9 @@ function patchAndroidGradleConfig() {
   // - 1.1.0 is too old and crashes at launch with NoSuchMethodError on SimpleArrayMap
   configurations.all {
     resolutionStrategy {
-      force 'androidx.collection:collection:1.4.2'
-      force 'androidx.collection:collection-ktx:1.4.2'
-      force 'androidx.collection:collection-jvm:1.4.2'
+      force 'androidx.collection:collection:1.5.0'
+      force 'androidx.collection:collection-ktx:1.5.0'
+      force 'androidx.collection:collection-jvm:1.5.0'
     }
   }
 }`;

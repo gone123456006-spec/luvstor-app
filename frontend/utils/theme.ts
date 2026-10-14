@@ -27,6 +27,9 @@ export const D = {
   chat: "#0C0B10",
 } as const;
 
+/** Text on the yellow brand button; kept out of the maps so it stays dark in both themes */
+export const ON_YELLOW = "#16162A";
+
 const RED_TINT = "#3A1D26";
 const AMBER_TINT = "#3A2F16";
 
@@ -56,7 +59,9 @@ const BG: Record<string, string> = {
   "#EEEEEE": D.fill,
   "#DFE5E7": D.fill,
   "#E4E6EB": D.fill,
+  "#F7F7F8": D.fill,
   "#EFE8F8": D.tint,
+  "#EDE9FE": D.tint,
   "#EADDFF": D.tint,
   "#F3EDF7": D.tint,
   "#EAE2F8": D.tint,
@@ -87,6 +92,8 @@ const FG: Record<string, string> = {
   "#333333": D.text,
   "#111111": D.text,
   "#1A1A1A": D.text,
+  "#1A1A2E": D.text,
+  "#3C4043": D.text,
   "#050505": D.text,
   "#000000": D.text,
   "#49454F": D.text2,
@@ -96,6 +103,7 @@ const FG: Record<string, string> = {
   "#54656F": D.text2,
   "#555555": D.text2,
   "#666666": D.text2,
+  "#6B6B6B": D.text2,
   "#79747E": D.text3,
   "#8E8E8E": D.text3,
   "#999999": D.text3,
@@ -122,6 +130,9 @@ const LINE: Record<string, string> = {
   "#CCCCCC": D.line,
   "#C7C7CC": D.line,
   "#CAC4D0": D.line,
+  "#DADCE0": D.line,
+  "#D4D4D8": D.line,
+  "#E9E9EB": D.line,
   "#F5F5F7": D.page,
   "#79747E": "#4A4A55",
   "#EADDFF": D.tintLine,

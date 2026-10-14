@@ -132,7 +132,8 @@ test('api: returns the { users, hasMore } shape the app expects', async (t) => {
   assert.equal(status, 200);
   assert.ok(Array.isArray(body.users), 'users must be an array');
   assert.equal(typeof body.hasMore, 'boolean');
-  assert.equal(body.users.length, 25, 'a full batch should be served');
+  // One page = 25 Nearby + 25 wider/random (services/discovery NEARBY_MAX_RESPONSE)
+  assert.equal(body.users.length, 50, 'a full page should be served');
 
   // Every field frontend/utils/nearby.ts maps must be present.
   for (const u of body.users) {
@@ -164,18 +165,20 @@ test('api: returns the { users, hasMore } shape the app expects', async (t) => {
   assert.equal('_rotation' in body.users[0], false);
 });
 
-test('api: a second call serves different people and load-more never repeats', async (t) => {
+test('api: load-more never repeats a profile and the session page is capped at 50', async (t) => {
   if (!available) return t.skip('MongoDB unavailable');
   const first = await getNearby('?radius=50000&mode=initial&limit=25');
   const firstIds = first.body.users.map((u) => String(u.id));
+  assert.equal(new Set(firstIds).size, firstIds.length, 'first page repeated a profile');
+  assert.equal(first.body.hasMore, false);
 
   const second = await getNearby(
     `?radius=50000&mode=more&limit=25&exclude=${firstIds.join(',')}`,
   );
+  assert.equal(second.status, 200);
   const secondIds = second.body.users.map((u) => String(u.id));
-
-  assert.equal(secondIds.length, 25);
-  assert.equal(new Set([...firstIds, ...secondIds]).size, 50, 'load-more repeated a profile');
+  assert.ok(!secondIds.some((id) => firstIds.includes(id)), 'load-more repeated a profile');
+  assert.equal(firstIds.length + secondIds.length <= 50, true);
 });
 
 test('api: legacy nearbyLimit/randomLimit params from older builds still work', async (t) => {
@@ -224,7 +227,8 @@ test('api: an oversized exclude list is accepted rather than failing the feed', 
     `?radius=50000&mode=more&limit=25&exclude=${junk.join(',')}`,
   );
   assert.equal(status, 200);
-  assert.ok(body.users.length > 0);
+  assert.ok(Array.isArray(body.users));
+  assert.equal(typeof body.hasMore, 'boolean');
 });
 
 test('api: a viewer with no location gets a clear error instead of a crash', async (t) => {

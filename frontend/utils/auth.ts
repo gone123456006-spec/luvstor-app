@@ -30,13 +30,13 @@ export type StoredProfile = {
   coverPhoto?: string | null;
   photos?: string[];
   name?: string;
-  age?: string | number;
+  age?: string | number | null;
   gender?: string;
   /** Who this user wants to see in Nearby: Man | Woman | Other | All */
   showMe?: string;
-  height?: string;
+  height?: string | number | null;
   city?: string;
-  distance?: string;
+  distance?: string | number;
   tagline?: string;
   bio?: string;
   interests?: string[];

@@ -34,26 +34,41 @@ export const VOICE_NOTE_PRESET: RecordingOptions = {
     outputFormat: 'mpeg4',
     audioEncoder: 'aac',
     sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128_000,
   },
   ios: {
     extension: '.m4a',
     outputFormat: IOSOutputFormat.MPEG4AAC,
     audioQuality: AudioQuality.MAX,
     sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128_000,
     linearPCMBitDepth: 16,
     linearPCMIsBigEndian: false,
     linearPCMIsFloat: false,
   },
 };
 
+/**
+ * The native recorder reads one flat options object; the `android` / `ios`
+ * blocks must be merged in for the current platform (expo-audio's
+ * useAudioRecorder does the same internally).
+ */
+function platformRecordingOptions(opts: RecordingOptions) {
+  const common = {
+    extension: opts.extension,
+    sampleRate: opts.sampleRate,
+    numberOfChannels: opts.numberOfChannels,
+    bitRate: opts.bitRate,
+    isMeteringEnabled: opts.isMeteringEnabled ?? false,
+  };
+  if (Platform.OS === 'ios') return { ...common, ...opts.ios };
+  if (Platform.OS === 'android') return { ...common, ...opts.android };
+  return { ...common, ...opts.web };
+}
+
 /** Create a prepared recorder — falls back to HIGH_QUALITY if custom preset fails. */
 export async function createPreparedVoiceRecorder(): Promise<AudioRecorder> {
   const tryPrepare = async (opts: RecordingOptions) => {
-    const rec = new AudioModule.AudioRecorder(opts);
+    // eslint-disable-next-line import/namespace -- AudioModule is the native module object, not a namespace
+    const rec = new AudioModule.AudioRecorder(platformRecordingOptions(opts) as RecordingOptions);
     await rec.prepareToRecordAsync();
     return rec;
   };

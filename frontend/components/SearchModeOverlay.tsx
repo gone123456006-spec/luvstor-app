@@ -27,9 +27,13 @@ import { tc, themedStyles } from "../utils/theme";
 
 const SCREEN_W = Dimensions.get("window").width;
 const SCREEN_H = Dimensions.get("window").height;
-const OPEN_MS = 340;
-const CLOSE_MS = 280;
+const OPEN_MS = 320;
+const CLOSE_MS = 260;
 const PILL_H = 40;
+/** Material "emphasized decelerate" — fast start, long soft landing */
+const OPEN_EASING = Easing.bezier(0.05, 0.7, 0.1, 1);
+/** Material "standard" — smooth both ends so the pill settles back into the bar */
+const CLOSE_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 
 type Props = {
   visible: boolean;
@@ -45,6 +49,8 @@ type Props = {
   backgroundColor?: string;
   /** Window Y of the Discover/Chat search bar — pill lifts from here */
   fromY?: number;
+  /** Close animation finished — the screen's own search bar can reappear */
+  onClosed?: () => void;
 };
 
 /**
@@ -63,12 +69,14 @@ export default function SearchModeOverlay({
   autoFocus = true,
   backgroundColor = tc("#FFFFFF", "bg"),
   fromY,
+  onClosed,
 }: Props) {
   const insets = useSafeAreaInsets();
   const inputRef = useRef<TextInput>(null);
   const showRecent = !query.trim();
   const [mounted, setMounted] = React.useState(visible);
   const closingRef = useRef(false);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const progress = useSharedValue(0);
   const startTopSV = useSharedValue(
@@ -76,13 +84,23 @@ export default function SearchModeOverlay({
   );
   const destTopSV = useSharedValue(insets.top + 6);
 
-  const focusInput = () => {
-    if (autoFocus) inputRef.current?.focus();
-  };
-
   useEffect(() => {
     destTopSV.value = insets.top + 6;
   }, [insets.top]);
+
+  const finishClose = () => {
+    setMounted(false);
+    onClosed?.();
+  };
+
+  const animateOpen = () => {
+    progress.value = withTiming(1, { duration: OPEN_MS, easing: OPEN_EASING });
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    // Keyboard rises as the pill lands, not after a pause
+    focusTimerRef.current = setTimeout(() => {
+      if (autoFocus) inputRef.current?.focus();
+    }, OPEN_MS - 80);
+  };
 
   useEffect(() => {
     if (visible) {
@@ -90,30 +108,40 @@ export default function SearchModeOverlay({
       startTopSV.value =
         typeof fromY === "number" && fromY > 0 ? fromY : insets.top + 78;
       destTopSV.value = insets.top + 6;
-      setMounted(true);
-      progress.value = 0;
-      progress.value = withTiming(1, {
-        duration: OPEN_MS,
-        easing: Easing.out(Easing.cubic),
-      });
-      // Focus after slide so Recent page is visible first
-      const t = setTimeout(focusInput, OPEN_MS + 40);
-      return () => clearTimeout(t);
+      if (mounted) {
+        // Reopened mid-close: reverse from where the pill is now
+        animateOpen();
+      } else {
+        progress.value = 0;
+        setMounted(true);
+        // animateOpen runs from the Modal's onShow so no frames are lost;
+        // this only covers a platform that never fires onShow
+        const fallback = setTimeout(() => {
+          if (progress.value === 0 && !closingRef.current) animateOpen();
+        }, 250);
+        return () => clearTimeout(fallback);
+      }
+      return;
     }
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
     if (mounted) {
       Keyboard.dismiss();
       progress.value = withTiming(
         0,
-        {
-          duration: CLOSE_MS,
-          easing: Easing.in(Easing.cubic),
-        },
+        { duration: CLOSE_MS, easing: CLOSE_EASING },
         (finished) => {
-          if (finished) runOnJS(setMounted)(false);
+          if (finished) runOnJS(finishClose)();
         },
       );
     }
   }, [visible]);
+
+  useEffect(
+    () => () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    },
+    [],
+  );
 
   const requestClose = () => {
     if (closingRef.current) return;
@@ -126,11 +154,13 @@ export default function SearchModeOverlay({
     opacity: progress.value,
   }));
 
+  // The big vertical travel is a transform (no relayout per frame); only the
+  // small left/width change touches layout.
   const pillStyle = useAnimatedStyle(() => {
-    const top = interpolate(
+    const translateY = interpolate(
       progress.value,
       [0, 1],
-      [startTopSV.value, destTopSV.value],
+      [startTopSV.value - destTopSV.value, 0],
     );
     const left = interpolate(progress.value, [0, 1], [16, 44]);
     const width = interpolate(
@@ -140,11 +170,12 @@ export default function SearchModeOverlay({
     );
     return {
       position: "absolute" as const,
-      top,
+      top: destTopSV.value,
       left,
       width,
       height: PILL_H,
       zIndex: 20,
+      transform: [{ translateY }],
     };
   });
 
@@ -180,6 +211,9 @@ export default function SearchModeOverlay({
       presentationStyle="overFullScreen"
       statusBarTranslucent
       onRequestClose={requestClose}
+      onShow={() => {
+        if (!closingRef.current && progress.value < 1) animateOpen();
+      }}
     >
       <View style={styles.modalRoot}>
         <Animated.View style={[styles.page, { backgroundColor }, pageStyle]}>
