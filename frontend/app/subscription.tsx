@@ -178,7 +178,7 @@ function BillingPeriodBar({
 
 type PlanCardTheme = {
   bg: [string, string, ...string[]];
-  bgLocations: number[];
+  bgLocations: [number, number, ...number[]];
   shine: [string, string, ...string[]];
   rim: [string, string, ...string[]];
   frame: [string, string, ...string[]];
@@ -724,8 +724,8 @@ function PlanBadge({
   );
 }
 
-function formatInr(amount: number) {
-  return `₹${amount.toLocaleString("en-IN")}`;
+function formatInr(amount: number | undefined) {
+  return `₹${(Number(amount) || 0).toLocaleString("en-IN")}`;
 }
 
 /** Diagonal metal shine that sweeps across the card while you slide */

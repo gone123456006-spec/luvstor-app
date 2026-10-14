@@ -7,7 +7,7 @@ export type CachedChatMsg = {
   _id: string;
   sender: 'me' | 'other';
   text: string;
-  type: 'text' | 'image' | 'audio';
+  type: 'text' | 'image' | 'audio' | 'call';
   mediaUrl?: string | null;
   mediaThumb?: string | null;
   localImageUri?: string;
@@ -21,6 +21,8 @@ export type CachedChatMsg = {
   read?: boolean;
   viewOnce?: boolean;
   viewOnceOpened?: boolean;
+  failed?: boolean;
+  callMeta?: Record<string, unknown>;
 };
 
 type StoredThread =

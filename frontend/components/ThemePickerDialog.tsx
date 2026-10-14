@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { type ThemeMode, useAccessibility } from "../contexts/AccessibilityContext";
+import { resolveDark, type ThemeMode, useAccessibility } from "../contexts/AccessibilityContext";
 import * as Haptics from "../utils/haptics";
 import { themeState, themedPalette, themedStyles } from "../utils/theme";
 
@@ -37,9 +37,12 @@ export default function ThemePickerDialog({
     onClose();
     if (choice === prefs.themeMode) return;
     void Haptics.selectionAsync();
-    const wasDark = themeState.dark;
-    setPref("themeMode", choice);
-    if (themeState.dark !== wasDark) remountApp(returnTo);
+    const toDark = resolveDark(choice);
+    if (toDark === themeState.dark) {
+      setPref("themeMode", choice);
+      return;
+    }
+    remountApp(returnTo, { apply: () => setPref("themeMode", choice), coverDark: toDark });
   };
 
   return (

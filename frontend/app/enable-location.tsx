@@ -118,8 +118,8 @@ export default function EnableLocationScreen() {
 
         <Text style={s.title}>So, are you from around here?</Text>
         <Text style={s.body}>
-          Set your location to see who's in your neighbourhood or beyond.
-          You won't be able to see Nearby people otherwise.
+          Set your location to see who&apos;s in your neighbourhood or beyond.
+          You won&apos;t be able to see Nearby people otherwise.
         </Text>
 
         {hint ? <Text style={s.hint}>{hint}</Text> : null}
@@ -170,7 +170,7 @@ export default function EnableLocationScreen() {
             Your location is used only to find people near you and show an
             approximate distance on profiles (like “3 km away”). Your exact
             location is never shown to other users. You can change this anytime
-            in your phone's Settings.
+            in your phone&apos;s Settings.
           </Text>
         ) : null}
       </View>

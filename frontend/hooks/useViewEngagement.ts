@@ -6,7 +6,7 @@ import { apiRequest } from '../utils/api';
  * Tracks profile views and schedules nudges
  */
 export function useViewEngagement(token: string | null) {
-  const nudgeTimeouts = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const nudgeTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const trackView = useCallback(
     async (targetId: string, context?: any) => {

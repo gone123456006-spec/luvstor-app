@@ -2786,12 +2786,6 @@ const styles = themedStyles(() =>
     fontWeight: "600",
     color: "#075E54",
   },
-  userIdText: {
-    fontSize: 13,
-    color: WA.secondary,
-    marginTop: 3,
-    letterSpacing: 0.5,
-  },
   cameraIconBadge: {
     position: "absolute",
     bottom: 0,

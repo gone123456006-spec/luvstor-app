@@ -241,7 +241,7 @@ test('a user with new likes gets exactly one digest naming them', async (t) => {
 
   const mine = await Notification.find({ userId: me._id, type: 'suggestion' }).lean();
   assert.equal(mine.length, 1, 'a user must never get more than one digest a day');
-  assert.equal(mine[0].title, '2 people liked you');
+  assert.equal(mine[0].title, '2 people liked you — open to see who');
   assert.equal(mine[0].data.likes, '2');
   assert.equal(mine[0].deepLink, '/(tabs)/chat');
 });
@@ -305,7 +305,7 @@ test('new people nearby are worth a digest on their own', async (t) => {
 
   const mine = await Notification.findOne({ userId: me._id, type: 'suggestion' }).lean();
   assert.ok(mine, 'nobody was told about the new joiners');
-  assert.match(mine.title, /joined near you$/);
+  assert.match(mine.title, /new people near you$/);
   assert.equal(mine.deepLink, '/(tabs)');
 });
 
@@ -359,5 +359,5 @@ test('a like the user sent does not come back to them as news', async (t) => {
   const mineCount = await Notification.countDocuments({ userId: me._id, type: 'suggestion' });
   const theirs = await Notification.findOne({ userId: them._id, type: 'suggestion' }).lean();
   assert.equal(mineCount, 0, 'the sender was told about their own like');
-  assert.equal(theirs?.title, '1 person liked you');
+  assert.equal(theirs?.title, '1 person liked you — see who');
 });

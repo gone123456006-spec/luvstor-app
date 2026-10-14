@@ -168,7 +168,7 @@ export default function BlockedUsersScreen() {
       </View>
 
       <Text style={styles.hint}>
-        People you block can't message you or see your profile. Unblock anytime.
+        People you block can&apos;t message you or see your profile. Unblock anytime.
       </Text>
 
       {loading ? (

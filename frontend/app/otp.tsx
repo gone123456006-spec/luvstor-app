@@ -31,7 +31,7 @@ import { emailLoginErrorMessage } from "../utils/loginErrors";
 import { consumePendingProfileId } from "../utils/pendingProfileLink";
 import { normalizePublicId } from "../utils/profileLinks";
 import { NAV_ICON } from "../utils/platformIcons";
-import { themedPalette, themedStyles } from "../utils/theme";
+import { ON_YELLOW, themedPalette, themedStyles } from "../utils/theme";
 
 const OTP_LENGTH = 6;
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
@@ -422,7 +422,7 @@ export default function OtpScreen() {
                 ]}
               >
                 {verifying ? (
-                  <ActivityIndicator color={C.ink} size="small" />
+                  <ActivityIndicator color={ON_YELLOW} size="small" />
                 ) : (
                   <Text style={s.primaryBtnText}>Verify & Continue</Text>
                 )}
@@ -645,7 +645,7 @@ const s = themedStyles(() =>
     opacity: 0.45,
   },
   primaryBtnText: {
-    color: C.ink,
+    color: ON_YELLOW,
     fontSize: 17,
     fontWeight: "700",
     letterSpacing: 0.2,

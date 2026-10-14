@@ -138,7 +138,7 @@ export async function fetchTokenBalance(token: string): Promise<{
   serverNow: string;
   subscription?: PlanEntitlements;
 }> {
-  return tokenFetch('/api/tokens/balance', token) as Promise<{
+  return tokenFetch('/api/tokens/balance', token) as unknown as Promise<{
     tokenBalance: number;
     lastSpinDate: string | null;
     canSpinToday: boolean;

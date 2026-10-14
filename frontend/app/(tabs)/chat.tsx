@@ -396,6 +396,8 @@ export default function ChatScreen() {
   activeFilterRef.current = activeFilter;
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchMode, setSearchMode] = React.useState(false);
+  /** Own bar stays hidden until the overlay pill has flown back into it */
+  const [searchBarHidden, setSearchBarHidden] = React.useState(false);
   const [searchBarY, setSearchBarY] = React.useState(0);
   const [recentSearches, setRecentSearches] = React.useState<
     RecentSearchPerson[]
@@ -939,7 +941,7 @@ export default function ChatScreen() {
         const nextConversations = mergeKeepLocalRows(
           hideArchived(live.conversations),
           hideArchived(mergedRaw),
-        ).map((row) => {
+        ).map((row): ConversationItem => {
           if (row.areFriends) return row;
           if (requestIds.has(row.otherId)) {
             return {
@@ -2126,11 +2128,12 @@ export default function ChatScreen() {
           <TouchableOpacity
             style={[
               styles.searchContainer,
-              searchMode && styles.searchContainerHidden,
+              (searchMode || searchBarHidden) && styles.searchContainerHidden,
             ]}
             activeOpacity={0.85}
             onPress={() => {
               setSearchQuery("");
+              setSearchBarHidden(true);
               searchBarRef.current?.measureInWindow((_x, y) => {
                 if (typeof y === "number" && y > 0) setSearchBarY(y);
                 setSearchMode(true);
@@ -2156,6 +2159,7 @@ export default function ChatScreen() {
           recent={recentSearches}
           backgroundColor={C.bg}
           fromY={searchBarY}
+          onClosed={() => setSearchBarHidden(false)}
           onClearAll={() => {
             void clearRecentSearches(RECENT_SEARCH_CHAT).then(
               setRecentSearches,

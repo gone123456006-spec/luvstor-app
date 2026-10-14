@@ -50,7 +50,7 @@ export default function TermsConditionsScreen() {
 
           <Text style={styles.sectionTitle}>1. Acceptance of Terms</Text>
           <Text style={styles.paragraph}>
-            By accessing or using Luvstor ("the App"), you agree to be bound by these Terms and Conditions. If you do not agree to these terms, please do not use the App.
+            By accessing or using Luvstor (&quot;the App&quot;), you agree to be bound by these Terms and Conditions. If you do not agree to these terms, please do not use the App.
           </Text>
 
           <Text style={styles.sectionTitle}>2. Eligibility</Text>
@@ -77,7 +77,7 @@ export default function TermsConditionsScreen() {
           <Text style={styles.bulletItem}>• Harass, abuse, or harm other users</Text>
           <Text style={styles.bulletItem}>• Post illegal, offensive, or inappropriate content</Text>
           <Text style={styles.bulletItem}>• Impersonate any person or entity</Text>
-          <Text style={styles.bulletItem}>• Share others' private information without consent</Text>
+          <Text style={styles.bulletItem}>• Share others&apos; private information without consent</Text>
           <Text style={styles.bulletItem}>• Engage in commercial solicitation or spam</Text>
           <Text style={styles.bulletItem}>• Use automated systems or bots</Text>
           <Text style={styles.bulletItem}>• Attempt to hack, disrupt, or reverse-engineer the App</Text>
@@ -122,7 +122,7 @@ export default function TermsConditionsScreen() {
 
           <Text style={styles.sectionTitle}>11. Disclaimer of Warranties</Text>
           <Text style={styles.paragraph}>
-            Luvstor is provided "as is" without warranties of any kind. We do not guarantee that the app will be error-free, secure, or always available. Use at your own risk.
+            Luvstor is provided &quot;as is&quot; without warranties of any kind. We do not guarantee that the app will be error-free, secure, or always available. Use at your own risk.
           </Text>
 
           <Text style={styles.sectionTitle}>12. Limitation of Liability</Text>

@@ -46,7 +46,7 @@ import {
 } from "../utils/showMe";
 import { NAV_ICON } from "../utils/platformIcons";
 import { checkBio, maskPhones } from "../utils/bioFilter";
-import { statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
+import { ON_YELLOW, statusBarStyle, themedPalette, themedStyles } from "../utils/theme";
 
 // ── Luvstor brand (WhatsApp-style, clean) ───────────────────
 const C = themedPalette({
@@ -797,7 +797,7 @@ export default function CreateProfileScreen() {
           >
             {saving ? (
               <View style={s.savingRow}>
-                <ActivityIndicator size="small" color={C.text} />
+                <ActivityIndicator size="small" color={ON_YELLOW} />
                 <Text style={s.primaryBtnText}>Saving your profile…</Text>
               </View>
             ) : (
@@ -1071,7 +1071,7 @@ const s = themedStyles(() =>
   primaryBtnText: {
     fontSize: 16,
     fontWeight: "700",
-    color: C.text,
+    color: ON_YELLOW,
   },
   primaryBtnTextDisabled: {
     color: "#9CA3AF",

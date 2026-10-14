@@ -169,15 +169,24 @@ type Ctx = {
   uiKey: number;
   /** Screen to reopen after the remount */
   returnTo: string | null;
-  remountApp: (returnTo?: string | null) => void;
+  /**
+   * Covers the screen, then (next frames) runs `apply` and remounts. Covering first
+   * keeps the tap responsive while the heavy rebuild happens behind the cover.
+   */
+  remountApp: (
+    returnTo?: string | null,
+    opts?: { apply?: () => void; coverDark?: boolean },
+  ) => void;
   /** True while the navigator is rebuilding after a remount; transitions stay off */
   restoring: boolean;
+  /** Theme of the cover shown while restoring (the theme being switched to) */
+  coverDark: boolean;
   finishRestore: () => void;
 };
 
 const AccessibilityContext = createContext<Ctx | null>(null);
 
-function resolveDark(mode: ThemeMode): boolean {
+export function resolveDark(mode: ThemeMode): boolean {
   if (mode === "system") return Appearance.getColorScheme() === "dark";
   return mode === "dark";
 }
@@ -198,7 +207,9 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
   const [uiKey, setUiKey] = useState(0);
   const [returnTo, setReturnTo] = useState<string | null>(null);
   const [restoredKey, setRestoredKey] = useState(0);
-  const restoring = !!returnTo && restoredKey !== uiKey;
+  const [covering, setCovering] = useState(false);
+  const [coverDark, setCoverDark] = useState(themeState.dark);
+  const restoring = covering || (!!returnTo && restoredKey !== uiKey);
   const [isDark, setIsDark] = useState(() => resolveDark(DEFAULTS.themeMode));
 
   useEffect(() => {
@@ -286,10 +297,25 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
     }
   }, [persist]);
 
-  const remountApp = useCallback((path: string | null = null) => {
-    setReturnTo(path);
-    setUiKey((k) => k + 1);
-  }, []);
+  const remountApp = useCallback(
+    (
+      path: string | null = null,
+      opts?: { apply?: () => void; coverDark?: boolean },
+    ) => {
+      setCoverDark(opts?.coverDark ?? themeState.dark);
+      setReturnTo(null);
+      setCovering(true);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          opts?.apply?.();
+          setReturnTo(path);
+          setUiKey((k) => k + 1);
+          setCovering(false);
+        });
+      });
+    },
+    [],
+  );
 
   const finishRestore = useCallback(() => setRestoredKey(uiKey), [uiKey]);
 
@@ -305,6 +331,7 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
       returnTo,
       remountApp,
       restoring,
+      coverDark,
       finishRestore,
     }),
     [
@@ -317,6 +344,7 @@ export function AccessibilityProvider({ children }: { children: React.ReactNode 
       returnTo,
       remountApp,
       restoring,
+      coverDark,
       finishRestore,
     ],
   );

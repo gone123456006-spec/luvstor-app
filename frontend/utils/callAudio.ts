@@ -189,7 +189,7 @@ function applyNativeSnapshot(raw: { available?: string[]; selected?: string } | 
   if (selected && (!available.length || available.includes(selected))) {
     session.selected = selected;
     if (selected === 'speaker') session.manual = 'speaker';
-    else if (session.manual === 'speaker' && selected !== 'speaker') {
+    else if (session.manual === 'speaker') {
       session.manual = null;
     }
   }
@@ -252,7 +252,7 @@ function bindNativeEvents() {
 
   if (Platform.OS !== 'ios') return;
   const onAudioDevice = (event: any) => {
-    const raw = Array.isArray(event?.availableAudioDeviceList)
+    const raw: string[] = Array.isArray(event?.availableAudioDeviceList)
       ? event.availableAudioDeviceList
       : [];
     const available = uniqRoutes(

@@ -23,6 +23,7 @@ const {
 } = require('./jobs/accountDeletion');
 const { pruneStaleTokens } = require('./jobs/deviceTokenCleanup');
 const { runDailySuggestionsIfDue } = require('./jobs/dailySuggestions');
+const { runNightlyNudgeIfDue } = require('./jobs/nightlyNudge');
 const { runEngagingNotifications } = require('./jobs/engagingNotificationScheduler');
 const {
   expireDueSubscriptions,
@@ -552,6 +553,14 @@ async function startHttp() {
         console.error('[Scheduled Job] daily suggestions failed:', err?.message || err),
       );
     }, 15 * 60 * 1000);
+
+    // 10 PM chat nudge — idle outside the send hour, once per user per night
+    setInterval(() => {
+      if (mongoose.connection.readyState !== 1) return;
+      runScheduledJob('nightly-nudge', () => runNightlyNudgeIfDue(io)).catch((err) =>
+        console.error('[Scheduled Job] nightly nudge failed:', err?.message || err),
+      );
+    }, 5 * 60 * 1000);
 
     const runExpireSubscriptions = () => {
       if (mongoose.connection.readyState !== 1) return Promise.resolve();

@@ -91,7 +91,7 @@ export default function ReflectionScreen() {
           ))}
         </View>
 
-        <Text style={styles.footnote}>You'll lose access to everything above.</Text>
+        <Text style={styles.footnote}>You&apos;ll lose access to everything above.</Text>
 
         {/* Keep account row */}
         <View style={[styles.listGroup, { marginTop: 12 }]}>

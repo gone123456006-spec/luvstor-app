@@ -225,6 +225,7 @@ async function presentCallFromPushData(data: Record<string, any>): Promise<void>
                 {
                   identifier: `caller-${callId}`,
                   url: photo,
+                  type: null,
                   typeHint: 'public.jpeg',
                 },
               ],

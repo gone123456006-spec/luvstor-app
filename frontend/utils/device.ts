@@ -131,8 +131,7 @@ export function peekJwtDeviceId(token: string | null | undefined): string | null
       json = globalThis.atob(b64);
     } else {
       // Node / rare environments without atob
-      // eslint-disable-next-line no-undef
-      const Buf = typeof Buffer !== 'undefined' ? Buffer : null;
+      const Buf = (globalThis as { Buffer?: { from: (s: string, enc: string) => { toString: (enc: string) => string } } }).Buffer ?? null;
       if (!Buf) return null;
       json = Buf.from(b64, 'base64').toString('utf8');
     }

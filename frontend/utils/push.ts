@@ -122,6 +122,14 @@ export const CHANNELS = {
     importance: IMPORTANCE.DEFAULT,
     lightColor: '#8E2DE2',
   },
+  nightly: {
+    name: 'Chat reminders',
+    description: 'One reminder at night when someone is waiting for your chat',
+    importance: IMPORTANCE.HIGH,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#8E2DE2',
+    lockscreenVisibility: 1,
+  },
 } as const;
 
 export type ChannelId = keyof typeof CHANNELS;
@@ -558,6 +566,7 @@ export async function presentIncomingCallLocalNotification(opts: {
                 {
                   identifier: `caller-${opts.callId}`,
                   url: photo,
+                  type: null,
                   typeHint: 'public.jpeg',
                 },
               ],
@@ -655,6 +664,7 @@ export async function presentChatMessageNotification(opts: {
                 {
                   identifier: `msg-${senderId}`,
                   url: photo,
+                  type: null,
                   typeHint: 'public.jpeg',
                 },
               ],

@@ -42,7 +42,8 @@ export function messagePreviewText(msg: {
 }
 
 function previewLabel(patch: ChatPreviewPatch): string {
-  return patch.fromMe ? `You: ${patch.lastMessage}` : patch.lastMessage;
+  const text = patch.lastMessage ?? '';
+  return patch.fromMe ? `You: ${text}` : text;
 }
 
 function bumpRow(

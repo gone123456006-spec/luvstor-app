@@ -833,10 +833,11 @@ async function createBulkNotifications(io, userIds = [], opts = {}) {
  * @param {import('socket.io').Server|null} io
  * @param {Array<{userId: string, title: string, body?: string, data?: object,
  *   deepLink?: string, imageUrl?: string, dedupeKey?: string}>} items
- * @param {{ type: string, priority?: string, groupKey?: string, push?: boolean }} opts
+ * @param {{ type: string, priority?: string, groupKey?: string, push?: boolean,
+ *   channelId?: string }} opts `channelId` overrides the type's Android channel
  */
 async function createPersonalNotifications(io, items = [], opts = {}) {
-  const { type, priority, groupKey, push = true } = opts;
+  const { type, priority, groupKey, push = true, channelId } = opts;
   const valid = items.filter((item) => item?.userId && item?.title);
   if (!type || !valid.length) return { created: 0, pushed: 0 };
 
@@ -902,7 +903,7 @@ async function createPersonalNotifications(io, items = [], opts = {}) {
         title: doc.title,
         body: doc.body || '',
         imageUrl: doc.imageUrl || undefined,
-        channelId: TYPE_CHANNEL[type] || 'system',
+        channelId: channelId || TYPE_CHANNEL[type] || 'system',
         priority: resolvedPriority,
         sound: opt.sound,
         groupKey: resolvedGroupKey,
